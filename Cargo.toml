@@ -1,0 +1,7 @@
+[package]
+name = "nibble"
+version = "0.1.0"
+authors = ["Alexander Merritt <merritt.alex@gatech.edu>"]
+
+[dependencies]
+libc = "0.2.7"
