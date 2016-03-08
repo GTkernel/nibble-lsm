@@ -4,20 +4,24 @@
 #![allow(unused_imports)]
 
 extern crate libc;
+#[macro_use]
+extern crate log;
 
-//use std::thread;
-//use std::mem;
+mod logger;
+
 use std::rc::Rc;
 use std::cell::RefCell;
 
-struct MmapBlock {
+/// Memory mapped region in our address space.
+struct MemMap {
     addr: usize,
     len: usize,
 }
 
-// TODO fault on local socket
-impl MmapBlock {
+/// Create anonymous private memory mapped region.
+impl MemMap {
     fn new(len: usize) -> Self {
+        // TODO fault on local socket
         let prot: libc::c_int = libc::PROT_READ | libc::PROT_WRITE;
         let flags: libc::c_int = libc::MAP_ANON |
             libc::MAP_PRIVATE | libc::MAP_NORESERVE;
@@ -25,12 +29,14 @@ impl MmapBlock {
             let p = 0 as *mut libc::c_void;
             libc::mmap(p, len, prot, flags, 0, 0) as usize
         };
+        info!("mmap 0x{:x} {} MiB", addr, len>>20);
         assert!(addr != libc::MAP_FAILED as usize);
-        MmapBlock { addr: addr, len: len }
+        MemMap { addr: addr, len: len }
     }
 }
 
-impl Drop for MmapBlock {
+/// Prevent dangling regions by unmapping it.
+impl Drop for MemMap {
     fn drop(&mut self) {
         unsafe {
             let p = self.addr as *mut libc::c_void;
@@ -48,6 +54,7 @@ struct Block {
 
 impl Block {
     fn new(addr: usize, len: usize) -> Self {
+        debug!("new Block 0x{:x} {}", addr, len);
         Block { addr: addr, len: len }
     }
 }
@@ -56,20 +63,20 @@ struct BlockAllocator {
     block_size: usize,
     count: usize,
     pool: Vec<Block>,
-    //mmap: MmapBlock,
+    mmap: MemMap,
 }
 
 impl BlockAllocator {
     fn new(block_size: usize, bytes: usize) -> Self {
+        let mmap = MemMap::new(bytes);
         let count = bytes / block_size;
         let mut pool: Vec<Block> = Vec::new();
         for b in 0..count {
-            pool.push(Block::new(0, block_size));
+            let addr = mmap.addr + b*block_size;
+            pool.push(Block::new(addr, block_size));
         }
-        BlockAllocator {
-            block_size: block_size,
-            count: count,
-            pool: pool,
+        BlockAllocator { block_size: block_size,
+            count: count, pool: pool, mmap: mmap,
         }
     }
     fn alloc(&self, count: usize) -> Vec<Block> {
@@ -78,6 +85,10 @@ impl BlockAllocator {
 }
 
 fn main() {
+    { let _ = logger::SimpleLogger::init(); } // ignore return
+    let blocksz = 1<<16;
+    let len = 1<<20;
+    let b = BlockAllocator::new(blocksz, len);
 }
 
 // -----------------------------------------------
@@ -87,7 +98,7 @@ fn main() {
 #[cfg(test)]
 mod test {
     use super::BlockAllocator;
-    use super::MmapBlock;
+    use super::MemMap;
 
     #[test]
     fn block_allocator() {
@@ -100,7 +111,12 @@ mod test {
 
     #[test]
     fn map() {
-        let mm = MmapBlock::new(1<<26);
+        let len = 1<<26;
+        let mm = MemMap::new(len);
+        assert_eq!(mm.len, len);
+        assert!(mm.addr != 0 as usize);
+        // TODO touch the memory somehow
+        // TODO verify mmap region is unmapped
     }
 
 }
