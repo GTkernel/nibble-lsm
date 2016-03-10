@@ -13,6 +13,6 @@ mod logger;
 // TODO create thread to hold segment manager
 
 fn main() {
-    { let _ = logger::SimpleLogger::init(); }
-    let segmgr = nibble::SegmentManager::new(0, 1<<20, 1<<27);
+    { let _ = logger::SimpleLogger::init(log::LogLevel::Debug); }
+    let segmgr = nibble::SegmentManager::new(0, 1<<20, 1<<23);
 }

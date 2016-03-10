@@ -2,12 +2,14 @@ use log;
 use log::{LogRecord, LogLevel, LogMetadata};
 use log::{SetLoggerError, LogLevelFilter};
 
-pub struct SimpleLogger;
+pub struct SimpleLogger {
+    level: LogLevel,
+}
 
 /// A simple logger. Functions invoked by log crate
 impl log::Log for SimpleLogger {
     fn enabled(&self, metadata: &LogMetadata) -> bool {
-        metadata.level() <= LogLevel::Info
+        metadata.level() <= self.level
     }
     fn log(&self, record: &LogRecord) {
         if self.enabled(record.metadata()) {
@@ -21,10 +23,17 @@ impl log::Log for SimpleLogger {
 
 impl SimpleLogger {
     /// Initialize the logger
-    pub fn init() -> Result<(), SetLoggerError> {
+    pub fn init(level: LogLevel) -> Result<(), SetLoggerError> {
         log::set_logger(|max_log_level| {
-            max_log_level.set(LogLevelFilter::Info);
-            Box::new(SimpleLogger)
+            let l = match level {
+                LogLevel::Error => LogLevelFilter::Error,
+                LogLevel::Warn => LogLevelFilter::Warn,
+                LogLevel::Info => LogLevelFilter::Info,
+                LogLevel::Debug => LogLevelFilter::Debug,
+                LogLevel::Trace => LogLevelFilter::Trace,
+            };
+            max_log_level.set(l);
+            Box::new(SimpleLogger { level: level } )
         })
     }
 }
