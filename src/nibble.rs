@@ -325,7 +325,7 @@ impl LogHead {
         let mut seg = rbm!(self.segment);
         // do the append
         match seg.append(buf) {
-            Ok(len) => Ok(buf.len),
+            Ok(len) => Ok(len),
             Err(code) => panic!("has space but append failed"),
         }
     }
@@ -334,7 +334,7 @@ impl LogHead {
     // --- Private methods ---
     //
 
-    /// Roll head. Close current and allocate new. Returns new.
+    /// Roll head. Close current and allocate new.
     pub fn roll(&mut self) -> Status {
         match self.segment.clone() {
             None => {
@@ -351,7 +351,10 @@ impl LogHead {
                     // TODO add segment to 'closed' list
                 }
                 self.segment = self.manager.borrow_mut().alloc();
-                Ok(1)
+                match self.segment {
+                    None => Err(ErrorCode::OutOfMemory),
+                    _ => Ok(1),
+                }
             },
         }
     }
@@ -379,8 +382,7 @@ impl Log {
         // 1. determine log head to use
         let head = &self.head;
         // 2. call append on the log head
-        head.borrow_mut().append(buf);
-        Ok(0)
+        head.borrow_mut().append(buf)
     }
 
     pub fn enable_cleaning(&mut self) {
@@ -547,7 +549,16 @@ mod tests {
         let len = myval.len();
         let buf = BufDesc { addr: addr, len: len };
         loop {
-            unsafe { log.append(&buf); }
+            let v;
+            unsafe { v = log.append(&buf); }
+            match v {
+                Ok(ign) => {},
+                Err(code) => {
+                    println!("append returned {}",
+                                      err2str(code));
+                    break;
+                }
+            }
         }
     }
 
