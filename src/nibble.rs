@@ -2,11 +2,52 @@ use libc;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::ptr::copy_nonoverlapping;
+use std::ptr::copy;
 
 //pub mod nibble;
 
 const BLOCK_SIZE: usize = 1 << 16;
 const SEGMENT_SIZE: usize = 1 << 20;
+
+// -------------------------------------------------------------------
+// General utilities, macros, etc.
+// -------------------------------------------------------------------
+
+/// Extract reference &T from Option<T>
+macro_rules! r {
+    ( $obj:expr ) => { $obj.as_ref().unwrap() }
+}
+
+/// Borrow on a reference &T from a RefCell<Option<T>>
+macro_rules! rb {
+    ( $obj:expr ) => { r!($obj).borrow() }
+}
+
+/// Same as rb! but mutable
+macro_rules! rbm {
+    ( $obj:expr ) => { r!($obj).borrow_mut() }
+}
+
+// -------------------------------------------------------------------
+// Error handling
+// -------------------------------------------------------------------
+
+pub enum ErrorCode {
+    SegmentFull,
+    SegmentClosed,
+    OutOfMemory,
+}
+
+pub fn err2str(code: ErrorCode) -> &'static str {
+    match code {
+        ErrorCode::SegmentFull      => { "Segment is full" },
+        ErrorCode::SegmentClosed    => { "Segment is closed" },
+        ErrorCode::OutOfMemory      => { "Out of memory" },
+    }
+}
+
+pub type Status = Result<(usize), ErrorCode>;
 
 // -------------------------------------------------------------------
 // Block strutures
@@ -73,15 +114,46 @@ impl BlockAllocator {
 // Segment structures
 // -------------------------------------------------------------------
 
+pub type SegmentRef = Arc<RefCell<Segment>>;
+pub type SegmentManagerRef = Arc<RefCell<SegmentManager>>;
+
+/// Make a new SegmentRef
+macro_rules! seg_ref {
+    ( $id:expr, $blocks:expr ) => {
+        Arc::new( RefCell::new(
+                Segment::new($id, $blocks)
+                ))
+    }
+}
+
+/// Make a new SegmentManagerRef
+macro_rules! segmgr_ref {
+    ( $id:expr, $segsz:expr, $blocks:expr ) => {
+        Arc::new( RefCell::new(
+                SegmentManager::new( $id, $segsz, $blocks)
+                ))
+    }
+}
+
+/// Describe entry in the log.
+///     | EntryHeader | Key | Value |
 pub struct EntryHeader {
-    id: usize,
-    len: u32,
+    keylen: u32,
+    datalen: u32,
+}
+
+/// Description of a buffer for copying into the log.
+pub struct BufDesc {
+    addr: *const u8,
+    len: usize,
 }
 
 pub struct Segment {
+    id: usize,
     closed: bool,
-    head: usize, // TODO atomic pointer type
-    len: usize,
+    head: usize, /// Virtual address of head TODO atomic
+    len: usize, /// Total capacity TODO atomic
+    rem: usize, /// Remaining capacity TODO atomic
     blocks: BlockRefPool,
 }
 
@@ -92,20 +164,37 @@ impl Segment {
         for b in blocks.iter() {
             len += b.len;
         }
+        let start: usize = blocks[0].addr;
         Segment {
-            closed: false, head: 0,
-            len: len, blocks: blocks,
+            id: id, closed: false, head: start,
+            len: len, rem: len, blocks: blocks,
         }
     }
 
-    // TODO increment the head atomically
-    pub fn increment(&self, len: usize) {
-        unimplemented!();
+    pub fn increment(&mut self, len: usize) {
+        // TODO increment head atomically
+        self.head += len; // FIXME handle block boundaries
+        self.rem -= len;
     }
 
     // TODO append an object -- maybe make this unsafe?
-    pub fn append(&self) {
-        unimplemented!();
+    pub unsafe fn append(&mut self, buf: &BufDesc) -> Status {
+        if !self.closed {
+            if self.has_space_for(buf) {
+                let dest = self.head as *mut u8;
+                copy_nonoverlapping(buf.addr,dest,buf.len);
+                self.increment(buf.len);
+                Ok(buf.len)
+            } else { Err(ErrorCode::SegmentFull) }
+        } else { Err(ErrorCode::SegmentClosed) }
+    }
+
+    pub fn has_space_for(&self, buf: &BufDesc) -> bool {
+        self.rem >= buf.len
+    }
+
+    pub fn close(&mut self) {
+        self.closed = true;
     }
 }
 
@@ -118,19 +207,13 @@ impl Drop for Segment {
     }
 }
 
-pub type SegmentRef = Option<Arc<RefCell<Segment>>>;
-
-/// Create a new SegmentRef. Same signature as Segment::new
-pub fn new_segmentref(id: usize, blocks: BlockRefPool) -> SegmentRef {
-    Some(Arc::new(RefCell::new(Segment::new(id, blocks))))
-}
-
 pub struct SegmentManager {
     id: usize,
+    size: usize, /// Total memory
     next_seg_id: usize, // FIXME atomic
     segment_size: usize,
     allocator: BlockAllocator,
-    segments: Vec<SegmentRef>,
+    segments: Vec<Option<SegmentRef>>,
     free_slots: Vec<u32>,
 }
 
@@ -139,7 +222,7 @@ impl SegmentManager {
     pub fn new(id: usize, segsz: usize, len: usize) -> Self {
         let b = BlockAllocator::new(BLOCK_SIZE, len);
         let num = len / segsz;
-        let mut v: Vec<SegmentRef> = Vec::new();
+        let mut v: Vec<Option<SegmentRef>> = Vec::new();
         for i in 0..num {
             v.push(None);
         }
@@ -148,7 +231,7 @@ impl SegmentManager {
             s[i] = i as u32;
         }
         SegmentManager {
-            id: id,
+            id: id, size: len,
             next_seg_id: 0,
             segment_size: segsz,
             allocator: b,
@@ -157,7 +240,7 @@ impl SegmentManager {
         }
     }
 
-    pub fn alloc(&mut self) -> SegmentRef {
+    pub fn alloc(&mut self) -> Option<SegmentRef> {
         // TODO lock, unlock
         if self.free_slots.is_empty() {
             None
@@ -179,16 +262,19 @@ impl SegmentManager {
                 _ => {},
             };
             self.next_seg_id += 1;
-            self.segments[slot] = new_segmentref(self.next_seg_id, blocks.unwrap());
+            self.segments[slot] = Some(seg_ref!(self.next_seg_id,
+                                                  blocks.unwrap()));
             self.segments[slot].clone()
         }
     }
 
-    pub fn free(&self) {
+    pub fn free(&self, segment: SegmentRef) {
         unimplemented!();
     }
 
-    // Internal functions used for testing
+    //
+    // --- Internal methods used for testing only ---
+    //
 
     #[cfg(test)]
     pub fn test_all_segrefs_allocated(&mut self) -> bool {
@@ -201,6 +287,122 @@ impl SegmentManager {
         true
     }
 }
+
+// -------------------------------------------------------------------
+// The log
+// -------------------------------------------------------------------
+
+// TODO i definitely need a concurrent atomic append/pop list..
+
+pub type LogHeadRef = Arc<RefCell<LogHead>>;
+
+pub struct LogHead {
+    segment: Option<SegmentRef>,
+    manager: SegmentManagerRef,
+}
+
+impl LogHead {
+
+    pub fn new(manager: SegmentManagerRef) -> Self {
+        LogHead { segment: None, manager: manager }
+    }
+
+    pub unsafe fn append(&mut self, buf: &BufDesc) -> Status {
+        // allocate if head not exist
+        match self.segment {
+            None => { match self.roll() {
+                Err(code) => return Err(code),
+                Ok(ign) => {},
+            }},
+            _ => {},
+        }
+        if !rb!(self.segment).has_space_for(buf) {
+            match self.roll() {
+                Err(code) => return Err(code),
+                Ok(ign) => {},
+            }
+        }
+        let mut seg = rbm!(self.segment);
+        // do the append
+        match seg.append(buf) {
+            Ok(len) => Ok(buf.len),
+            Err(code) => panic!("has space but append failed"),
+        }
+    }
+
+    //
+    // --- Private methods ---
+    //
+
+    /// Roll head. Close current and allocate new. Returns new.
+    pub fn roll(&mut self) -> Status {
+        match self.segment.clone() {
+            None => {
+                self.segment = self.manager.borrow_mut().alloc();
+                match self.segment {
+                    None => Err(ErrorCode::OutOfMemory),
+                    _ => Ok(1),
+                }
+            },
+            Some(segref) => {
+                {
+                    let mut seg = segref.borrow_mut();
+                    seg.close();
+                    // TODO add segment to 'closed' list
+                }
+                self.segment = self.manager.borrow_mut().alloc();
+                Ok(1)
+            },
+        }
+    }
+
+}
+
+pub struct Log {
+    head: LogHeadRef, // TODO make multiple
+    manager: SegmentManagerRef,
+}
+
+impl Log {
+    pub fn new(manager: SegmentManagerRef) -> Self {
+        Log {
+            head: Arc::new(RefCell::new(LogHead::new(manager.clone()))),
+            manager: manager.clone(),
+        }
+    }
+
+    pub fn get_head(&self) -> Option<LogHeadRef> {
+        Some(self.head.clone())
+    }
+
+    pub unsafe fn append(&mut self, buf: &BufDesc) -> Status {
+        // 1. determine log head to use
+        let head = &self.head;
+        // 2. call append on the log head
+        head.borrow_mut().append(buf);
+        Ok(0)
+    }
+
+    pub fn enable_cleaning(&mut self) {
+        unimplemented!();
+    }
+
+    pub fn disable_cleaning(&mut self) {
+        unimplemented!();
+    }
+}
+
+// -------------------------------------------------------------------
+// TODO Cleaning
+// -------------------------------------------------------------------
+
+// -------------------------------------------------------------------
+// TODO Index structure
+// -------------------------------------------------------------------
+
+// -------------------------------------------------------------------
+// TODO RPC or SHM interface
+// -------------------------------------------------------------------
 
 // -------------------------------------------------------------------
 // Memory utilities
@@ -252,6 +454,7 @@ impl Drop for MemMap {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use std::cell::RefCell;
 
     const BLOCK_SIZE: usize = 1 << 16;
     const SEGMENT_SIZE: usize = 1 << 20;
@@ -311,7 +514,7 @@ mod tests {
         let id = 42;
         let seg = Segment::new(id, set);
         assert_eq!(seg.closed, false);
-        assert_eq!(seg.head, 0);
+        assert!(seg.head != 0);
         assert_eq!(seg.len, bytes);
         // TODO verify blocks?
     }
@@ -329,4 +532,24 @@ mod tests {
         }
         assert_eq!(mgr.test_all_segrefs_allocated(), true);
     }
+
+    #[test]
+    fn log() {
+        let memlen = 1<<23;
+        let numseg = memlen / SEGMENT_SIZE;
+        let mut log;
+        {
+            let manager = segmgr_ref!(0, SEGMENT_SIZE, memlen);
+            log = Log::new(manager.clone());
+        }
+        let myval: &'static str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalex";
+        let addr = myval.as_ptr();
+        let len = myval.len();
+        let buf = BufDesc { addr: addr, len: len };
+        loop {
+            unsafe { log.append(&buf); }
+        }
+    }
+
+
 }
