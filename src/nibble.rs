@@ -377,7 +377,7 @@ impl Log {
         Some(self.head.clone())
     }
 
-    pub unsafe fn append(&mut self, buf: &BufDesc) -> Status {
+    pub fn append(&mut self, buf: &BufDesc) -> Status {
         // 1. determine log head to use
         let head = &self.head;
         // 2. call append on the log head
