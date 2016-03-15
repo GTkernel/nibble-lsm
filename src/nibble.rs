@@ -344,11 +344,8 @@ impl LogHead {
                 }
             },
             Some(segref) => {
-                {
-                    let mut seg = segref.borrow_mut();
-                    seg.close();
-                    // TODO add segment to 'closed' list
-                }
+                segref.borrow_mut().close();
+                // TODO add segment to 'closed' list
                 self.segment = self.manager.borrow_mut().alloc();
                 match self.segment {
                     None => Err(ErrorCode::OutOfMemory),
