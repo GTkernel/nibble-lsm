@@ -178,11 +178,11 @@ impl Segment {
     }
 
     // TODO append an object -- maybe make this unsafe?
-    pub unsafe fn append(&mut self, buf: &BufDesc) -> Status {
+    pub fn append(&mut self, buf: &BufDesc) -> Status {
         if !self.closed {
             if self.has_space_for(buf) {
                 let dest = self.head as *mut u8;
-                copy_nonoverlapping(buf.addr,dest,buf.len);
+                unsafe { copy_nonoverlapping(buf.addr,dest,buf.len); }
                 self.increment(buf.len);
                 Ok(buf.len)
             } else { Err(ErrorCode::SegmentFull) }
@@ -307,7 +307,7 @@ impl LogHead {
         LogHead { segment: None, manager: manager }
     }
 
-    pub unsafe fn append(&mut self, buf: &BufDesc) -> Status {
+    pub fn append(&mut self, buf: &BufDesc) -> Status {
         // allocate if head not exist
         match self.segment {
             None => { match self.roll() {
@@ -323,7 +323,6 @@ impl LogHead {
             }
         }
         let mut seg = rbm!(self.segment);
-        // do the append
         match seg.append(buf) {
             Ok(len) => Ok(len),
             Err(code) => panic!("has space but append failed"),
@@ -536,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn log() {
+    fn log_alloc_until_full() {
         let memlen = 1<<23;
         let numseg = memlen / SEGMENT_SIZE;
         let mut log;
@@ -549,13 +548,11 @@ mod tests {
         let len = myval.len();
         let buf = BufDesc { addr: addr, len: len };
         loop {
-            let v;
-            unsafe { v = log.append(&buf); }
-            match v {
+            match log.append(&buf) {
                 Ok(ign) => {},
                 Err(code) => {
                     println!("append returned {}",
-                                      err2str(code));
+                             err2str(code));
                     break;
                 }
             }
