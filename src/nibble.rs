@@ -40,6 +40,7 @@ macro_rules! rbm {
 // Error handling
 // -------------------------------------------------------------------
 
+#[derive(Debug)]
 pub enum ErrorCode {
     SegmentFull,
     SegmentClosed,
@@ -609,11 +610,10 @@ mod tests {
         loop {
             match log.append(&obj) {
                 Ok(ign) => {},
-                Err(code) => {
-                    println!("append returned {}",
-                             err2str(code));
-                    break;
-                }
+                Err(code) => match code {
+                    ErrorCode::OutOfMemory => break,
+                    _ => panic!("filling log returned {:?}", code),
+                },
             }
         }
     }
