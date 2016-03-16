@@ -1,18 +1,13 @@
 use libc;
 
 use std::cell::RefCell;
-
-use std::rc::Rc;
-
-use std::sync::Arc;
-
-use std::ptr::copy_nonoverlapping;
-use std::ptr::copy;
-
+use std::collections::HashMap;
 use std::mem::size_of;
 use std::mem::transmute;
-
-//pub mod nibble;
+use std::ptr::copy;
+use std::ptr::copy_nonoverlapping;
+use std::rc::Rc;
+use std::sync::Arc;
 
 const BLOCK_SIZE: usize = 1 << 16;
 const SEGMENT_SIZE: usize = 1 << 20;
@@ -42,16 +37,21 @@ macro_rules! rbm {
 
 #[derive(Debug)]
 pub enum ErrorCode {
+
     SegmentFull,
     SegmentClosed,
+
     OutOfMemory,
+
+    KeyNotExist,
 }
 
 pub fn err2str(code: ErrorCode) -> &'static str {
     match code {
-        ErrorCode::SegmentFull      => { "Segment is full" },
-        ErrorCode::SegmentClosed    => { "Segment is closed" },
-        ErrorCode::OutOfMemory      => { "Out of memory" },
+        ErrorCode::SegmentFull   => { "Segment is full" },
+        ErrorCode::SegmentClosed => { "Segment is closed" },
+        ErrorCode::OutOfMemory   => { "Out of memory" },
+        ErrorCode::KeyNotExist   => { "Key does not exist" },
     }
 }
 
@@ -458,8 +458,41 @@ impl Log {
 // -------------------------------------------------------------------
 
 // -------------------------------------------------------------------
-// TODO Index structure
+// Index structure
 // -------------------------------------------------------------------
+
+/// Index structure that allows us to retreive objects from the log.
+/// It is just a simple wrapper over whatever data structure we wish
+/// to eventually use.
+pub struct Index<'a> {
+    table: HashMap<&'a str, usize>,
+}
+
+impl<'a> Index<'a> {
+
+    pub fn new() -> Self {
+        Index {
+            table: HashMap::new(), // also ::with_capacity(N)
+        }
+    }
+
+    /// Return value of object if it exists, else None.
+    pub fn get(&self, key: &'a str) -> Option<&usize> {
+        self.table.get(key)
+    }
+
+    /// We return None if update results in insertion, else we return
+    /// the old value.
+    pub fn update(&mut self, key: &'a str, value: usize) -> Option<usize> {
+        self.table.insert(key, value)
+    }
+
+    /// Remove an entry. If it existed, return value, else return
+    /// None.
+    pub fn remove(&mut self, key: &'a str) -> Option<usize> {
+        self.table.remove(key)
+    }
+}
 
 // -------------------------------------------------------------------
 // TODO RPC or SHM interface
@@ -516,6 +549,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::cell::RefCell;
+    use std::collections::HashMap;
 
     const BLOCK_SIZE: usize = 1 << 16;
     const SEGMENT_SIZE: usize = 1 << 20;
@@ -618,5 +652,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn index_basic() {
+        let mut index = Index::new();
 
+        match index.update("alex", 42) {
+            None => {}, // good
+            Some(old) => panic!("key should not exist"),
+        }
+        match index.update("alex", 24) {
+            None => panic!("key should exist"),
+            Some(old) => assert_eq!(old, 42),
+        }
+
+
+        match index.get("notexist") {
+            None => {}, // ok
+            Some(v) => panic!("get on nonexistent key"),
+        }
+
+        match index.get("alex") {
+            None => panic!("key should exist"),
+            Some(vref) => {}, // ok
+        }
+    }
 }
