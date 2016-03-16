@@ -1,9 +1,16 @@
 use libc;
+
 use std::cell::RefCell;
+
 use std::rc::Rc;
+
 use std::sync::Arc;
+
 use std::ptr::copy_nonoverlapping;
 use std::ptr::copy;
+
+use std::mem::size_of;
+use std::mem::transmute;
 
 //pub mod nibble;
 
@@ -135,17 +142,47 @@ macro_rules! segmgr_ref {
     }
 }
 
-/// Describe entry in the log.
-///     | EntryHeader | Key | Value |
-pub struct EntryHeader {
-    keylen: u32,
+/// Use this to describe an object. User is responsible for
+/// transmuting their objects into byte arrays, and for ensuring the
+/// lifetime of the originating buffers exceeds that of an instance of
+/// ObjDesc used to refer to them.
+pub struct ObjDesc {
+    key: *const u8,
+    value: *const u8,
+    klen: u16,
+    vlen: u32,
+}
+
+impl ObjDesc {
+
+    pub fn new(key: *const u8, value: *const u8,
+               klen: u16, vlen: u32) -> Self {
+        ObjDesc { key: key, value: value, klen: klen, vlen: vlen }
+    }
+}
+
+/// Describe entry in the log. Format is:
+///     | EntryHeader | Key bytes | Data bytes |
+/// An invalid object may exist if it was deleted or a new version was
+/// created in the log.
+#[repr(packed)]
+struct EntryHeader {
+    valid: u16, /// 1: valid 0: invalid
+    keylen: u16,
     datalen: u32,
 }
 
-/// Description of a buffer for copying into the log.
-pub struct BufDesc {
-    addr: *const u8,
-    len: usize,
+impl EntryHeader {
+
+    pub fn new(desc: &ObjDesc) -> Self {
+        EntryHeader {
+            valid: 1 as u16,
+            keylen: desc.klen,
+            datalen: desc.vlen
+        }
+    }
+
+    // TODO a function which mutates the header in-place
 }
 
 pub struct Segment {
@@ -177,24 +214,49 @@ impl Segment {
         self.rem -= len;
     }
 
-    // TODO append an object -- maybe make this unsafe?
-    pub fn append(&mut self, buf: &BufDesc) -> Status {
+    pub fn append(&mut self, buf: &ObjDesc) -> Status {
         if !self.closed {
             if self.has_space_for(buf) {
-                let dest = self.head as *mut u8;
-                unsafe { copy_nonoverlapping(buf.addr,dest,buf.len); }
-                self.increment(buf.len);
-                Ok(buf.len)
+                // write the entry header
+                let header = EntryHeader::new(buf);
+                let hlen = size_of::<EntryHeader>();
+                let vlen = buf.vlen as usize;
+                let klen = buf.klen as usize;
+                unsafe {
+                    let src: *const u8 = transmute(&header);
+                    copy_nonoverlapping(src,self.headref(),hlen);
+                }
+                self.increment(hlen);
+                // write the key
+                unsafe {
+                    copy_nonoverlapping(buf.key,self.headref(),klen);
+                }
+                self.increment(klen);
+                // write the object's value
+                unsafe {
+                    copy_nonoverlapping(buf.value,self.headref(),vlen);
+                }
+                self.increment(vlen);
+                Ok(hlen + klen + vlen)
             } else { Err(ErrorCode::SegmentFull) }
         } else { Err(ErrorCode::SegmentClosed) }
     }
 
-    pub fn has_space_for(&self, buf: &BufDesc) -> bool {
-        self.rem >= buf.len
+    pub fn has_space_for(&self, buf: &ObjDesc) -> bool {
+        self.rem >= size_of::<EntryHeader>()
+            + buf.klen as usize + buf.vlen as usize
     }
 
     pub fn close(&mut self) {
         self.closed = true;
+    }
+
+    //
+    // --- Private methods ---
+    //
+
+    fn headref(&mut self) -> *mut u8 {
+        self.head as *mut u8
     }
 }
 
@@ -307,7 +369,7 @@ impl LogHead {
         LogHead { segment: None, manager: manager }
     }
 
-    pub fn append(&mut self, buf: &BufDesc) -> Status {
+    pub fn append(&mut self, buf: &ObjDesc) -> Status {
         // allocate if head not exist
         match self.segment {
             None => { match self.roll() {
@@ -374,7 +436,7 @@ impl Log {
         Some(self.head.clone())
     }
 
-    pub fn append(&mut self, buf: &BufDesc) -> Status {
+    pub fn append(&mut self, buf: &ObjDesc) -> Status {
         // 1. determine log head to use
         let head = &self.head;
         // 2. call append on the log head
@@ -540,12 +602,12 @@ mod tests {
             let manager = segmgr_ref!(0, SEGMENT_SIZE, memlen);
             log = Log::new(manager.clone());
         }
-        let myval: &'static str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalex";
-        let addr = myval.as_ptr();
-        let len = myval.len();
-        let buf = BufDesc { addr: addr, len: len };
+        let key: &'static str = "keykeykeykey";
+        let val: &'static str = "valuevaluevalue";
+        let obj = ObjDesc::new(key.as_ptr(), val.as_ptr(),
+                                key.len() as u16, val.len() as u32);
         loop {
-            match log.append(&buf) {
+            match log.append(&obj) {
                 Ok(ign) => {},
                 Err(code) => {
                     println!("append returned {}",
