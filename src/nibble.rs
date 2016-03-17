@@ -435,7 +435,7 @@ impl LogHead {
     //
 
     /// Roll head. Close current and allocate new.
-    pub fn roll(&mut self) -> Status {
+    fn roll(&mut self) -> Status {
         match self.segment.clone() {
             None => {
                 self.segment = self.manager.borrow_mut().alloc();
