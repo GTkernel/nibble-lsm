@@ -1,6 +1,7 @@
 use libc;
 
 use std::cell::RefCell;
+use std::cmp;
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::mem::transmute;
@@ -158,6 +159,14 @@ impl<'a> ObjDesc<'a> {
     pub fn new(key: &'a str, value: *const u8, vlen: u32) -> Self {
         ObjDesc { key: key, value: value, vlen: vlen }
     }
+
+    pub fn len(&self) -> usize {
+        self.key.len() + self.vlen as usize
+    }
+
+    pub fn len_with_header(&self) -> usize {
+        size_of::<EntryHeader>() + self.len()
+    }
 }
 
 /// Describe entry in the log. Format is:
@@ -230,9 +239,13 @@ pub struct Segment {
     head: usize, /// Virtual address of head TODO atomic
     len: usize, /// Total capacity TODO atomic
     rem: usize, /// Remaining capacity TODO atomic
+    curblk: usize,
     blocks: BlockRefPool,
 }
 
+/// A logically contiguous chunk of memory. Inside, divided into
+/// virtually contiguous blocks. For now, objects cannot be broken
+/// across a block boundary.
 impl Segment {
 
     pub fn new(id: usize, blocks: BlockRefPool) -> Self {
@@ -240,24 +253,38 @@ impl Segment {
         for b in blocks.iter() {
             len += b.len;
         }
-        let start: usize = blocks[0].addr;
+        let blk = 0;
+        let start: usize = blocks[blk].addr;
         Segment {
             id: id, closed: false, head: start,
-            len: len, rem: len, blocks: blocks,
+            len: len, rem: len, curblk: blk, blocks: blocks,
         }
     }
 
+    // FIXME finish this method -- crossing block boundaries
+    // This shouldn't need to consider block boundaries, if
+    // try_reserve was invoked previously
     pub fn increment(&mut self, len: usize) {
         // TODO increment head atomically
-        self.head += len; // FIXME handle block boundaries
-        self.rem -= len;
+        let blk: &Block = &*self.blocks[self.curblk];
+        let remblk = blk.len - (self.head - blk.addr);
+        if remblk >= len {
+            // stay in current block
+            self.head += len;
+            self.rem -= len;
+        } else {
+            // roll to next block; might leave a hole at the end
+            self.curblk += 1;
+            let blk: &Block = &*self.blocks[self.curblk];
+            assert!(len <= blk.len);
+        }
     }
 
     /// Append an object with header to the log. If successful,
     /// returns virtual address in Ok().
     pub fn append(&mut self, buf: &ObjDesc) -> Status {
         if !self.closed {
-            if self.has_space_for(buf) {
+            if self.try_reserve(buf) {
                 let va = self.headref() as usize;
                 let hlen = size_of::<EntryHeader>();
                 let vlen = buf.vlen as usize;
@@ -281,11 +308,6 @@ impl Segment {
         } else { Err(ErrorCode::SegmentClosed) }
     }
 
-    pub fn has_space_for(&self, buf: &ObjDesc) -> bool {
-        self.rem >= size_of::<EntryHeader>()
-            + buf.key.len() + buf.vlen as usize
-    }
-
     pub fn close(&mut self) {
         self.closed = true;
     }
@@ -297,6 +319,32 @@ impl Segment {
     fn headref(&mut self) -> *mut u8 {
         self.head as *mut u8
     }
+
+    /// Attempt to update head to accomodate requested object. May
+    /// require we increment to next block. Return true if we can
+    /// accomodate the requested object.
+    fn try_reserve(&mut self, buf: &ObjDesc) -> bool {
+        let blk: &Block = &self.blocks[self.curblk];
+        let remblk = blk.len - (self.head - blk.addr);
+        let objlen = buf.len_with_header();
+        // check if object is impossibly large
+        if objlen > cmp::min(BLOCK_SIZE, SEGMENT_SIZE) {
+            warn!("Object larger than block and/or segment");
+            false
+        } else if remblk >= objlen {
+            true // do nothing, current head is ok
+        } else if (self.rem - remblk) >= buf.len_with_header() {
+            // roll head to next block
+            self.curblk += 1;
+            assert!(self.curblk < self.blocks.len());
+            self.head = self.blocks[self.curblk].addr;
+            self.rem = (self.blocks.len() - self.curblk - 1) * BLOCK_SIZE;
+            true
+        } else {
+            false // segment is full
+        }
+    }
+
 }
 
 impl Drop for Segment {
@@ -417,7 +465,7 @@ impl LogHead {
             }},
             _ => {},
         }
-        if !rb!(self.segment).has_space_for(buf) {
+        if !rbm!(self.segment).try_reserve(buf) {
             match self.roll() {
                 Err(code) => return Err(code),
                 Ok(ign) => {},
@@ -855,4 +903,6 @@ mod tests {
             Err(code) => panic!("{:?}", code),
         }
     }
+
+    // TODO test objects larger than block or segment
 }
