@@ -147,18 +147,16 @@ macro_rules! segmgr_ref {
 /// transmuting their objects into byte arrays, and for ensuring the
 /// lifetime of the originating buffers exceeds that of an instance of
 /// ObjDesc used to refer to them.
-pub struct ObjDesc {
-    key: *const u8,
+pub struct ObjDesc<'a> {
+    key: &'a str,
     value: *const u8,
-    klen: u16,
     vlen: u32,
 }
 
-impl ObjDesc {
+impl<'a> ObjDesc<'a> {
 
-    pub fn new(key: *const u8, value: *const u8,
-               klen: u16, vlen: u32) -> Self {
-        ObjDesc { key: key, value: value, klen: klen, vlen: vlen }
+    pub fn new(key: &'a str, value: *const u8, vlen: u32) -> Self {
+        ObjDesc { key: key, value: value, vlen: vlen }
     }
 }
 
@@ -167,7 +165,7 @@ impl ObjDesc {
 /// An invalid object may exist if it was deleted or a new version was
 /// created in the log.
 #[repr(packed)]
-struct EntryHeader {
+pub struct EntryHeader {
     valid: u16, /// 1: valid 0: invalid
     keylen: u16,
     datalen: u32,
@@ -176,14 +174,54 @@ struct EntryHeader {
 impl EntryHeader {
 
     pub fn new(desc: &ObjDesc) -> Self {
+        assert!(desc.key.len() <= usize::max_value());
         EntryHeader {
             valid: 1 as u16,
-            keylen: desc.klen,
+            keylen: desc.key.len() as u16,
             datalen: desc.vlen
         }
     }
 
-    // TODO a function which mutates the header in-place
+    pub fn empty() -> Self {
+        EntryHeader {
+            valid: 0 as u16,
+            keylen: 0 as u16,
+            datalen: 0 as u32
+        }
+    }
+
+    /// Overwrite ourself with an entry somewhere in memory.
+    pub fn read(&mut self, va: usize) {
+        assert!(va > 0);
+        let len = size_of::<EntryHeader>();
+        unsafe {
+            let src: *const u8 = transmute(va);
+            let dst: *mut u8 = transmute(self);
+            copy(src, dst, len);
+        }
+    }
+
+    /// Store ourself to memory.
+    pub fn write(&self, va: usize) {
+        assert!(va > 0);
+        let len = size_of::<EntryHeader>();
+        unsafe {
+            let src: *const u8 = transmute(self);
+            let dst: *mut u8 = transmute(va);
+            copy(src, dst, len);
+        }
+    }
+
+    /// Mark an EntryHeader invalid in memory.
+    pub fn invalidate(va: usize) {
+        assert!(va > 0);
+        let mut header = EntryHeader::empty();
+        header.read(va);
+        assert_eq!(header.valid, 1 as u16);
+        header.valid = 0 as u16;
+        header.write(va);
+        // TODO need memory fence?
+    }
 }
 
 pub struct Segment {
@@ -215,22 +253,22 @@ impl Segment {
         self.rem -= len;
     }
 
+    /// Append an object with header to the log. If successful,
+    /// returns virtual address in Ok().
     pub fn append(&mut self, buf: &ObjDesc) -> Status {
         if !self.closed {
             if self.has_space_for(buf) {
-                // write the entry header
-                let header = EntryHeader::new(buf);
+                let va = self.headref() as usize;
                 let hlen = size_of::<EntryHeader>();
                 let vlen = buf.vlen as usize;
-                let klen = buf.klen as usize;
-                unsafe {
-                    let src: *const u8 = transmute(&header);
-                    copy_nonoverlapping(src,self.headref(),hlen);
-                }
+                let klen = buf.key.len();
+                // write the entry header
+                EntryHeader::new(buf).write(self.headref() as usize);
                 self.increment(hlen);
                 // write the key
                 unsafe {
-                    copy_nonoverlapping(buf.key,self.headref(),klen);
+                    let src: *const u8 = buf.key.as_ptr();
+                    copy_nonoverlapping(src,self.headref(),klen);
                 }
                 self.increment(klen);
                 // write the object's value
@@ -238,14 +276,14 @@ impl Segment {
                     copy_nonoverlapping(buf.value,self.headref(),vlen);
                 }
                 self.increment(vlen);
-                Ok(hlen + klen + vlen)
+                Ok(va)
             } else { Err(ErrorCode::SegmentFull) }
         } else { Err(ErrorCode::SegmentClosed) }
     }
 
     pub fn has_space_for(&self, buf: &ObjDesc) -> bool {
         self.rem >= size_of::<EntryHeader>()
-            + buf.klen as usize + buf.vlen as usize
+            + buf.key.len() + buf.vlen as usize
     }
 
     pub fn close(&mut self) {
@@ -387,7 +425,7 @@ impl LogHead {
         }
         let mut seg = rbm!(self.segment);
         match seg.append(buf) {
-            Ok(len) => Ok(len),
+            Ok(va) => Ok(va),
             Err(code) => panic!("has space but append failed"),
         }
     }
@@ -433,15 +471,20 @@ impl Log {
         }
     }
 
-    pub fn get_head(&self) -> Option<LogHeadRef> {
-        Some(self.head.clone())
-    }
-
     pub fn append(&mut self, buf: &ObjDesc) -> Status {
         // 1. determine log head to use
         let head = &self.head;
         // 2. call append on the log head
-        head.borrow_mut().append(buf)
+        head.borrow_mut().append(buf) // returns address if ok
+    }
+
+    /// Toggle the valid bit within an entry's header. Typically used
+    /// to invalidate an object that was overwritten or removed.
+    pub fn invalidate_entry(&mut self, va: usize) -> Status {
+        assert!(va > 0);
+        // XXX lock the segment? lock something else?
+        EntryHeader::invalidate(va);
+        Ok(1)
     }
 
     pub fn enable_cleaning(&mut self) {
@@ -477,12 +520,13 @@ impl<'a> Index<'a> {
     }
 
     /// Return value of object if it exists, else None.
-    pub fn get(&self, key: &'a str) -> Option<&usize> {
-        self.table.get(key)
+    pub fn get(&self, key: &'a str) -> Option<usize> {
+        self.table.get(key).map(|r| *r) // &usize -> usize
     }
 
-    /// We return None if update results in insertion, else we return
-    /// the old value.
+    /// Update location of object in the index. Returns None if object
+    /// was newly inserted, or the virtual address of the prior
+    /// object.
     pub fn update(&mut self, key: &'a str, value: usize) -> Option<usize> {
         self.table.insert(key, value)
     }
@@ -497,6 +541,60 @@ impl<'a> Index<'a> {
 // -------------------------------------------------------------------
 // TODO RPC or SHM interface
 // -------------------------------------------------------------------
+
+// -------------------------------------------------------------------
+// Main Nibble interface
+// -------------------------------------------------------------------
+
+pub struct Nibble<'a> {
+    index: Index<'a>,
+    manager: SegmentManagerRef,
+    log: Log,
+}
+
+impl<'a> Nibble<'a> {
+
+    pub fn new(capacity: usize) -> Self {
+        let manager_ref = segmgr_ref!(0, SEGMENT_SIZE, capacity);
+        Nibble {
+            index: Index::new(),
+            manager: manager_ref.clone(),
+            log: Log::new(manager_ref.clone()),
+        }
+    }
+
+    pub fn put_object(&mut self, obj: &ObjDesc<'a>) -> Status {
+        let va: usize;
+        // 1. add object to log
+        match self.log.append(obj) {
+            Err(code) => return Err(code),
+            Ok(v) => va = v,
+        }
+        // 2. update reference to object, and if the object already
+        // exists, 3. invalidate old entry
+        match self.index.update(obj.key, va) {
+            None => {},
+            Some(old) => {
+                match self.log.invalidate_entry(old) {
+                    Err(code) => {
+                        panic!("Error marking old entry at 0x{:x}: {:?}",
+                               old, code);
+                    },
+                    Ok(v) => {},
+                }
+            },
+        }
+        Ok(1)
+    }
+
+    pub fn get_object(&self) -> Status {
+        unimplemented!();
+    }
+
+    pub fn del_object(&mut self) -> Status {
+        unimplemented!();
+    }
+}
 
 // -------------------------------------------------------------------
 // Memory utilities
@@ -547,9 +645,15 @@ impl Drop for MemMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+
     use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::mem::size_of;
+    use std::mem::transmute;
+    use std::ptr::copy;
+    use std::ptr::copy_nonoverlapping;
+    use std::rc::Rc;
+    use std::sync::Arc;
 
     const BLOCK_SIZE: usize = 1 << 16;
     const SEGMENT_SIZE: usize = 1 << 20;
@@ -639,8 +743,7 @@ mod tests {
         }
         let key: &'static str = "keykeykeykey";
         let val: &'static str = "valuevaluevalue";
-        let obj = ObjDesc::new(key.as_ptr(), val.as_ptr(),
-                                key.len() as u16, val.len() as u32);
+        let obj = ObjDesc::new(key, val.as_ptr(), val.len() as u32);
         loop {
             match log.append(&obj) {
                 Ok(ign) => {},
@@ -657,14 +760,13 @@ mod tests {
         let mut index = Index::new();
 
         match index.update("alex", 42) {
-            None => {}, // good
-            Some(old) => panic!("key should not exist"),
+            None => {}, // expected
+            Some(v) => panic!("key should not exist"),
         }
         match index.update("alex", 24) {
             None => panic!("key should exist"),
-            Some(old) => assert_eq!(old, 42),
+            Some(v) => assert_eq!(v, 42),
         }
-
 
         match index.get("notexist") {
             None => {}, // ok
@@ -674,6 +776,83 @@ mod tests {
         match index.get("alex") {
             None => panic!("key should exist"),
             Some(vref) => {}, // ok
+        }
+    }
+
+    #[test]
+    fn entry_header_readwrite_raw() {
+        // get some raw memory
+        let mem: Box<[u8;32]> = Box::new([0 as u8; 32]);
+        let ptr = Box::into_raw(mem);
+        // put a header into it with known values
+        let mut header = EntryHeader::empty();
+        assert_eq!(header.valid, 0 as u16);
+        header.valid = 1 as u16;
+        let len = size_of::<EntryHeader>();
+        unsafe {
+            let src: *const u8 = transmute(&header);
+            let dst: *mut u8 = transmute(ptr);
+            copy(src, dst, len);
+        }
+        // reset our copy, and re-read from raw memory
+        header = EntryHeader::empty();
+        assert_eq!(header.valid, 0 as u16);
+        unsafe {
+            let src: *const u8 = transmute(ptr);
+            let dst: *mut u8 = transmute(&header);
+            copy(src, dst, len);
+        }
+        // verify what we did worked
+        assert_eq!(header.valid, 1 as u16);
+        // free the original memory again
+        let mem = unsafe { Box::from_raw(ptr) };
+    }
+
+    #[test]
+    fn entry_header_readwrite() {
+        // get some raw memory
+        let mem: Box<[u8;32]> = Box::new([0 as u8; 32]);
+        let ptr = Box::into_raw(mem);
+        // put a header into it with known values
+        let mut header = EntryHeader::empty();
+        header.valid = 1 as u16;
+        header.keylen = 47 as u16;
+        header.datalen = 1025 as u32;
+        header.write(ptr as usize);
+        // reset our copy and verify
+        header = EntryHeader::empty();
+        header.read(ptr as usize);
+        assert_eq!(header.valid, 1 as u16);
+        assert_eq!(header.keylen, 47 as u16);
+        assert_eq!(header.datalen, 1025 as u32);
+        // invalidate, reset, verify
+        EntryHeader::invalidate(ptr as usize);
+        header = EntryHeader::empty();
+        header.read(ptr as usize);
+        assert_eq!(header.valid, 0 as u16);
+        assert_eq!(header.keylen, 47 as u16);
+        assert_eq!(header.datalen, 1025 as u32);
+    }
+
+    #[test]
+    fn nibble() {
+        let mem = 1 << 23;
+        let mut nib = Nibble::new(mem);
+
+        // insert initial object
+        let key: &'static str = "keykeykeykey";
+        let val: &'static str = "valuevaluevalue";
+        let obj = ObjDesc::new(key, val.as_ptr(), val.len() as u32);
+        match nib.put_object(&obj) {
+            Ok(ign) => {},
+            Err(code) => panic!("{:?}", code),
+        }
+        // change the value, keep key, check object is updated
+        let val2: &'static str = "VALUEVALUEVALUE";
+        let obj2 = ObjDesc::new(key, val2.as_ptr(), val2.len() as u32);
+        match nib.put_object(&obj2) {
+            Ok(ign) => {},
+            Err(code) => panic!("{:?}", code),
         }
     }
 }
