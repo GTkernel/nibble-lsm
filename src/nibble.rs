@@ -231,6 +231,23 @@ impl EntryHeader {
         header.write(va);
         // TODO need memory fence?
     }
+
+    pub fn is_valid(&self) -> bool {
+        self.valid == 1 as u16
+    }
+
+    /// Size of this entry in the log. Same as ObjDesc's methods.
+    pub fn len(&self) -> usize {
+        size_of::<EntryHeader>() +
+            self.keylen as usize +
+            self.datalen as usize
+    }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        let addr: *const u8;
+        unsafe { addr = transmute(self); }
+        addr
+    }
 }
 
 pub struct Segment {
@@ -261,48 +278,18 @@ impl Segment {
         }
     }
 
-    // FIXME finish this method -- crossing block boundaries
-    // This shouldn't need to consider block boundaries, if
-    // try_reserve was invoked previously
-    pub fn increment(&mut self, len: usize) {
-        // TODO increment head atomically
-        let blk: &Block = &*self.blocks[self.curblk];
-        let remblk = blk.len - (self.head - blk.addr);
-        if remblk >= len {
-            // stay in current block
-            self.head += len;
-            self.rem -= len;
-        } else {
-            // roll to next block; might leave a hole at the end
-            self.curblk += 1;
-            let blk: &Block = &*self.blocks[self.curblk];
-            assert!(len <= blk.len);
-        }
-    }
-
-    /// Append an object with header to the log. If successful,
-    /// returns virtual address in Ok().
+    /// Append an object with header to the log. Let append_safe
+    /// handle the actual work.  If successful, returns virtual
+    /// address in Ok().
     pub fn append(&mut self, buf: &ObjDesc) -> Status {
         if !self.closed {
-            if self.try_reserve(buf) {
+            if self.can_hold(buf) {
                 let va = self.headref() as usize;
+                let header = EntryHeader::new(buf);
                 let hlen = size_of::<EntryHeader>();
-                let vlen = buf.vlen as usize;
-                let klen = buf.key.len();
-                // write the entry header
-                EntryHeader::new(buf).write(self.headref() as usize);
-                self.increment(hlen);
-                // write the key
-                unsafe {
-                    let src: *const u8 = buf.key.as_ptr();
-                    copy_nonoverlapping(src,self.headref(),klen);
-                }
-                self.increment(klen);
-                // write the object's value
-                unsafe {
-                    copy_nonoverlapping(buf.value,self.headref(),vlen);
-                }
-                self.increment(vlen);
+                self.append_safe(header.as_ptr(), hlen);
+                self.append_safe(buf.key.as_ptr(), buf.key.len());
+                self.append_safe(buf.value, buf.vlen as usize);
                 Ok(va)
             } else { Err(ErrorCode::SegmentFull) }
         } else { Err(ErrorCode::SegmentClosed) }
@@ -310,6 +297,44 @@ impl Segment {
 
     pub fn close(&mut self) {
         self.closed = true;
+    }
+
+    /// Increment the head offset into the start of the next block.
+    /// Return false if we cannot roll because we're already at the
+    /// final block.
+    fn next_block(&mut self) -> bool {
+        let numblks: usize = self.blocks.len();
+        if self.curblk < (numblks - 1) {
+            self.curblk += 1;
+            self.head = self.blocks[self.curblk].addr;
+            true
+        } else {
+            warn!("block roll asked on last block");
+            false
+        }
+    }
+
+    /// Scan segment for all live entries (deep scan).
+    pub fn num_live(&self) -> usize {
+        let mut count: usize = 0;
+        let mut header = EntryHeader::empty();
+        let mut offset: usize = 0; // offset into segment (logical)
+        let mut curblk: usize = 0; // Block that offset refers to
+        // Manually cross block boundaries searching for entries.
+        while offset < self.len {
+            let base: usize = self.blocks[curblk].addr;
+            let addr: usize = base + (offset % BLOCK_SIZE);
+            header.read(addr);
+            count += if header.is_valid() { 1 } else { 0 };
+            // Determine next location to jump to
+            offset += header.len();
+            curblk = offset / BLOCK_SIZE;
+        }
+        count
+    }
+
+    pub fn can_hold(&self, buf: &ObjDesc) -> bool {
+        self.rem >= buf.len_with_header()
     }
 
     //
@@ -320,31 +345,50 @@ impl Segment {
         self.head as *mut u8
     }
 
-    /// Attempt to update head to accomodate requested object. May
-    /// require we increment to next block. Return true if we can
-    /// accomodate the requested object.
-    fn try_reserve(&mut self, buf: &ObjDesc) -> bool {
-        let blk: &Block = &self.blocks[self.curblk];
-        let remblk = blk.len - (self.head - blk.addr);
-        let objlen = buf.len_with_header();
-        // check if object is impossibly large
-        if objlen > cmp::min(BLOCK_SIZE, SEGMENT_SIZE) {
-            warn!("Object larger than block and/or segment");
-            false
-        } else if remblk >= objlen {
-            true // do nothing, current head is ok
-        } else if (self.rem - remblk) >= buf.len_with_header() {
-            // roll head to next block
-            self.curblk += 1;
-            assert!(self.curblk < self.blocks.len());
-            self.head = self.blocks[self.curblk].addr;
-            self.rem = (self.blocks.len() - self.curblk - 1) * BLOCK_SIZE;
-            true
-        } else {
-            false // segment is full
+    /// Append some buffer safely across block boundaries (if needed).
+    /// Caller must ensure the containing segment has sufficient
+    /// capacity.
+    fn append_safe(&mut self, from: *const u8, len: usize) {
+        assert!(len <= self.rem);
+        let mut remblk = self.rem_in_block();
+        // 1. If buffer fits in remainder of block, just copy it
+        if len <= remblk {
+            unsafe {
+                copy_nonoverlapping(from,self.headref(),len);
+            }
+            self.head += len;
+            if len == remblk {
+                self.next_block();
+            }
         }
+        // 2. If it spills over, perform two (or more) copies.
+        else {
+            let mut loc = from;
+            let mut rem = len;
+            // len may exceeed capacity of one block. Copy and roll in
+            // pieces until the input is consumed.
+            while rem > 0 {
+                remblk = self.rem_in_block();
+                let amt = cmp::min(remblk,rem);
+                unsafe {
+                    copy_nonoverlapping(loc,self.headref(), amt);
+                }
+                self.head += amt;
+                rem -= amt;
+                loc = (from as usize + amt) as *const u8;
+                // If we exceeded the block, get the next one
+                if remblk == amt {
+                    assert_eq!(self.next_block(), true);
+                }
+            }
+        }
+        self.rem -= len;
     }
 
+    fn rem_in_block(&self) -> usize {
+        let blk = &self.blocks[self.curblk];
+        blk.len - (self.head - blk.addr)
+    }
 }
 
 impl Drop for Segment {
@@ -435,6 +479,21 @@ impl SegmentManager {
         }
         true
     }
+
+    /// Returns #live objects
+    #[cfg(test)]
+    pub fn test_count_live_objects(&self) -> usize {
+        let mut count: usize = 0;
+        for opt in &self.segments {
+            match *opt {
+                None => {},
+                Some(ref seg) => {
+                    count += seg.borrow().num_live();
+                },
+            }
+        }
+        count
+    }
 }
 
 // -------------------------------------------------------------------
@@ -465,7 +524,7 @@ impl LogHead {
             }},
             _ => {},
         }
-        if !rbm!(self.segment).try_reserve(buf) {
+        if !rbm!(self.segment).can_hold(buf) {
             match self.roll() {
                 Err(code) => return Err(code),
                 Ok(ign) => {},
@@ -519,6 +578,8 @@ impl Log {
         }
     }
 
+    /// Append an object to the log. If successful, returns the
+    /// virtual address within the log inside Ok().
     pub fn append(&mut self, buf: &ObjDesc) -> Status {
         // 1. determine log head to use
         let head = &self.head;
@@ -780,6 +841,43 @@ mod tests {
         assert_eq!(mgr.test_all_segrefs_allocated(), true);
     }
 
+    /// Insert one unique object repeatedly;
+    /// there should be only one live object in the log.
+    /// lots of copy/paste...
+    #[test]
+    fn segment_manager_one_obj_overwrite() {
+        let memlen = 1<<23;
+        let numseg = memlen / SEGMENT_SIZE;
+        let manager = segmgr_ref!(0, SEGMENT_SIZE, memlen);
+        let mut log = Log::new(manager.clone());
+
+        let key: &'static str = "onlyone";
+        let val: &'static str = "valuevaluevalue";
+        let obj = ObjDesc::new(key, val.as_ptr(), val.len() as u32);
+        let mut old_va: usize = 0; // address of prior object
+        // fill up the log
+        let mut count: usize = 0;
+        loop {
+            match log.append(&obj) {
+                Ok(va) => {
+                    count += 1;
+                    // we must manually nix the old object (the Nibble
+                    // class would otherwise handle this for us)
+                    if old_va > 0 {
+                        EntryHeader::invalidate(old_va);
+                    }
+                    old_va = va;
+                },
+                Err(code) => match code {
+                    ErrorCode::OutOfMemory => break,
+                    _ => panic!("filling log returned {:?}", code),
+                },
+            }
+        }
+        println!("-- appends: {}", count);
+        assert_eq!(manager.borrow().test_count_live_objects(), 1);
+    }
+
     #[test]
     fn log_alloc_until_full() {
         let memlen = 1<<23;
@@ -904,5 +1002,6 @@ mod tests {
         }
     }
 
-    // TODO test objects larger than block or segment
+    // TODO test objects larger than block, and segment
+    // TODO test we can determine live vs dead entries in segment
 }
