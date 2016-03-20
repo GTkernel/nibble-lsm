@@ -45,6 +45,8 @@ pub enum ErrorCode {
     OutOfMemory,
 
     KeyNotExist,
+
+    EmptyObject,
 }
 
 pub fn err2str(code: ErrorCode) -> &'static str {
@@ -53,6 +55,7 @@ pub fn err2str(code: ErrorCode) -> &'static str {
         ErrorCode::SegmentClosed => { "Segment is closed" },
         ErrorCode::OutOfMemory   => { "Out of memory" },
         ErrorCode::KeyNotExist   => { "Key does not exist" },
+        ErrorCode::EmptyObject   => { "Object is empty" },
     }
 }
 
@@ -145,18 +148,18 @@ macro_rules! segmgr_ref {
 }
 
 /// Use this to describe an object. User is responsible for
-/// transmuting their objects into byte arrays, and for ensuring the
-/// lifetime of the originating buffers exceeds that of an instance of
-/// ObjDesc used to refer to them.
+/// transmuting their objects, and for ensuring the lifetime of the
+/// originating buffers exceeds that of an instance of ObjDesc used to
+/// refer to them.
 pub struct ObjDesc<'a> {
     key: &'a str,
-    value: *const u8,
+    value: Option<*const u8>, // user buffer, or allocated internally
     vlen: u32,
 }
 
 impl<'a> ObjDesc<'a> {
 
-    pub fn new(key: &'a str, value: *const u8, vlen: u32) -> Self {
+    pub fn new(key: &'a str, value: Option<*const u8>, vlen: u32) -> Self {
         ObjDesc { key: key, value: value, vlen: vlen }
     }
 
@@ -166,6 +169,12 @@ impl<'a> ObjDesc<'a> {
 
     pub fn len_with_header(&self) -> usize {
         size_of::<EntryHeader>() + self.len()
+    }
+
+    /// Releases memory associated with a .value that is allocated
+    /// internally upon retreiving an object from the log.
+    pub unsafe fn release_value(&mut self) {
+        unimplemented!();
     }
 }
 
@@ -184,6 +193,7 @@ impl EntryHeader {
 
     pub fn new(desc: &ObjDesc) -> Self {
         assert!(desc.key.len() <= usize::max_value());
+        assert!(desc.value != None);
         EntryHeader {
             valid: 1 as u16,
             keylen: desc.key.len() as u16,
@@ -284,12 +294,21 @@ impl Segment {
     pub fn append(&mut self, buf: &ObjDesc) -> Status {
         if !self.closed {
             if self.can_hold(buf) {
+                let val: *const u8;
+                match buf.value {
+                    None => return Err(ErrorCode::EmptyObject),
+                    Some(va) => { val = va; },
+                }
+                match buf.vlen {
+                    0 => return Err(ErrorCode::EmptyObject),
+                    _ => {},
+                }
                 let va = self.headref() as usize;
                 let header = EntryHeader::new(buf);
                 let hlen = size_of::<EntryHeader>();
                 self.append_safe(header.as_ptr(), hlen);
                 self.append_safe(buf.key.as_ptr(), buf.key.len());
-                self.append_safe(buf.value, buf.vlen as usize);
+                self.append_safe(val, buf.vlen as usize);
                 Ok(va)
             } else { Err(ErrorCode::SegmentFull) }
         } else { Err(ErrorCode::SegmentClosed) }
@@ -696,8 +715,9 @@ impl<'a> Nibble<'a> {
         Ok(1)
     }
 
-    pub fn get_object(&self) -> Status {
+    pub fn get_object(&self, ) -> Status {
         unimplemented!();
+        //let va: usize = self.index.get(
     }
 
     pub fn del_object(&mut self) -> Status {
@@ -858,7 +878,7 @@ mod tests {
 
         let key: &'static str = "onlyone";
         let val: &'static str = "valuevaluevalue";
-        let obj = ObjDesc::new(key, val.as_ptr(), val.len() as u32);
+        let obj = ObjDesc::new(key, Some(val.as_ptr()), val.len() as u32);
         let mut old_va: usize = 0; // address of prior object
         // fill up the log
         let mut count: usize = 0;
@@ -888,7 +908,7 @@ mod tests {
         let mut log = Log::new(test_create_segment_manager());
         let key: &'static str = "keykeykeykey";
         let val: &'static str = "valuevaluevalue";
-        let obj = ObjDesc::new(key, val.as_ptr(), val.len() as u32);
+        let obj = ObjDesc::new(key, Some(val.as_ptr()), val.len() as u32);
         loop {
             match log.append(&obj) {
                 Ok(ign) => {},
@@ -987,18 +1007,20 @@ mod tests {
         // insert initial object
         let key: &'static str = "keykeykeykey";
         let val: &'static str = "valuevaluevalue";
-        let obj = ObjDesc::new(key, val.as_ptr(), val.len() as u32);
+        let obj = ObjDesc::new(key, Some(val.as_ptr()), val.len() as u32);
         match nib.put_object(&obj) {
             Ok(ign) => {},
             Err(code) => panic!("{:?}", code),
         }
-        // change the value, keep key, check object is updated
+        // change the value of the object
         let val2: &'static str = "VALUEVALUEVALUE";
-        let obj2 = ObjDesc::new(key, val2.as_ptr(), val2.len() as u32);
+        let obj2 = ObjDesc::new(key, Some(val2.as_ptr()), val2.len() as u32);
         match nib.put_object(&obj2) {
             Ok(ign) => {},
             Err(code) => panic!("{:?}", code),
         }
+
+        // TODO check the value was actually updated
     }
 
     // TODO test objects larger than block, and segment
