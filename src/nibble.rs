@@ -751,14 +751,6 @@ impl Drop for MemMap {
 // Test Code
 // -------------------------------------------------------------------
 
-/// Used to save us from copy/paste in the tests.
-#[cfg(test)]
-fn test_create_segment_manager() -> SegmentManager {
-    let memlen = 1<<23;
-    let numseg = memlen / SEGMENT_SIZE;
-    segmgr_ref!(0, SEGMENT_SIZE, memlen)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -774,6 +766,13 @@ mod tests {
 
     const BLOCK_SIZE: usize = 1 << 16;
     const SEGMENT_SIZE: usize = 1 << 20;
+
+    /// Used to save us from copy/paste in the tests.
+    fn test_create_segment_manager() -> SegmentManagerRef {
+        let memlen = 1<<23;
+        let numseg = memlen / SEGMENT_SIZE;
+        segmgr_ref!(0, SEGMENT_SIZE, memlen)
+    }
 
     #[test]
     fn memory_map_init() {
@@ -886,7 +885,7 @@ mod tests {
 
     #[test]
     fn log_alloc_until_full() {
-        let mut log = Log::new(test_create_segment_mangager());
+        let mut log = Log::new(test_create_segment_manager());
         let key: &'static str = "keykeykeykey";
         let val: &'static str = "valuevaluevalue";
         let obj = ObjDesc::new(key, val.as_ptr(), val.len() as u32);
