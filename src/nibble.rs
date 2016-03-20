@@ -751,6 +751,14 @@ impl Drop for MemMap {
 // Test Code
 // -------------------------------------------------------------------
 
+/// Used to save us from copy/paste in the tests.
+#[cfg(test)]
+fn test_create_segment_manager() -> SegmentManager {
+    let memlen = 1<<23;
+    let numseg = memlen / SEGMENT_SIZE;
+    segmgr_ref!(0, SEGMENT_SIZE, memlen)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,9 +854,7 @@ mod tests {
     /// lots of copy/paste...
     #[test]
     fn segment_manager_one_obj_overwrite() {
-        let memlen = 1<<23;
-        let numseg = memlen / SEGMENT_SIZE;
-        let manager = segmgr_ref!(0, SEGMENT_SIZE, memlen);
+        let manager = test_create_segment_manager();
         let mut log = Log::new(manager.clone());
 
         let key: &'static str = "onlyone";
@@ -880,13 +886,7 @@ mod tests {
 
     #[test]
     fn log_alloc_until_full() {
-        let memlen = 1<<23;
-        let numseg = memlen / SEGMENT_SIZE;
-        let mut log;
-        {
-            let manager = segmgr_ref!(0, SEGMENT_SIZE, memlen);
-            log = Log::new(manager.clone());
-        }
+        let mut log = Log::new(test_create_segment_mangager());
         let key: &'static str = "keykeykeykey";
         let val: &'static str = "valuevaluevalue";
         let obj = ObjDesc::new(key, val.as_ptr(), val.len() as u32);
