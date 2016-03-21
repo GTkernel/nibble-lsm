@@ -174,7 +174,11 @@ impl<'a> ObjDesc<'a> {
     /// Releases memory associated with a .value that is allocated
     /// internally upon retreiving an object from the log.
     pub unsafe fn release_value(&mut self) {
-        unimplemented!();
+        match self.value.take() {
+            // v goes out of scope and its memory released
+            Some(va) => { let v = Box::from_raw(va as *mut u8); },
+            None => {},
+        }
     }
 }
 
@@ -182,6 +186,7 @@ impl<'a> ObjDesc<'a> {
 ///     | EntryHeader | Key bytes | Data bytes |
 /// An invalid object may exist if it was deleted or a new version was
 /// created in the log.
+#[derive(Debug)]
 #[repr(packed)]
 pub struct EntryHeader {
     valid: u16, /// 1: valid 0: invalid
@@ -246,7 +251,7 @@ impl EntryHeader {
         self.valid == 1 as u16
     }
 
-    /// Size of this entry in the log. Same as ObjDesc's methods.
+    /// Size of this (entire) entry in the log.
     pub fn len(&self) -> usize {
         size_of::<EntryHeader>() +
             self.keylen as usize +
@@ -257,6 +262,13 @@ impl EntryHeader {
         let addr: *const u8;
         unsafe { addr = transmute(self); }
         addr
+    }
+
+    /// Give the starting address of the object in the log, provided
+    /// the address of this EntryHeader within the log.
+    pub fn data_address(&self, entry: usize) -> *const u8 {
+        (entry + size_of::<EntryHeader>() + self.keylen as usize)
+            as *mut u8
     }
 }
 
@@ -715,9 +727,22 @@ impl<'a> Nibble<'a> {
         Ok(1)
     }
 
-    pub fn get_object(&self, ) -> Status {
-        unimplemented!();
-        //let va: usize = self.index.get(
+    pub fn get_object(&self, key: &'a str) -> (Status,Option<Buffer>) {
+        // TODO lock the object? need to make sure it isn't relocated
+        // or deleted while we read it
+        let va: usize;
+        match self.index.get(key) {
+            None => return (Err(ErrorCode::KeyNotExist),None),
+            Some(v) => va = v,
+        }
+        let mut header = EntryHeader::empty();
+        header.read(va);
+        let buf = Buffer::new(header.datalen as usize);
+        unsafe {
+            let src = header.data_address(va);
+            copy(src, buf.addr as *mut u8, buf.len);
+        }
+        (Ok(1),Some(buf))
     }
 
     pub fn del_object(&mut self) -> Status {
@@ -728,6 +753,28 @@ impl<'a> Nibble<'a> {
 // -------------------------------------------------------------------
 // Memory utilities
 // -------------------------------------------------------------------
+
+/// Generic heap buffer that uses malloc underneath.
+pub struct Buffer {
+    addr: usize,
+    len: usize,
+}
+
+impl Buffer {
+    pub fn new(len: usize) -> Self {
+        let va: usize = unsafe { libc::malloc(len) as usize };
+        assert!(va != 0);
+        Buffer { addr: va, len: len }
+    }
+}
+
+impl Drop for Buffer {
+    fn drop (&mut self) {
+        if self.addr > 0 {
+            unsafe { libc::free(self.addr as *mut libc::c_void); }
+        }
+    }
+}
 
 /// Memory mapped region in our address space.
 pub struct MemMap {
@@ -899,7 +946,6 @@ mod tests {
                 },
             }
         }
-        println!("-- appends: {}", count);
         assert_eq!(manager.borrow().test_count_live_objects(), 1);
     }
 
@@ -1000,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    fn nibble() {
+    fn nibble_single_small_object() {
         let mem = 1 << 23;
         let mut nib = Nibble::new(mem);
 
@@ -1012,7 +1058,38 @@ mod tests {
             Ok(ign) => {},
             Err(code) => panic!("{:?}", code),
         }
-        // change the value of the object
+
+        // verify what we wrote is correct FIXME reduce copy/paste
+        {
+            let status: Status;
+            let ret = nib.get_object(key);
+            let string: String;
+            match ret {
+                (Err(code),_) => panic!("key should exist: {:?}", code),
+                (Ok(_),Some(buf)) => {
+                    // convert buf to vec to string for comparison
+                    // FIXME faster method?
+                    let mut v: Vec<u8> = Vec::with_capacity(buf.len);
+                    for i in 0..buf.len {
+                        let addr = buf.addr + i;
+                        unsafe { v.push( *(addr as *const u8) ); }
+                    }
+                    match String::from_utf8(v) {
+                        Ok(string) => {
+                            let mut compareto = String::new();
+                            compareto.push_str(val);
+                            assert_eq!(compareto, string);
+                        },
+                        Err(code) => {
+                            panic!("error converting utf8 from log: {:?}", code);
+                        },
+                    }
+                },
+                _ => panic!("unhandled return combo"),
+            }
+        }
+
+        // change the value of the object, and check again
         let val2: &'static str = "VALUEVALUEVALUE";
         let obj2 = ObjDesc::new(key, Some(val2.as_ptr()), val2.len() as u32);
         match nib.put_object(&obj2) {
@@ -1020,9 +1097,39 @@ mod tests {
             Err(code) => panic!("{:?}", code),
         }
 
-        // TODO check the value was actually updated
+        {
+            let status: Status;
+            let ret = nib.get_object(key);
+            let string: String;
+            match ret {
+                (Err(code),_) => panic!("key should exist: {:?}", code),
+                (Ok(_),Some(buf)) => {
+                    // convert buf to vec to string for comparison
+                    // FIXME faster method?
+                    let mut v: Vec<u8> = Vec::with_capacity(buf.len);
+                    for i in 0..buf.len {
+                        let addr = buf.addr + i;
+                        unsafe { v.push( *(addr as *const u8) ); }
+                    }
+                    match String::from_utf8(v) {
+                        Ok(string) => {
+                            let mut compareto = String::new();
+                            compareto.push_str(val2);
+                            assert_eq!(compareto, string);
+                        },
+                        Err(code) => {
+                            panic!("error converting utf8 from log: {:?}", code);
+                        },
+                    }
+                },
+                _ => panic!("unhandled return combo"),
+            }
+        }
+
     }
 
     // TODO test objects larger than block, and segment
+    // TODO put_object which must traverse chunks
+    // TODO a get_object which must traverse chunks
     // TODO test we can determine live vs dead entries in segment
 }
