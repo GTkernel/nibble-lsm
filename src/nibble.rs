@@ -912,6 +912,8 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Arc;
 
+    use test::Bencher;
+
     const BLOCK_SIZE: usize = 1 << 16;
     const SEGMENT_SIZE: usize = 1 << 20;
 
@@ -1240,4 +1242,16 @@ mod tests {
     // TODO a get_object which must traverse chunks
     // TODO test we can determine live vs dead entries in segment
     // TODO test specific cases where header cross block boundaries
+
+    #[bench]
+    fn bench_insert(b: &mut Bencher) {
+        let mut nib = Nibble::new( 1<<26 );
+        let key: &'static str = "keykeykey";
+        //let val: &'static str = "valuevaluevaluevaluevaluevalue";
+        let mut val: Vec<u64> = Vec::new();
+        for i in 0..16 { val.push(i); }
+        let obj = ObjDesc::new(key, Some(val.as_ptr() as *const u8),
+                                val.len() as u32 * size_of::<u64>() as u32);
+        b.iter( || { nib.put_object(&obj) });
+    }
 }
