@@ -1,3 +1,4 @@
+# http://doc.crates.io/manifest.html
 [package]
 name = "nibble"
 version = "0.1.0"
