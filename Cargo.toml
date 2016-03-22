@@ -6,3 +6,4 @@ authors = ["Alexander Merritt <merritt.alex@gatech.edu>"]
 [dependencies]
 libc = "0.2.7"
 log = "0.3.5"
+time = "0.1.34"
