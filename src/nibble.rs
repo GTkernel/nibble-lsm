@@ -827,7 +827,9 @@ impl<'a> Nibble<'a> {
 // Memory utilities
 // -------------------------------------------------------------------
 
-/// Generic heap buffer that uses malloc underneath.
+/// Generic heap buffer that uses malloc underneath. Might be better
+/// to back Buffers with a slab allocator to avoid object sizes
+/// becoming exposed to the heap allocator.
 pub struct Buffer {
     addr: usize,
     len: usize,
@@ -839,6 +841,8 @@ impl Buffer {
         assert!(va != 0);
         Buffer { addr: va, len: len }
     }
+
+    // TODO append()
 }
 
 impl Drop for Buffer {
