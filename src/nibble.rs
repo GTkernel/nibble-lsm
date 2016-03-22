@@ -5,6 +5,7 @@ use std::cmp;
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::mem::transmute;
+use std::ptr;
 use std::ptr::copy;
 use std::ptr::copy_nonoverlapping;
 use std::rc::Rc;
@@ -185,13 +186,36 @@ impl<'a> ObjDesc<'a> {
 /// Describe entry in the log. Format is:
 ///     | EntryHeader | Key bytes | Data bytes |
 /// An invalid object may exist if it was deleted or a new version was
-/// created in the log.
+/// created in the log. This struct MUST NOT contain any pointers.  As
+/// segments are only appended, then we can assume the last entry for
+/// which the signature does not match is the last entry in a segment.
+/// The signature is used to identify an EntryHeader which was
+/// actually created. It is computed from an instance of EntryHeader
+/// with the signature field set to zero.
 #[derive(Debug)]
 #[repr(packed)]
 pub struct EntryHeader {
-    valid: u16, /// 1: valid 0: invalid
+    /// Verify this entry was actually created. "Valid" just means the
+    /// index points to this entry; "invalid" means this entry did
+    /// exist, but was deleted. Any other value for this field means
+    /// it should be ignored (and likely no other entries exist in the
+    /// remainder of the segment).
+    __signature: u16,
     keylen: u16,
     datalen: u32,
+}
+
+// Arbitrary non-obvious values to identify header. Both mean we
+// created the entry at some point; any other value means the entry
+// isn't an entry -- bogus data.
+const ENTRY_HEADER_SIG_LIVE:    u16 = 0x4FDA;
+const ENTRY_HEADER_SIG_DEFUNCT: u16 = 0x37B4;
+
+#[derive(Debug)]
+pub enum EntryHeaderStatus {
+    Live, // Created and index points to it
+    Defunct, // Created, but index no longer points to it
+    Invalid, // Not an entry
 }
 
 impl EntryHeader {
@@ -200,55 +224,58 @@ impl EntryHeader {
         assert!(desc.key.len() <= usize::max_value());
         assert!(desc.value != None);
         EntryHeader {
-            valid: 1 as u16,
+            __signature: ENTRY_HEADER_SIG_LIVE,
             keylen: desc.key.len() as u16,
-            datalen: desc.vlen
+            datalen: desc.vlen,
         }
     }
 
     pub fn empty() -> Self {
         EntryHeader {
-            valid: 0 as u16,
+            __signature: 0 as u16, // not a real header, yet
             keylen: 0 as u16,
-            datalen: 0 as u32
+            datalen: 0 as u32,
+        }
+    }
+
+    pub fn status(&self) -> EntryHeaderStatus {
+        match self.__signature {
+            ENTRY_HEADER_SIG_LIVE => EntryHeaderStatus::Live,
+            ENTRY_HEADER_SIG_DEFUNCT => EntryHeaderStatus::Defunct,
+            _ => EntryHeaderStatus::Invalid,
         }
     }
 
     /// Overwrite ourself with an entry somewhere in memory.
-    pub fn read(&mut self, va: usize) {
+    pub unsafe fn read(&mut self, va: usize) {
         assert!(va > 0);
         let len = size_of::<EntryHeader>();
-        unsafe {
-            let src: *const u8 = transmute(va);
-            let dst: *mut u8 = transmute(self);
-            copy(src, dst, len);
-        }
+        let src: *const u8 = transmute(va);
+        let dst: *mut u8 = transmute(self);
+        copy(src, dst, len);
     }
 
     /// Store ourself to memory.
-    pub fn write(&self, va: usize) {
+    pub unsafe fn write(&self, va: usize) {
         assert!(va > 0);
         let len = size_of::<EntryHeader>();
-        unsafe {
-            let src: *const u8 = transmute(self);
-            let dst: *mut u8 = transmute(va);
-            copy(src, dst, len);
-        }
+        let src: *const u8 = transmute(self);
+        let dst: *mut u8 = transmute(va);
+        copy(src, dst, len);
     }
 
     /// Mark an EntryHeader invalid in memory.
-    pub fn invalidate(va: usize) {
+    pub unsafe fn invalidate(va: usize) {
         assert!(va > 0);
         let mut header = EntryHeader::empty();
         header.read(va);
-        assert_eq!(header.valid, 1 as u16);
-        header.valid = 0 as u16;
+        match header.status() {
+            EntryHeaderStatus::Live => {},
+            s => panic!("header expected to be live: {:?}", s),
+        }
+        header.__signature = ENTRY_HEADER_SIG_DEFUNCT;
         header.write(va);
         // TODO need memory fence?
-    }
-
-    pub fn is_valid(&self) -> bool {
-        self.valid == 1 as u16
     }
 
     /// Size of this (entire) entry in the log.
@@ -269,6 +296,15 @@ impl EntryHeader {
     pub fn data_address(&self, entry: usize) -> *const u8 {
         (entry + size_of::<EntryHeader>() + self.keylen as usize)
             as *mut u8
+    }
+
+    //
+    // --- Internal methods used for testing only ---
+    //
+
+    #[cfg(test)]
+    pub fn set_valid(&mut self) {
+        self.__signature = ENTRY_HEADER_SIG_LIVE;
     }
 }
 
@@ -353,10 +389,38 @@ impl Segment {
         let mut curblk: usize = 0; // Block that offset refers to
         // Manually cross block boundaries searching for entries.
         while offset < self.len {
+            assert!(curblk < self.blocks.len());
             let base: usize = self.blocks[curblk].addr;
             let addr: usize = base + (offset % BLOCK_SIZE);
-            header.read(addr);
-            count += if header.is_valid() { 1 } else { 0 };
+
+            let rem = BLOCK_SIZE - (offset % BLOCK_SIZE); // remaining in block
+
+            // If header is split across block boundaries
+            if rem < size_of::<EntryHeader>() {
+                // Can't be last block if header is partial
+                assert!(curblk != self.blocks.len()-1);
+                unsafe {
+                    let mut from = addr;
+                    let mut to: usize = transmute(&header);
+                    copy(from as *const u8, to as *mut u8, rem);
+                    from = self.blocks[curblk+1].addr; // start at next block
+                    to += rem;
+                    copy(from as *const u8, to as *mut u8,
+                         size_of::<EntryHeader>() - rem);
+                }
+            }
+            // Header is fully contained in the block
+            else {
+                unsafe { header.read(addr); }
+            }
+
+            // Count it or stop scanning
+            match header.status() {
+                EntryHeaderStatus::Live => count += 1,
+                EntryHeaderStatus::Defunct => {},
+                EntryHeaderStatus::Invalid => break,
+            }
+
             // Determine next location to jump to
             offset += header.len();
             curblk = offset / BLOCK_SIZE;
@@ -623,7 +687,7 @@ impl Log {
     pub fn invalidate_entry(&mut self, va: usize) -> Status {
         assert!(va > 0);
         // XXX lock the segment? lock something else?
-        EntryHeader::invalidate(va);
+        unsafe { EntryHeader::invalidate(va); }
         Ok(1)
     }
 
@@ -736,7 +800,7 @@ impl<'a> Nibble<'a> {
             Some(v) => va = v,
         }
         let mut header = EntryHeader::empty();
-        header.read(va);
+        unsafe { header.read(va); }
         let buf = Buffer::new(header.datalen as usize);
         unsafe {
             let src = header.data_address(va);
@@ -747,6 +811,15 @@ impl<'a> Nibble<'a> {
 
     pub fn del_object(&mut self) -> Status {
         unimplemented!();
+    }
+
+    //
+    // --- Internal methods used for testing only ---
+    //
+
+    #[cfg(test)]
+    pub fn test_count_live_objects(&self) -> usize {
+        self.manager.borrow().test_count_live_objects()
     }
 }
 
@@ -794,28 +867,36 @@ impl MemMap {
             let p = 0 as *mut libc::c_void;
             libc::mmap(p, len, prot, flags, 0, 0) as usize
         };
-        info!("mmap 0x{:x} {} MiB", addr, len>>20);
+        info!("mmap 0x{:x}-0x{:x} {} MiB",
+              addr, (addr+len), len>>20);
         assert!(addr != libc::MAP_FAILED as usize);
         MemMap { addr: addr, len: len }
     }
 
     pub fn addr(&self) -> usize { self.addr }
     pub fn len(&self) -> usize { self.len }
+
+    /// Wipe the memory region to zeros.
+    pub unsafe fn clear(&mut self) {
+        ptr::write_bytes(self.addr as *mut u8, 0 as u8, self.len);
+    }
 }
 
 /// Prevent dangling regions by unmapping it.
 impl Drop for MemMap {
 
     fn drop (&mut self) {
-        unsafe {
-            let p = self.addr as *mut libc::c_void;
-            libc::munmap(p, self.len);
-        }
+        info!("unmapping 0x{:x}", self.addr);
+        let p = self.addr as *mut libc::c_void;
+        unsafe { libc::munmap(p, self.len); }
     }
 }
 
 // -------------------------------------------------------------------
 // Test Code
+//
+// Most tests could probably be broken into many smaller tests.
+// Testing is also far from comprehensive.
 // -------------------------------------------------------------------
 
 #[cfg(test)]
@@ -936,7 +1017,7 @@ mod tests {
                     // we must manually nix the old object (the Nibble
                     // class would otherwise handle this for us)
                     if old_va > 0 {
-                        EntryHeader::invalidate(old_va);
+                        unsafe { EntryHeader::invalidate(old_va); }
                     }
                     old_va = va;
                 },
@@ -995,26 +1076,40 @@ mod tests {
         // get some raw memory
         let mem: Box<[u8;32]> = Box::new([0 as u8; 32]);
         let ptr = Box::into_raw(mem);
+
         // put a header into it with known values
         let mut header = EntryHeader::empty();
-        assert_eq!(header.valid, 0 as u16);
-        header.valid = 1 as u16;
+        match header.status() {
+            EntryHeaderStatus::Invalid => {}, // ok
+            _ => panic!("header must be invalid"),
+        }
+        header.set_valid();
+        match header.status() {
+            EntryHeaderStatus::Live => {}, // ok
+            _ => panic!("header must be live"),
+        }
+
         let len = size_of::<EntryHeader>();
         unsafe {
             let src: *const u8 = transmute(&header);
             let dst: *mut u8 = transmute(ptr);
             copy(src, dst, len);
         }
+
         // reset our copy, and re-read from raw memory
         header = EntryHeader::empty();
-        assert_eq!(header.valid, 0 as u16);
         unsafe {
             let src: *const u8 = transmute(ptr);
             let dst: *mut u8 = transmute(&header);
             copy(src, dst, len);
         }
+
         // verify what we did worked
-        assert_eq!(header.valid, 1 as u16);
+        match header.status() {
+            EntryHeaderStatus::Live => {}, // ok
+            _ => panic!("header must be live"),
+        }
+
         // free the original memory again
         let mem = unsafe { Box::from_raw(ptr) };
     }
@@ -1024,23 +1119,32 @@ mod tests {
         // get some raw memory
         let mem: Box<[u8;32]> = Box::new([0 as u8; 32]);
         let ptr = Box::into_raw(mem);
+
         // put a header into it with known values
         let mut header = EntryHeader::empty();
-        header.valid = 1 as u16;
+        header.set_valid();
         header.keylen = 47 as u16;
         header.datalen = 1025 as u32;
-        header.write(ptr as usize);
+        unsafe { header.write(ptr as usize); }
+
         // reset our copy and verify
         header = EntryHeader::empty();
-        header.read(ptr as usize);
-        assert_eq!(header.valid, 1 as u16);
+        unsafe { header.read(ptr as usize); }
+        match header.status() {
+            EntryHeaderStatus::Live => {}, // ok
+            _ => panic!("header should be live"),
+        }
         assert_eq!(header.keylen, 47 as u16);
         assert_eq!(header.datalen, 1025 as u32);
+
         // invalidate, reset, verify
-        EntryHeader::invalidate(ptr as usize);
+        unsafe { EntryHeader::invalidate(ptr as usize); }
         header = EntryHeader::empty();
-        header.read(ptr as usize);
-        assert_eq!(header.valid, 0 as u16);
+        unsafe { header.read(ptr as usize); }
+        match header.status() {
+            EntryHeaderStatus::Defunct => {}, // ok
+            _ => panic!("header should be defunct"),
+        }
         assert_eq!(header.keylen, 47 as u16);
         assert_eq!(header.datalen, 1025 as u32);
     }
@@ -1126,6 +1230,7 @@ mod tests {
             }
         }
 
+        assert_eq!(nib.test_count_live_objects(), 1);
     }
 
     // TODO test objects larger than block, and segment
