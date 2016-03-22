@@ -1193,12 +1193,14 @@ mod tests {
             }
         }
 
-        // change the value of the object, and check again
+        // shove in the object multiple times to cross many blocks
         let val2: &'static str = "VALUEVALUEVALUE";
         let obj2 = ObjDesc::new(key, Some(val2.as_ptr()), val2.len() as u32);
-        match nib.put_object(&obj2) {
-            Ok(ign) => {},
-            Err(code) => panic!("{:?}", code),
+        for i in 0..100000 {
+            match nib.put_object(&obj2) {
+                Ok(ign) => {},
+                Err(code) => panic!("{:?}", code),
+            }
         }
 
         {
@@ -1237,4 +1239,5 @@ mod tests {
     // TODO put_object which must traverse chunks
     // TODO a get_object which must traverse chunks
     // TODO test we can determine live vs dead entries in segment
+    // TODO test specific cases where header cross block boundaries
 }
