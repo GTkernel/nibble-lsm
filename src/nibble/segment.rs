@@ -107,13 +107,13 @@ macro_rules! segmgr_ref {
 /// refer to them.
 pub struct ObjDesc<'a> {
     key: &'a str,
-    value: Option<*const u8>, // user buffer, or allocated internally
+    value: Pointer,
     vlen: u32,
 }
 
 impl<'a> ObjDesc<'a> {
 
-    pub fn new(key: &'a str, value: Option<*const u8>, vlen: u32) -> Self {
+    pub fn new(key: &'a str, value: Pointer, vlen: u32) -> Self {
         ObjDesc { key: key, value: value, vlen: vlen }
     }
 
@@ -137,7 +137,7 @@ impl<'a> ObjDesc<'a> {
 
     pub fn getkey(&self) -> &'a str { self.key }
     pub fn keylen(&self) -> usize { self.key.len() }
-    pub fn getvalue(&self) -> Option<*const u8> { self.value }
+    pub fn getvalue(&self) -> Pointer { self.value }
     pub fn valuelen(&self) -> u32 { self.vlen }
 }
 

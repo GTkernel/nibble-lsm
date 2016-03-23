@@ -17,6 +17,9 @@ macro_rules! rbm {
     ( $obj:expr ) => { r!($obj).borrow_mut() }
 }
 
+pub type Pointer = Option<*const u8>;
+pub type PointerMut = Option<*mut u8>;
+
 // -------------------------------------------------------------------
 // Error handling
 // -------------------------------------------------------------------
