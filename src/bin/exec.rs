@@ -3,14 +3,11 @@
 #![allow(unused_variables)]
 #![allow(unused_imports)]
 
-extern crate nibble;
-extern crate log;
+//extern crate nibble;
 
-use nibble::nibble::Nibble;
-use nibble::logger::SimpleLogger;
-use log::LogLevel;
+//use nibble::nibble::Nibble;
 
 fn main() {
-    { let _ = SimpleLogger::init(LogLevel::Debug); }
-    let nib = Nibble::new(1<<26);
+    //{ let _ = SimpleLogger::init(LogLevel::Debug); }
+    //let nib = Nibble::new(1<<26);
 }

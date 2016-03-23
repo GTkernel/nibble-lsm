@@ -8,6 +8,8 @@
 extern crate log;
 extern crate libc;
 extern crate test;
+extern crate time;
 
 pub mod nibble;
-pub mod logger;
+pub use nibble::*;
+
