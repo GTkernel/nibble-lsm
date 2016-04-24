@@ -1,5 +1,3 @@
-// TODO get rid of the use of defunct in Segment
-// and entryheader::invalidate
 use common::*;
 use thelog::*;
 use memory::*;
@@ -164,6 +162,28 @@ impl<'a> ObjDesc<'a> {
 }
 
 //==----------------------------------------------------==//
+//      Segment header
+//==----------------------------------------------------==//
+
+/// Structure written to offset 0 of each segment and updated when new
+/// objects are appended.
+#[derive(Debug)]
+#[repr(packed)]
+pub struct SegmentHeader {
+    num_objects: u32,
+}
+
+impl SegmentHeader {
+
+    pub fn new(n: u32) -> Self {
+        SegmentHeader { num_objects: n }
+    }
+
+    pub fn nobj(&self) -> u32 { self.num_objects }
+    pub fn len() -> usize { size_of::<Self>() }
+}
+
+//==----------------------------------------------------==//
 //      Segment
 //==----------------------------------------------------==//
 
@@ -172,11 +192,12 @@ impl<'a> ObjDesc<'a> {
 pub struct Segment {
     id: usize,
     closed: bool,
-    head: usize, /// Virtual address of head TODO change to Some
-    len: usize, /// Total storage
-    rem: usize, /// Remaining storage (includes defunct entries)
-    defunct: usize, /// Storage taken by defunct entries
-    curblk: usize, /// TODO change to Some
+    head: usize, /// Virtual address of head TODO atomic
+    len: usize, /// Total capacity TODO atomic
+    rem: usize, /// Remaining capacity TODO atomic
+    nobj: usize, /// Objects (live or not) appended
+    curblk: usize,
+    front: *mut SegmentHeader,
     blocks: BlockRefPool,
 }
 
@@ -192,15 +213,20 @@ impl Segment {
     // TODO make blocks a ref
     pub fn new(id: usize, blocks: BlockRefPool) -> Self {
         let mut len: usize = 0;
+        assert!(blocks.len() > 0);
         for b in blocks.iter() {
             len += b.len;
         }
         let blk = 0;
         let start: usize = blocks[blk].addr;
+        let header = SegmentHeader::new(0);
+        unsafe { ptr::write(start as *mut SegmentHeader, header); }
         Segment {
-            id: id, closed: false, head: start,
-            len: len, rem: len, defunct: 0,
-            curblk: blk, blocks: blocks,
+            id: id, closed: false, head: start + SegmentHeader::len(),
+            len: len, rem: len - SegmentHeader::len(),
+            nobj: 0, curblk: blk,
+            front: blocks[blk].addr as *mut SegmentHeader,
+            blocks: blocks,
         }
     }
 
@@ -208,8 +234,10 @@ impl Segment {
     pub fn empty(id: usize) -> Self {
         Segment {
             id: id, closed: true, head: 0,
-            len: 0, rem: 0, defunct: 0,
-            curblk: 0, blocks: vec!(),
+            len: 0, rem: 0, nobj: 0,
+            curblk: 0,
+            front: ptr::null_mut(),
+            blocks: vec!(),
         }
     }
 
@@ -252,6 +280,8 @@ impl Segment {
                 self.append_safe(header.as_ptr(), hlen);
                 self.append_safe(buf.key.as_ptr(), buf.key.len());
                 self.append_safe(val, buf.vlen as usize);
+                self.nobj += 1;
+                self.update_header(1);
                 Ok(va)
             } else { Err(ErrorCode::SegmentFull) }
         } else { Err(ErrorCode::SegmentClosed) }
@@ -259,6 +289,21 @@ impl Segment {
 
     pub fn close(&mut self) {
         self.closed = true;
+    }
+
+    pub fn nobjects(&self) -> usize {
+        self.nobj
+    }
+
+    /// Increment values in header by specified amount
+    /// TODO can i directly update the value? like in C:
+    ///         struct header *h = (struct header*)self.front;
+    ///         h->num_objects++;
+    fn update_header(&self, n: u32) {
+        let mut header: SegmentHeader;
+        unsafe { header = ptr::read(self.front); }
+        header.num_objects += n;
+        unsafe { ptr::write(self.front, header); }
     }
 
     /// Increment the head offset into the start of the next block.
@@ -276,55 +321,51 @@ impl Segment {
         }
     }
 
-    /// Scan segment for all live entries (deep scan).
-    /// TODO this must check the log index to verify liveness. We can
-    /// pass in a closure that determines this for us, or another
-    /// object. Will remove use of defunct header field.
-    pub fn num_live(&self) -> usize {
-        let mut count: usize = 0;
-        let mut header = EntryHeader::empty();
-        let mut offset: usize = 0; // offset into segment (logical)
-        let mut curblk: usize = 0; // Block that offset refers to
-        // Manually cross block boundaries searching for entries.
-        while offset < self.len {
-            assert!(curblk < self.blocks.len());
-            let base: usize = self.blocks[curblk].addr;
-            let addr: usize = base + (offset % BLOCK_SIZE);
-
-            let rem = BLOCK_SIZE - (offset % BLOCK_SIZE); // remaining in block
-
-            // If header is split across block boundaries
-            if rem < size_of::<EntryHeader>() {
-                // Can't be last block if header is partial
-                assert!(curblk != self.blocks.len()-1);
-                unsafe {
-                    let mut from = addr;
-                    let mut to: usize = transmute(&header);
-                    copy(from as *const u8, to as *mut u8, rem);
-                    from = self.blocks[curblk+1].addr; // start at next block
-                    to += rem;
-                    copy(from as *const u8, to as *mut u8,
-                         size_of::<EntryHeader>() - rem);
-                }
-            }
-            // Header is fully contained in the block
-            else {
-                unsafe { header.read(addr); }
-            }
-
-            // Count it or stop scanning
-            match header.status() {
-                EntryHeaderStatus::Live => count += 1,
-                EntryHeaderStatus::Defunct => {},
-                EntryHeaderStatus::Invalid => break,
-            }
-
-            // Determine next location to jump to
-            offset += header.len();
-            curblk = offset / BLOCK_SIZE;
-        }
-        count
-    }
+    // TODO should have test code that scrapes the segment to find
+    // actual entries
+//    /// Count entries written to segment (ignoring index). mainly for
+//    /// testing.
+//    #[cfg(test)]
+//    pub fn scan_entries(&self) -> usize {
+//        let mut count: usize = 0;
+//        let mut header = EntryHeader::empty();
+//        let mut offset: usize = 0; // offset into segment (logical)
+//        let mut curblk: usize = 0; // Block that offset refers to
+//        // Manually cross block boundaries searching for entries.
+//        while offset < self.len {
+//            assert!(curblk < self.blocks.len());
+//            let base: usize = self.blocks[curblk].addr;
+//            let addr: usize = base + (offset % BLOCK_SIZE);
+//
+//            let rem = BLOCK_SIZE - (offset % BLOCK_SIZE); // remaining in block
+//
+//            // If header is split across block boundaries
+//            if rem < size_of::<EntryHeader>() {
+//                // Can't be last block if header is partial
+//                assert!(curblk != self.blocks.len()-1);
+//                unsafe {
+//                    let mut from = addr;
+//                    let mut to: usize = transmute(&header);
+//                    copy(from as *const u8, to as *mut u8, rem);
+//                    from = self.blocks[curblk+1].addr; // start at next block
+//                    to += rem;
+//                    copy(from as *const u8, to as *mut u8,
+//                         size_of::<EntryHeader>() - rem);
+//                }
+//            }
+//            // Header is fully contained in the block
+//            else {
+//                unsafe { header.read(addr); }
+//            }
+//
+//            count += 1;
+//
+//            // Determine next location to jump to
+//            offset += header.len();
+//            curblk = offset / BLOCK_SIZE;
+//        }
+//        count
+//    }
 
     pub fn can_hold(&self, buf: &ObjDesc) -> bool {
         self.rem >= buf.len_with_header()
@@ -516,6 +557,7 @@ pub struct SegmentManager {
 }
 
 impl SegmentManager {
+    // TODO write an iterator; update unit test below
 
     pub fn new(id: usize, segsz: usize, len: usize) -> Self {
         let b = BlockAllocator::new(BLOCK_SIZE, len);
@@ -616,15 +658,14 @@ impl SegmentManager {
         true
     }
 
-    /// Returns #live objects
     #[cfg(test)]
-    pub fn test_count_live_objects(&self) -> usize {
+    pub fn test_scan_objects(&self) -> usize {
         let mut count: usize = 0;
         for opt in &self.segments {
             match *opt {
                 None => {},
                 Some(ref seg) => {
-                    count += seg.borrow().num_live();
+                    count += seg.borrow().nobjects();
                 },
             }
         }
@@ -735,27 +776,18 @@ mod tests {
         let key: &'static str = "onlyone";
         let val: &'static str = "valuevaluevalue";
         let obj = ObjDesc::new(key, Some(val.as_ptr()), val.len() as u32);
-        let mut old_va: usize = 0; // address of prior object
         // fill up the log
         let mut count: usize = 0;
         loop {
             match log.append(&obj) {
-                Ok(va) => {
-                    count += 1;
-                    // we must manually nix the old object (the Nibble
-                    // class would otherwise handle this for us)
-                    if old_va > 0 {
-                        unsafe { EntryHeader::invalidate(old_va); }
-                    }
-                    old_va = va;
-                },
+                Ok(va) => count += 1,
                 Err(code) => match code {
                     ErrorCode::OutOfMemory => break,
                     _ => panic!("filling log returned {:?}", code),
                 },
             }
         }
-        assert_eq!(manager.borrow().test_count_live_objects(), 1);
+        assert_eq!(manager.borrow().test_scan_objects(), count);
     }
 
     // TODO entry reference types
