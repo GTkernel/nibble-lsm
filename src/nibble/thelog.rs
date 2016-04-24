@@ -37,6 +37,11 @@ pub struct EntryHeader {
 const ENTRY_HEADER_SIG_LIVE:    u16 = 0x4FDA;
 const ENTRY_HEADER_SIG_DEFUNCT: u16 = 0x37B4;
 
+// TODO put a segment summary at the front, holding the count of items?
+// that way, we know when to stop searching the segment... and we don't need this entry header
+// status thing
+
+// TODO get rid of this
 #[derive(Debug)]
 pub enum EntryHeaderStatus {
     Live, // Created and index points to it
@@ -76,6 +81,7 @@ impl EntryHeader {
     }
 
     /// Overwrite ourself with an entry somewhere in memory.
+    /// TODO use std::ptr::read?
     pub unsafe fn read(&mut self, va: usize) {
         assert!(va > 0);
         let len = size_of::<EntryHeader>();
@@ -85,6 +91,7 @@ impl EntryHeader {
     }
 
     /// Store ourself to memory.
+    /// TODO use std::ptr::write?
     pub unsafe fn write(&self, va: usize) {
         assert!(va > 0);
         let len = size_of::<EntryHeader>();
@@ -94,6 +101,9 @@ impl EntryHeader {
     }
 
     /// Mark an EntryHeader invalid in memory.
+    /// FIXME this should lock the containing segment before updating
+    /// the state, as a compaction thread might be working on it. Or
+    /// we lock the object (e.g. with an object lock table).
     pub unsafe fn invalidate(va: usize) {
         assert!(va > 0);
         let mut header = EntryHeader::empty();
@@ -142,14 +152,18 @@ impl EntryHeader {
 // The log
 // -------------------------------------------------------------------
 
-// TODO i definitely need a concurrent atomic append/pop list..
-
 pub type LogHeadRef = Arc<RefCell<LogHead>>;
 
 pub struct LogHead {
     segment: Option<SegmentRef>,
     manager: SegmentManagerRef,
 }
+
+// TODO when head is rolled, don't want to contend with other threads
+// when handing it off to the compactor. we could keep a 'closed
+// segment pool' with each log head. then periodically merge them into
+// the compactor. this pool could be a concurrent queue with atomic
+// push/pop. for now we just shove it into the compactor directly.
 
 impl LogHead {
 
@@ -195,6 +209,9 @@ impl LogHead {
             },
             Some(segref) => {
                 segref.borrow_mut().close();
+                // TODO this line might change to just move the
+                // segment to a small closed segment pool
+                //self.manager.borrow_mut().newly_closed(&segref);
                 // TODO add segment to 'closed' list
                 self.segment = self.manager.borrow_mut().alloc();
                 match self.segment {
@@ -235,6 +252,8 @@ impl Log {
     pub fn invalidate_entry(&mut self, va: usize) -> Status {
         assert!(va > 0);
         // XXX lock the segment? lock something else?
+        // FIXME acquire read/writer lock
+        // FIXME stale the segment, m
         unsafe { EntryHeader::invalidate(va); }
         Ok(1)
     }
@@ -362,4 +381,8 @@ mod tests {
         assert_eq!(header.keylen, 47 as u16);
         assert_eq!(header.datalen, 1025 as u32);
     }
+
+
+    // TODO fill log 50%, delete random items, then manually force
+    // cleaning to test it
 }

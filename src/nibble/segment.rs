@@ -1,6 +1,9 @@
+// TODO get rid of the use of defunct in Segment
+// and entryheader::invalidate
 use common::*;
 use thelog::*;
 use memory::*;
+use compaction::*;
 
 use std::cell::RefCell;
 use std::mem::size_of;
@@ -10,13 +13,15 @@ use std::ptr::copy_nonoverlapping;
 use std::sync::Arc;
 use std::mem::transmute;
 use std::cmp;
+use std::cmp::Ordering;
 
 pub const BLOCK_SIZE: usize = 1 << 16;
 pub const SEGMENT_SIZE: usize = 1 << 20;
 
-// -------------------------------------------------------------------
-// Block strutures
-// -------------------------------------------------------------------
+//==----------------------------------------------------==//
+//      Block structures
+//==----------------------------------------------------==//
+
 
 pub struct Block {
     addr: usize,
@@ -34,6 +39,10 @@ impl Block {
 
 pub type BlockRef = Arc<Block>;
 pub type BlockRefPool = Vec<BlockRef>;
+
+//==----------------------------------------------------==//
+//      Block allocator
+//==----------------------------------------------------==//
 
 pub struct BlockAllocator {
     block_size: usize,
@@ -75,18 +84,27 @@ impl BlockAllocator {
     pub fn freelen(&self) -> usize { self.freepool.len() }
 }
 
-// -------------------------------------------------------------------
-// Segment structures
-// -------------------------------------------------------------------
+//==----------------------------------------------------==//
+//      Segment utilities
+//==----------------------------------------------------==//
 
 pub type SegmentRef = Arc<RefCell<Segment>>;
 pub type SegmentManagerRef = Arc<RefCell<SegmentManager>>;
 
-/// Make a new SegmentRef
+/// Instantiate new Segment as a SegmentRef
 macro_rules! seg_ref {
     ( $id:expr, $blocks:expr ) => {
         Arc::new( RefCell::new(
                 Segment::new($id, $blocks)
+                ))
+    }
+}
+
+/// Instantiate new Segment with zero blocks
+macro_rules! seg_ref_empty {
+    ( $id:expr ) => {
+        Arc::new( RefCell::new(
+                Segment::empty($id)
                 ))
     }
 }
@@ -100,6 +118,10 @@ macro_rules! segmgr_ref {
                 ))
     }
 }
+
+//==----------------------------------------------------==//
+//      Object descriptor
+//==----------------------------------------------------==//
 
 /// Use this to describe an object. User is responsible for
 /// transmuting their objects, and for ensuring the lifetime of the
@@ -141,21 +163,33 @@ impl<'a> ObjDesc<'a> {
     pub fn valuelen(&self) -> u32 { self.vlen }
 }
 
+//==----------------------------------------------------==//
+//      Segment
+//==----------------------------------------------------==//
+
+// TODO need metrics for computing compaction weights
+// TODO head,len,rem as atomics
 pub struct Segment {
     id: usize,
     closed: bool,
-    head: usize, /// Virtual address of head TODO atomic
-    len: usize, /// Total capacity TODO atomic
-    rem: usize, /// Remaining capacity TODO atomic
-    curblk: usize,
+    head: usize, /// Virtual address of head TODO change to Some
+    len: usize, /// Total storage
+    rem: usize, /// Remaining storage (includes defunct entries)
+    defunct: usize, /// Storage taken by defunct entries
+    curblk: usize, /// TODO change to Some
     blocks: BlockRefPool,
 }
+
+// TODO create a wrapper type that implements sorting of a segment
+// based on specific metrics (if i want to put Segments into multiple
+// binary heaps)
 
 /// A logically contiguous chunk of memory. Inside, divided into
 /// virtually contiguous blocks. For now, objects cannot be broken
 /// across a block boundary.
 impl Segment {
 
+    // TODO make blocks a ref
     pub fn new(id: usize, blocks: BlockRefPool) -> Self {
         let mut len: usize = 0;
         for b in blocks.iter() {
@@ -165,13 +199,41 @@ impl Segment {
         let start: usize = blocks[blk].addr;
         Segment {
             id: id, closed: false, head: start,
-            len: len, rem: len, curblk: blk, blocks: blocks,
+            len: len, rem: len, defunct: 0,
+            curblk: blk, blocks: blocks,
         }
+    }
+
+    /// Allocate an empty Segment. Used by the compaction code.
+    pub fn empty(id: usize) -> Self {
+        Segment {
+            id: id, closed: true, head: 0,
+            len: 0, rem: 0, defunct: 0,
+            curblk: 0, blocks: vec!(),
+        }
+    }
+
+    /// Add blocks to a segment to grow its size. Used by the
+    /// compaction code, after allocating an empty segment.
+    /// TODO need unit test
+    pub fn extend(&mut self, blocks: &mut BlockRefPool) {
+        if self.head == 0 {
+            self.head = blocks[0].addr;
+        }
+        let mut len = 0 as usize;
+        for b in blocks.iter() {
+            len += b.len;
+        }
+        self.len += len;
+        self.rem += len;
+        self.blocks.append(blocks);
     }
 
     /// Append an object with header to the log. Let append_safe
     /// handle the actual work.  If successful, returns virtual
     /// address in Ok().
+    /// TODO Segment shouldn't know about log-specific organization,
+    /// e.g. entry headers
     pub fn append(&mut self, buf: &ObjDesc) -> Status {
         if !self.closed {
             if self.can_hold(buf) {
@@ -215,6 +277,9 @@ impl Segment {
     }
 
     /// Scan segment for all live entries (deep scan).
+    /// TODO this must check the log index to verify liveness. We can
+    /// pass in a closure that determines this for us, or another
+    /// object. Will remove use of defunct header field.
     pub fn num_live(&self) -> usize {
         let mut count: usize = 0;
         let mut header = EntryHeader::empty();
@@ -328,6 +393,117 @@ impl Drop for Segment {
     }
 }
 
+impl<'a> IntoIterator for &'a Segment {
+    type Item = EntryReference;
+    type IntoIter = SegmentIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        SegmentIter::new(self)
+    }
+}
+
+//==----------------------------------------------------==//
+//      Segment iterator
+//==----------------------------------------------------==//
+
+/// Iterator for a Segment.  We expect a segment to be iterated over
+/// by one thread at a time.  The compactor will check liveness of
+/// each entry, not us.
+pub struct SegmentIter {
+    blocks: BlockRefPool,
+    curblk: usize,
+    curaddr: Option<usize>,
+}
+
+impl SegmentIter {
+
+    pub fn new(seg: &Segment) -> Self {
+        SegmentIter {
+            blocks: seg.blocks.clone(), // refs to blocks
+            curblk: 0, curaddr: None,
+        }
+    }
+}
+
+impl Iterator for SegmentIter {
+    type Item = EntryReference;
+
+    fn next(&mut self) -> Option<EntryReference> {
+        match self.curaddr {
+            None => { // at start
+                // read entry header
+                let iblk = self.curblk;
+                let blk = &self.blocks[iblk];
+                let cur = blk.addr;
+                self.curaddr = Some(cur);
+                let mut header = EntryHeader::empty();
+                unsafe { header.read(blk.addr); }
+                let len = (header.getdatalen() +
+                    header.getkeylen() as u32) as usize;
+                // determine which blocks belong
+                let mut nblks = 1;
+                let in_blk: usize = BLOCK_SIZE -
+                    (cur - blk.addr);
+                if len > in_blk {
+                    nblks += (len - in_blk) % BLOCK_SIZE;
+                    nblks += 1; // round up
+                }
+                Some( EntryReference {
+                    // TODO is this clone expensive?
+                    blocks: self.blocks.clone().into_iter()
+                        .skip(iblk).take(nblks).collect(),
+                    offset: 0,
+                    len: len,
+                } )
+            },
+            // XXX we need a segment header to know how many objects
+            // there are in it... shouldn't rely on the entry header
+            _ => {
+                Some( EntryReference {
+                    blocks: vec!(),
+                    offset:  0, len: 0,
+                } )
+            },
+            // TODO Somewhere we return None when finished...
+        } // match {}
+    } // next()
+}
+
+//==----------------------------------------------------==//
+//      Entry reference
+//==----------------------------------------------------==//
+
+/// Reference to entry in the log. Used by Segment iterators since i)
+/// items in memory don't have an associated language type (this
+/// provides that function) and ii) we want to avoid copying objects
+/// each time a reference is passed around; we lazily copy the object
+/// from the log only when a client asks for it
+pub struct EntryReference {
+    blocks: BlockRefPool,
+    offset: usize, // into first block
+    len: usize,
+}
+
+impl EntryReference {
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn num_blocks(&self) -> usize {
+        self.blocks.len()
+    }
+
+    pub fn copy_out(&self, to: *mut u8) {
+        unimplemented!();
+    }
+
+}
+
+//==----------------------------------------------------==//
+//      Segment manager
+//==----------------------------------------------------==//
+
 pub struct SegmentManager {
     id: usize,
     size: usize, /// Total memory
@@ -336,6 +512,7 @@ pub struct SegmentManager {
     allocator: BlockAllocator,
     segments: Vec<Option<SegmentRef>>,
     free_slots: Vec<u32>,
+    //compactor: CompactorRef,
 }
 
 impl SegmentManager {
@@ -358,6 +535,7 @@ impl SegmentManager {
             allocator: b,
             segments: v,
             free_slots: s,
+            //compactor: compref!(),
         }
     }
 
@@ -384,7 +562,30 @@ impl SegmentManager {
             };
             self.next_seg_id += 1;
             self.segments[slot] = Some(seg_ref!(self.next_seg_id,
-                                                  blocks.unwrap()));
+                                                blocks.unwrap()));
+            self.segments[slot].clone()
+        }
+    }
+
+    /// Grab a Segment without any blocks to use for compaction.
+    /// Blocks are lazily allocated.
+    /// TODO clean this up so it isn't copy/paste with alloc()
+    pub fn allocEmpty(&mut self) -> Option<SegmentRef> {
+        // TODO lock, unlock
+        if self.free_slots.is_empty() {
+            None
+        } else {
+            let slot: usize;
+            match self.free_slots.pop() {
+                None => panic!("No free slots"),
+                Some(v) => slot = v as usize,
+            };
+            match self.segments[slot] {
+                None => {},
+                _ => panic!("Alloc from non-empty slot"),
+            };
+            self.next_seg_id += 1;
+            self.segments[slot] = Some(seg_ref_empty!(self.next_seg_id));
             self.segments[slot].clone()
         }
     }
@@ -392,6 +593,13 @@ impl SegmentManager {
     pub fn free(&self, segment: SegmentRef) {
         unimplemented!();
     }
+
+    //    pub fn newly_closed(&mut self, seg: &SegmentRef) {
+    //        match self.compactor.lock() {
+    //            Ok(ref mut 
+    //        }
+    //        self.compactor.add(seg);
+    //    }
 
     //
     // --- Internal methods used for testing only ---
@@ -423,6 +631,10 @@ impl SegmentManager {
         count
     }
 }
+
+//==----------------------------------------------------==//
+//      Unit tests
+//==----------------------------------------------------==//
 
 #[cfg(test)]
 mod tests {
@@ -492,8 +704,10 @@ mod tests {
         // TODO verify blocks?
     }
 
+    // TODO free blocks of segment (e.g. after compaction)
+
     #[test]
-    fn segment_manager() {
+    fn segment_manager_alloc_all() {
         let memlen = 1<<23;
         let numseg = memlen / SEGMENT_SIZE;
         let mut mgr = SegmentManager::new(0, SEGMENT_SIZE, memlen);
@@ -505,6 +719,8 @@ mod tests {
         }
         assert_eq!(mgr.test_all_segrefs_allocated(), true);
     }
+
+    // TODO return segments back to manager
 
     /// Insert one unique object repeatedly;
     /// there should be only one live object in the log.
@@ -540,5 +756,42 @@ mod tests {
             }
         }
         assert_eq!(manager.borrow().test_count_live_objects(), 1);
+    }
+
+    // TODO entry reference types
+
+    #[test]
+    fn iterate_segment() {
+        // TODO make a macro out of these lines
+        let memlen = 1<<23;
+        let numseg = memlen / SEGMENT_SIZE;
+        let mut mgr = SegmentManager::new(0, SEGMENT_SIZE, memlen);
+
+        let mut segref = mgr.alloc();
+        let mut seg = rbm!(segref);
+
+        let keys = vec!("first_key", "second_key", "third_key");
+        let values = vec!("first_val", "second_val", "third_val");
+
+        // TODO how to advance two iterators simultaneously?
+        // maybe use crate itertools::ZipEq 
+        for i in 0..keys.len() {
+            let loc = Some(values[i].as_ptr());
+            let len = values[i].len() as u32;
+            let obj = ObjDesc::new(keys[i], loc, len);
+            match seg.append(&obj) {
+                Err(code) => panic!("appending returned {:?}", code),
+                _ => {},
+            }
+        }
+
+        let mut counter = 0;
+        for entry_ref in seg.into_iter() {
+            println!("len: {} blocks: {}",
+                     entry_ref.len(),
+                     entry_ref.num_blocks());
+            counter += 1;
+        }
+        assert_eq!(counter, keys.len());
     }
 }
