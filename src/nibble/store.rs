@@ -31,6 +31,7 @@ impl<'a> Nibble<'a> {
         }
     }
 
+    // TODO add some locking
     pub fn put_object(&mut self, obj: &ObjDesc<'a>) -> Status {
         let va: usize;
         // 1. add object to log
@@ -38,20 +39,8 @@ impl<'a> Nibble<'a> {
             Err(code) => return Err(code),
             Ok(v) => va = v,
         }
-        // 2. update reference to object, and if the object already
-        // exists, 3. invalidate old entry
-        match self.index.update(obj.getkey(), va) {
-            None => {},
-            Some(old) => {
-                match self.log.invalidate_entry(old) {
-                    Err(code) => {
-                        panic!("Error marking old entry at 0x{:x}: {:?}",
-                               old, code);
-                    },
-                    Ok(v) => {},
-                }
-            },
-        }
+        // 2. update reference to object
+        self.index.update(obj.getkey(), va);
         Ok(1)
     }
 
@@ -77,13 +66,9 @@ impl<'a> Nibble<'a> {
         unimplemented!();
     }
 
-    //
-    // --- Internal methods used for testing only ---
-    //
-
     #[cfg(test)]
-    pub fn test_count_live_objects(&self) -> usize {
-        self.manager.borrow().test_count_live_objects()
+    pub fn nlive(&self) -> usize {
+        self.index.len()
     }
 }
 
@@ -189,7 +174,7 @@ mod tests {
             }
         }
 
-        assert_eq!(nib.test_count_live_objects(), 1);
+        assert_eq!(nib.nlive(), 1);
     }
 
 }

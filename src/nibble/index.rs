@@ -36,6 +36,10 @@ impl<'a> Index<'a> {
     pub fn remove(&mut self, key: &'a str) -> Option<usize> {
         self.table.remove(key)
     }
+
+    pub fn len(&self) -> usize {
+        self.table.len()
+    }
 }
 
 
