@@ -41,26 +41,7 @@ impl EntryHeader {
 
     pub fn getdatalen(&self) -> u32 { self.datalen }
     pub fn getkeylen(&self) -> u32 { self.keylen }
-
-    /// Overwrite ourself with an entry somewhere in memory.
-    /// TODO use std::ptr::read?
-    pub unsafe fn read(&mut self, va: usize) {
-        assert!(va > 0);
-        let len = size_of::<EntryHeader>();
-        let src: *const u8 = transmute(va);
-        let dst: *mut u8 = transmute(self);
-        copy(src, dst, len);
-    }
-
-    /// Store ourself to memory.
-    /// TODO use std::ptr::write?
-    pub unsafe fn write(&self, va: usize) {
-        assert!(va > 0);
-        let len = size_of::<EntryHeader>();
-        let src: *const u8 = transmute(self);
-        let dst: *mut u8 = transmute(va);
-        copy(src, dst, len);
-    }
+    pub fn object_length(&self) -> u32 { self.datalen + self.keylen }
 
     /// Size of this (entire) entry in the log.
     pub fn len(&self) -> usize {
@@ -81,6 +62,12 @@ impl EntryHeader {
         (entry + size_of::<EntryHeader>() + self.keylen as usize)
             as *mut u8
     }
+
+    #[cfg(test)]
+    pub fn set_key_len(&mut self, l: u32) { self.keylen = l; }
+
+    #[cfg(test)]
+    pub fn set_data_len(&mut self, l: u32) { self.datalen = l; }
 }
 
 
@@ -123,10 +110,12 @@ impl LogHead {
             }
         }
         let mut seg = rbm!(self.segment);
+        let va: usize;
         match seg.append(buf) {
-            Ok(va) => Ok(va),
+            Ok(va_) => va = va_,
             Err(code) => panic!("has space but append failed"),
         }
+        Ok(va)
     }
 
     //
@@ -200,8 +189,7 @@ mod tests {
     use std::collections::HashMap;
     use std::mem::size_of;
     use std::mem::transmute;
-    use std::ptr::copy;
-    use std::ptr::copy_nonoverlapping;
+    use std::ptr;
     use std::rc::Rc;
     use std::sync::Arc;
 
@@ -234,81 +222,32 @@ mod tests {
 
     // FIXME rewrite these unit tests
 
-//    #[test]
-//    fn entry_header_readwrite_raw() {
-//        // get some raw memory
-//        let mem: Box<[u8;32]> = Box::new([0 as u8; 32]);
-//        let ptr = Box::into_raw(mem);
-//
-//        // put a header into it with known values
-//        let mut header = EntryHeader::empty();
-//        match header.status() {
-//            EntryHeaderStatus::Invalid => {}, // ok
-//            _ => panic!("header must be invalid"),
-//        }
-//        header.set_valid();
-//        match header.status() {
-//            EntryHeaderStatus::Live => {}, // ok
-//            _ => panic!("header must be live"),
-//        }
-//
-//        let len = size_of::<EntryHeader>();
-//        unsafe {
-//            let src: *const u8 = transmute(&header);
-//            let dst: *mut u8 = transmute(ptr);
-//            copy(src, dst, len);
-//        }
-//
-//        // reset our copy, and re-read from raw memory
-//        header = EntryHeader::empty();
-//        unsafe {
-//            let src: *const u8 = transmute(ptr);
-//            let dst: *mut u8 = transmute(&header);
-//            copy(src, dst, len);
-//        }
-//
-//        // verify what we did worked
-//        match header.status() {
-//            EntryHeaderStatus::Live => {}, // ok
-//            _ => panic!("header must be live"),
-//        }
-//
-//        // free the original memory again
-//        let mem = unsafe { Box::from_raw(ptr) };
-//    }
-//
-//    #[test]
-//    fn entry_header_readwrite() {
-//        // get some raw memory
-//        let mem: Box<[u8;32]> = Box::new([0 as u8; 32]);
-//        let ptr = Box::into_raw(mem);
-//
-//        // put a header into it with known values
-//        let mut header = EntryHeader::empty();
-//        header.set_valid();
-//        header.keylen = 47 as u32;
-//        header.datalen = 1025 as u32;
-//        unsafe { header.write(ptr as usize); }
-//
-//        // reset our copy and verify
-//        header = EntryHeader::empty();
-//        unsafe { header.read(ptr as usize); }
-//        match header.status() {
-//            EntryHeaderStatus::Live => {}, // ok
-//            _ => panic!("header should be live"),
-//        }
-//        assert_eq!(header.keylen, 47 as u32);
-//        assert_eq!(header.datalen, 1025 as u32);
-//
-//        // invalidate, reset, verify
-//        unsafe { EntryHeader::invalidate(ptr as usize); }
-//        header = EntryHeader::empty();
-//        unsafe { header.read(ptr as usize); }
-//        match header.status() {
-//            EntryHeaderStatus::Defunct => {}, // ok
-//            _ => panic!("header should be defunct"),
-//        }
-//        assert_eq!(header.keylen, 47 as u32);
-//        assert_eq!(header.datalen, 1025 as u32);
-//    }
+    #[test]
+    fn entry_header_readwrite() {
+        // get some raw memory
+        let mem: Box<[u8;32]> = Box::new([0 as u8; 32]);
+        let ptr = Box::into_raw(mem);
+
+        // put a header into it with known values
+        let mut header = EntryHeader::empty();
+        header.set_key_len(5);
+        header.set_data_len(7);
+        assert_eq!(header.getkeylen(), 5);
+        assert_eq!(header.getdatalen(), 7);
+
+        let len = size_of::<EntryHeader>();
+        unsafe {
+            ptr::write(ptr as *mut EntryHeader, header);
+        }
+
+        // reset our copy, and re-read from raw memory
+        unsafe {
+            header = ptr::read(ptr as *const EntryHeader);
+        }
+        assert_eq!(header.getkeylen(), 5);
+        assert_eq!(header.getdatalen(), 7);
+
+        // free the original memory again
+        let mem = unsafe { Box::from_raw(ptr) };
+    }
 }

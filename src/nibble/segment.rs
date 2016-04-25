@@ -192,12 +192,12 @@ impl SegmentHeader {
 pub struct Segment {
     id: usize,
     closed: bool,
-    head: usize, /// Virtual address of head TODO atomic
+    head: Option<usize>, /// Virtual address of head TODO atomic
     len: usize, /// Total capacity TODO atomic
     rem: usize, /// Remaining capacity TODO atomic
     nobj: usize, /// Objects (live or not) appended
-    curblk: usize,
-    front: *mut SegmentHeader,
+    curblk: Option<usize>,
+    front: Option<*mut SegmentHeader>,
     blocks: BlockRefPool,
 }
 
@@ -217,15 +217,17 @@ impl Segment {
         for b in blocks.iter() {
             len += b.len;
         }
+        assert!(len > 0);
         let blk = 0;
         let start: usize = blocks[blk].addr;
+        assert!(start != 0);
         let header = SegmentHeader::new(0);
         unsafe { ptr::write(start as *mut SegmentHeader, header); }
         Segment {
-            id: id, closed: false, head: start + SegmentHeader::len(),
+            id: id, closed: false, head: Some(start + SegmentHeader::len()),
             len: len, rem: len - SegmentHeader::len(),
-            nobj: 0, curblk: blk,
-            front: blocks[blk].addr as *mut SegmentHeader,
+            nobj: 0, curblk: Some(blk),
+            front: Some(blocks[blk].addr as *mut SegmentHeader),
             blocks: blocks,
         }
     }
@@ -233,10 +235,10 @@ impl Segment {
     /// Allocate an empty Segment. Used by the compaction code.
     pub fn empty(id: usize) -> Self {
         Segment {
-            id: id, closed: true, head: 0,
+            id: id, closed: true, head: None,
             len: 0, rem: 0, nobj: 0,
-            curblk: 0,
-            front: ptr::null_mut(),
+            curblk: None,
+            front: None,
             blocks: vec!(),
         }
     }
@@ -245,8 +247,15 @@ impl Segment {
     /// compaction code, after allocating an empty segment.
     /// TODO need unit test
     pub fn extend(&mut self, blocks: &mut BlockRefPool) {
-        if self.head == 0 {
-            self.head = blocks[0].addr;
+        assert!(self.blocks.len() > 0);
+        match self.head {
+            // segment was empty
+            None => {
+                self.curblk = Some(0);
+                self.head = Some(blocks[0].addr);
+                self.front = Some(blocks[0].addr as *mut SegmentHeader);
+            },
+            _ => {},
         }
         let mut len = 0 as usize;
         for b in blocks.iter() {
@@ -263,6 +272,7 @@ impl Segment {
     /// TODO Segment shouldn't know about log-specific organization,
     /// e.g. entry headers
     pub fn append(&mut self, buf: &ObjDesc) -> Status {
+        assert_eq!(self.head.is_some(), true);
         if !self.closed {
             if self.can_hold(buf) {
                 let val: *const u8;
@@ -300,20 +310,26 @@ impl Segment {
     ///         struct header *h = (struct header*)self.front;
     ///         h->num_objects++;
     fn update_header(&self, n: u32) {
+        assert_eq!(self.front.is_some(), true);
         let mut header: SegmentHeader;
-        unsafe { header = ptr::read(self.front); }
+        unsafe { header = ptr::read(self.front.unwrap()); }
         header.num_objects += n;
-        unsafe { ptr::write(self.front, header); }
+        unsafe { ptr::write(self.front.unwrap(), header); }
     }
 
     /// Increment the head offset into the start of the next block.
     /// Return false if we cannot roll because we're already at the
     /// final block.
     fn next_block(&mut self) -> bool {
+        assert_eq!(self.head.is_some(), true);
+        assert_eq!(self.curblk.is_some(), true);
+        let mut curblk = self.curblk.unwrap();
         let numblks: usize = self.blocks.len();
-        if self.curblk < (numblks - 1) {
-            self.curblk += 1;
-            self.head = self.blocks[self.curblk].addr;
+        assert!(numblks > 0);
+        if curblk < (numblks - 1) {
+            curblk += 1;
+            self.curblk = Some(curblk);
+            self.head = Some(self.blocks[curblk].addr);
             true
         } else {
             warn!("block roll asked on last block");
@@ -376,7 +392,10 @@ impl Segment {
     //
 
     fn headref(&mut self) -> *mut u8 {
-        self.head as *mut u8
+        match self.head {
+            Some(va) => va as *mut u8,
+            None => panic!("taking head ref but head not set"),
+        }
     }
 
     /// Append some buffer safely across block boundaries (if needed).
@@ -384,13 +403,14 @@ impl Segment {
     /// capacity.
     fn append_safe(&mut self, from: *const u8, len: usize) {
         assert!(len <= self.rem);
+        assert_eq!(self.head.is_some(), true);
         let mut remblk = self.rem_in_block();
         // 1. If buffer fits in remainder of block, just copy it
         if len <= remblk {
             unsafe {
                 copy_nonoverlapping(from,self.headref(),len);
             }
-            self.head += len;
+            incr!(self.head, len);
             if len == remblk {
                 self.next_block();
             }
@@ -407,7 +427,7 @@ impl Segment {
                 unsafe {
                     copy_nonoverlapping(loc,self.headref(), amt);
                 }
-                self.head += amt;
+                incr!(self.head, amt);
                 rem -= amt;
                 loc = (from as usize + amt) as *const u8;
                 // If we exceeded the block, get the next one
@@ -420,8 +440,26 @@ impl Segment {
     }
 
     fn rem_in_block(&self) -> usize {
-        let blk = &self.blocks[self.curblk];
-        blk.len - (self.head - blk.addr)
+        assert_eq!(self.head.is_some(), true);
+        assert!(self.blocks.len() > 0);
+        let curblk = self.curblk.unwrap();
+        let blk = &self.blocks[curblk];
+        blk.len - (self.head.unwrap() - blk.addr)
+    }
+
+    //
+    // --- Test methods ---
+    //
+
+    #[cfg(test)]
+    pub fn reset(&mut self) {
+        let blk = 0;
+        let start = self.blocks[blk].addr + SegmentHeader::len();
+        self.closed = false;
+        self.head = None;
+        self.rem = self.len - SegmentHeader::len();
+        self.curblk = Some(blk);
+        self.nobj = 0;
     }
 }
 
@@ -452,16 +490,24 @@ impl<'a> IntoIterator for &'a Segment {
 /// each entry, not us.
 pub struct SegmentIter {
     blocks: BlockRefPool,
-    curblk: usize,
-    curaddr: Option<usize>,
+    n_obj: usize,
+    blk_offset: usize,
+    cur_blk: usize,
+    seg_offset: usize,
+    next_obj: usize,
 }
 
 impl SegmentIter {
 
     pub fn new(seg: &Segment) -> Self {
+        let offset = SegmentHeader::len();
         SegmentIter {
             blocks: seg.blocks.clone(), // refs to blocks
-            curblk: 0, curaddr: None,
+            n_obj: seg.nobj,
+            blk_offset: offset,
+            cur_blk: 0,
+            seg_offset: offset,
+            next_obj: 0,
         }
     }
 }
@@ -470,44 +516,50 @@ impl Iterator for SegmentIter {
     type Item = EntryReference;
 
     fn next(&mut self) -> Option<EntryReference> {
-        match self.curaddr {
-            None => { // at start
-                // read entry header
-                let iblk = self.curblk;
-                let blk = &self.blocks[iblk];
-                let cur = blk.addr;
-                self.curaddr = Some(cur);
-                let mut header = EntryHeader::empty();
-                unsafe { header.read(blk.addr); }
-                let len = (header.getdatalen() +
-                    header.getkeylen() as u32) as usize;
-                // determine which blocks belong
-                let mut nblks = 1;
-                let in_blk: usize = BLOCK_SIZE -
-                    (cur - blk.addr);
-                if len > in_blk {
-                    nblks += (len - in_blk) % BLOCK_SIZE;
-                    nblks += 1; // round up
-                }
-                Some( EntryReference {
-                    // TODO is this clone expensive?
-                    blocks: self.blocks.clone().into_iter()
-                        .skip(iblk).take(nblks).collect(),
-                    offset: 0,
-                    len: len,
-                } )
-            },
-            // XXX we need a segment header to know how many objects
-            // there are in it... shouldn't rely on the entry header
-            _ => {
-                Some( EntryReference {
-                    blocks: vec!(),
-                    offset:  0, len: 0,
-                } )
-            },
-            // TODO Somewhere we return None when finished...
-        } // match {}
-    } // next()
+        if self.next_obj >= self.n_obj {
+            return None;
+        }
+
+        // don't advance if we're at first entry
+        if self.next_obj > 0 {
+            // read length of current entry
+            let addr = self.blocks[self.cur_blk].addr + self.blk_offset;
+            let mut entry: EntryHeader;
+            unsafe {
+                entry = ptr::read(addr as *const EntryHeader);
+            }
+
+            // advance to next
+            self.seg_offset += entry.len();
+            self.cur_blk = self.seg_offset / BLOCK_SIZE;
+            self.blk_offset = self.seg_offset % BLOCK_SIZE;
+        }
+
+        // read entry info
+        let addr = self.blocks[self.cur_blk].addr + self.blk_offset;
+        let mut entry: EntryHeader;
+        unsafe {
+            entry = ptr::read(addr as *const EntryHeader);
+        }
+        let obj_len = entry.object_length() as usize;
+
+        // determine which blocks belong
+        let mut nblks = 1;
+        let blk_tail = BLOCK_SIZE - self.seg_offset;
+        if obj_len > blk_tail {
+            nblks += (obj_len - blk_tail) / BLOCK_SIZE + 1;
+        }
+
+        self.next_obj += 1;
+
+        Some( EntryReference {
+            // TODO is this clone expensive?
+            blocks: self.blocks.clone().into_iter()
+                .skip(self.cur_blk).take(nblks).collect(),
+            offset: self.blk_offset,
+            len: obj_len,
+        } )
+    }
 }
 
 //==----------------------------------------------------==//
@@ -740,7 +792,7 @@ mod tests {
         let id = 42;
         let seg = Segment::new(id, set);
         assert_eq!(seg.closed, false);
-        assert!(seg.head != 0);
+        assert_eq!(seg.head.is_some(), true);
         assert_eq!(seg.len, bytes);
         // TODO verify blocks?
     }
@@ -792,7 +844,6 @@ mod tests {
 
     // TODO entry reference types
 
-    #[test]
     fn iterate_segment() {
         // TODO make a macro out of these lines
         let memlen = 1<<23;
@@ -802,8 +853,8 @@ mod tests {
         let mut segref = mgr.alloc();
         let mut seg = rbm!(segref);
 
-        let keys = vec!("first_key", "second_key", "third_key");
-        let values = vec!("first_val", "second_val", "third_val");
+        let keys = vec!("aga234sdf", "sdfn34 2309dsfa;;", "LDKJF@()#*%FS3p853D");
+        let values = vec!("23487sdfl0k", "laksdfkasdjflkasjdf", "0");
 
         // TODO how to advance two iterators simultaneously?
         // maybe use crate itertools::ZipEq 
@@ -817,6 +868,8 @@ mod tests {
             }
         }
 
+        // TODO exercise the entry reference
+
         let mut counter = 0;
         for entry_ref in seg.into_iter() {
             println!("len: {} blocks: {}",
@@ -825,5 +878,26 @@ mod tests {
             counter += 1;
         }
         assert_eq!(counter, keys.len());
+
+        // now with enough keys to fill half a segment
+        seg.reset();
+        // large prime values so things don't fit nicely
+        let key = String::with_capacity(1489);
+        let value: [u8; 2477] = [7; 2477];
+        let nobj = (SEGMENT_SIZE>>1) / (key.len() + value.len());
+        for i in 0..nobj {
+            let loc = Some(key.as_ptr());
+            let len = value.len() as u32;
+            let obj = ObjDesc::new(key.as_str(), loc, len);
+            match seg.append(&obj) {
+                Err(code) => panic!("appending returned {:?}", code),
+                _ => {},
+            }
+        }
+    }
+
+    #[test]
+    fn iterate_segment_large_objects() {
+        // TODO
     }
 }

@@ -5,8 +5,6 @@ use segment::*;
 use index::*;
 
 use std::ptr;
-use std::ptr::copy;
-use std::ptr::copy_nonoverlapping;
 use std::sync::Arc;
 use std::cell::RefCell;
 
@@ -52,12 +50,14 @@ impl<'a> Nibble<'a> {
             None => return (Err(ErrorCode::KeyNotExist),None),
             Some(v) => va = v,
         }
-        let mut header = EntryHeader::empty();
-        unsafe { header.read(va); }
+        let mut header: EntryHeader;
+        unsafe {
+            header = ptr::read(va as *const EntryHeader);
+        }
         let buf = Buffer::new(header.getdatalen() as usize);
         unsafe {
             let src = header.data_address(va);
-            copy(src, buf.getaddr() as *mut u8, buf.getlen());
+            ptr::copy(src, buf.getaddr() as *mut u8, buf.getlen());
         }
         (Ok(1),Some(buf))
     }
@@ -81,8 +81,6 @@ mod tests {
     use std::collections::HashMap;
     use std::mem::size_of;
     use std::mem::transmute;
-    use std::ptr::copy;
-    use std::ptr::copy_nonoverlapping;
     use std::rc::Rc;
     use std::sync::Arc;
 
@@ -108,7 +106,7 @@ mod tests {
         // verify what we wrote is correct FIXME reduce copy/paste
         {
             let status: Status;
-            let ret = nib.get_object(key);
+            let ret = nib.get_object(key); // XXX
             let string: String;
             match ret {
                 (Err(code),_) => panic!("key should exist: {:?}", code),
