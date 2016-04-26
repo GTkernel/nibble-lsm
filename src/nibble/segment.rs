@@ -607,8 +607,6 @@ impl EntryReference {
         let amt = cmp::min(BLOCK_SIZE - boffset, remaining);
         let src = (self.blocks[bidx].addr + boffset) as *const u8;
         let to = (out as usize + poffset) as *mut u8;
-        println!("boffset {} bidx {} amt {} src {:?} to {:?}",
-                 boffset, bidx, amt, src, to);
         copy_nonoverlapping(src, to, amt);
         remaining -= amt;
         poffset += amt;
