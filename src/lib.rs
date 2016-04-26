@@ -12,8 +12,9 @@
 #![allow(unused_variables)]
 
 #[macro_use]
-extern crate libc;
 extern crate log;
+
+extern crate libc;
 extern crate rand;
 extern crate test;
 extern crate time;
