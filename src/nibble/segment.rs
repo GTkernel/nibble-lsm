@@ -597,13 +597,6 @@ impl EntryReference {
         // Logical offset into new buffer
         let mut poffset: usize = 0;
 
-        println!("---- copy_out ----");
-        println!("self.offset {}", self.offset);
-        println!("self. len {} keylen {} datalen {}",
-                 self.len, self.keylen, self.datalen);
-        println!("copying data at offset {} remaining {}",
-                 offset, remaining);
-
         // Copy head in first block.
         // ----+-------+----
         //     |   dddd|ddd...
