@@ -456,7 +456,7 @@ impl Segment {
         let blk = 0;
         let start = self.blocks[blk].addr + SegmentHeader::len();
         self.closed = false;
-        self.head = None;
+        self.head = Some(self.blocks[blk].addr);
         self.rem = self.len - SegmentHeader::len();
         self.curblk = Some(blk);
         self.nobj = 0;
