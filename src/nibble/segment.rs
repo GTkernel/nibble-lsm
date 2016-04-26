@@ -583,18 +583,60 @@ pub struct EntryReference {
 
 impl EntryReference {
 
-    pub fn len(&self) -> usize {
-        self.len
-    }
+    /// Copies the data to a separate buffer.  Caller provides buffer
+    /// to copy into and ensures buffer is sufficiently large.  Blocks
+    /// are not guaranteed virtually contiguous, so we must copy the
+    /// object out pieces at a time.
+    /// TODO clean up code
+    pub unsafe fn copy_out(&self, out: *mut u8) {
+        let mut remaining = self.datalen as usize;
 
-    pub fn num_blocks(&self) -> usize {
-        self.blocks.len()
-    }
+        // Logical offset into block space; jump over header+key
+        let mut offset = self.offset + (self.len - remaining);
 
-    pub fn copy_out(&self, to: *mut u8) {
-        unimplemented!();
-    }
+        // Logical offset into new buffer
+        let mut poffset: usize = 0;
 
+        println!("---- copy_out ----");
+        println!("self.offset {}", self.offset);
+        println!("self. len {} keylen {} datalen {}",
+                 self.len, self.keylen, self.datalen);
+        println!("copying data at offset {} remaining {}",
+                 offset, remaining);
+
+        // Copy head in first block.
+        // ----+-------+----
+        //     |   dddd|ddd...
+        // ----+-------+----
+        //         ^--^ amt
+        let boffset = offset % BLOCK_SIZE;
+        let bidx = offset / BLOCK_SIZE;
+        let amt = cmp::min(BLOCK_SIZE - boffset, remaining);
+        let src = (self.blocks[bidx].addr + boffset) as *const u8;
+        let to = (out as usize + poffset) as *mut u8;
+        println!("boffset {} bidx {} amt {} src {:?} to {:?}",
+                 boffset, bidx, amt, src, to);
+        copy_nonoverlapping(src, to, amt);
+        remaining -= amt;
+        poffset += amt;
+        offset += amt;
+
+        // Copy remaining, if any. Always starts at block boundary.
+        // ----+-------+-------+-------+
+        //   dd|ddddddd|ddddddd|ddd    |
+        // ----+-------+-------+-------+
+        //      ^ start, copying <= |block| at a time
+        while remaining > 0 {
+            let amt = cmp::min(BLOCK_SIZE, remaining);
+            let bidx = offset / BLOCK_SIZE;
+            let src = (self.blocks[bidx].addr) as *const u8;
+            let to = (out as usize + poffset) as *mut u8;
+            copy_nonoverlapping(src, to, amt);
+            remaining -= amt;
+            poffset += amt;
+            offset += amt;
+        }
+    }
 }
 
 //==----------------------------------------------------==//
