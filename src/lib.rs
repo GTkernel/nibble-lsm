@@ -1,21 +1,22 @@
 #![feature(test)]
+
 #![allow(dead_code)]
-#![allow(unused_assignments)]
-#![allow(unused_variables)]
-#![allow(unused_imports)]
-#![allow(unused_mut)]
-#![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
+#![allow(non_snake_case)]
+#![allow(unused_assignments)]
 #![allow(unused_imports)]
-#![allow(unused_variables)]
+#![allow(unused_imports)]
 #![allow(unused_mut)]
+#![allow(unused_mut)]
+#![allow(unused_variables)]
+#![allow(unused_variables)]
 
 #[macro_use]
-extern crate log;
 extern crate libc;
+extern crate log;
+extern crate rand;
 extern crate test;
 extern crate time;
-extern crate rand;
 
 pub mod nibble;
 pub use nibble::*;
