@@ -783,15 +783,21 @@ mod tests {
     use std::collections::HashMap;
     use std::mem::size_of;
     use std::mem::transmute;
+    use std::ops;
     use std::ptr::copy;
     use std::ptr::copy_nonoverlapping;
     use std::rc::Rc;
+    use std::slice::from_raw_parts;
     use std::sync::Arc;
 
     use test::Bencher;
 
     use thelog::*;
     use common::*;
+    use memory::*;
+
+    use rand;
+    use rand::Rng;
 
     #[test]
     fn block() {
@@ -890,7 +896,10 @@ mod tests {
 
     // TODO entry reference types
 
+    #[test]
     fn iterate_segment() {
+        let mut rng = rand::thread_rng();
+
         // TODO make a macro out of these lines
         let memlen = 1<<23;
         let numseg = memlen / SEGMENT_SIZE;
@@ -899,50 +908,82 @@ mod tests {
         let mut segref = mgr.alloc();
         let mut seg = rbm!(segref);
 
-        let keys = vec!("aga234sdf", "sdfn34 2309dsfa;;", "LDKJF@()#*%FS3p853D");
-        let values = vec!("23487sdfl0k", "laksdfkasdjflkasjdf", "0");
+        // use this to generate random strings
+        // split string literal into something we can index with O(1)
+        // do we need a grapheme cluster iterator instead?
+        let alpha: Vec<char> =
+            "qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM"
+            .chars().collect();
 
-        // TODO how to advance two iterators simultaneously?
-        // maybe use crate itertools::ZipEq 
-        for i in 0..keys.len() {
-            let loc = Some(values[i].as_ptr());
-            let len = values[i].len() as u32;
-            let obj = ObjDesc::new(keys[i], loc, len);
+        // TODO generate sizes randomly
+        // TODO export rand str generation
+
+        let key_sizes: Vec<u32> = vec!(30, 89, 372); // arbitrary
+        let value_sizes: Vec<u32> = vec!(433, 884, 511); // arbitrary
+        let total: u32 = key_sizes.iter().fold(0, ops::Add::add)
+            + value_sizes.iter().fold(0, ops::Add::add);
+        let nbatches = (SEGMENT_SIZE - BLOCK_SIZE) / (total as usize);
+
+        // Buffer to receive items into
+        let mut buf: *mut u8 = allocate::<u8>(total as usize);
+
+        // create the key value pairs
+        let mut keys: Vec<String> = Vec::new();
+        let mut values: Vec<String> = Vec::new();
+        for tuple in (&key_sizes).into_iter().zip(&value_sizes) {
+            let mut s = String::with_capacity(*tuple.0 as usize);
+            for i in 0..*tuple.0 {
+                let r = rng.gen::<usize>() % alpha.len();
+                s.push( alpha[ r ] );
+            }
+            keys.push(s);
+            s = String::with_capacity(*tuple.1 as usize);
+            for i in 0..*tuple.1 {
+                let r = rng.gen::<usize>() % alpha.len();
+                s.push( alpha[ r ] );
+            }
+            values.push(s);
+        }
+
+        // append the objects
+        for tuple in (&keys).into_iter().zip(&values) {
+            let key = tuple.0;
+            let value = tuple.1;
+            let loc = Some(value.as_ptr());
+            let len = value.len() as u32;
+            let obj = ObjDesc::new(key, loc, len);
             match seg.append(&obj) {
-                Err(code) => panic!("appending returned {:?}", code),
+                Err(code) => panic!("append error:: {:?}", code),
                 _ => {},
             }
         }
-
-        // TODO exercise the entry reference
-
+        
+        // count and verify the segment iterator
         let mut counter = 0;
-        for entry_ref in seg.into_iter() {
-            println!("len: {} blocks: {}",
-                     entry_ref.len(),
-                     entry_ref.num_blocks());
+        for entry in seg.into_iter() {
+            assert_eq!(entry.keylen, key_sizes[counter]);
+            assert_eq!(entry.datalen, value_sizes[counter]);
+            assert!(total > entry.datalen);
+
+            // compare the values
+            unsafe {
+                entry.copy_out(buf);
+                let nchars = values[counter].len();
+                let slice = from_raw_parts(buf, nchars);
+                let orig = values[counter].as_bytes();
+                assert_eq!(slice, orig);
+            }
+
             counter += 1;
         }
         assert_eq!(counter, keys.len());
 
-        // now with enough keys to fill half a segment
-        seg.reset();
-        // large prime values so things don't fit nicely
-        let key = String::with_capacity(1489);
-        let value: [u8; 2477] = [7; 2477];
-        let nobj = (SEGMENT_SIZE>>1) / (key.len() + value.len());
-        for i in 0..nobj {
-            let loc = Some(key.as_ptr());
-            let len = value.len() as u32;
-            let obj = ObjDesc::new(key.as_str(), loc, len);
-            match seg.append(&obj) {
-                Err(code) => panic!("appending returned {:?}", code),
-                _ => {},
-            }
-        }
+        unsafe { deallocate::<u8>(buf, total as usize); }
     }
 
-    #[test]
+    // TODO test copying out of the iterator
+
+    //#[test]
     fn iterate_segment_large_objects() {
         // TODO
     }
