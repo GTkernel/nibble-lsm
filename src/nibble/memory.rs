@@ -1,8 +1,27 @@
 use libc;
 
+use std::mem;
 use std::ptr;
 use std::ptr::copy;
 use std::ptr::copy_nonoverlapping;
+
+//==----------------------------------------------------==//
+//      Heap allocation
+//==----------------------------------------------------==//
+
+// Use Vec to dynamically manage memory for us.
+// NOTE this is a hack.
+
+pub fn allocate<T>(count: usize) -> *mut T {
+    let mut v = Vec::with_capacity(count);
+    let ptr = v.as_mut_ptr();
+    mem::forget(v);
+    ptr
+}
+
+pub unsafe fn deallocate<T>(ptr: *mut T, count: usize) {
+    mem::drop(Vec::from_raw_parts(ptr, 0, count));
+}
 
 //==----------------------------------------------------==//
 //      Buffer
