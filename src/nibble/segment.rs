@@ -557,7 +557,9 @@ impl Iterator for SegmentIter {
             blocks: self.blocks.clone().into_iter()
                 .skip(self.cur_blk).take(nblks).collect(),
             offset: self.blk_offset,
-            len: obj_len,
+            len: obj_len + size_of::<EntryHeader>(),
+            keylen: entry.getkeylen(),
+            datalen: entry.getdatalen(),
         } )
     }
 }
@@ -572,9 +574,11 @@ impl Iterator for SegmentIter {
 /// each time a reference is passed around; we lazily copy the object
 /// from the log only when a client asks for it
 pub struct EntryReference {
-    blocks: BlockRefPool,
-    offset: usize, // into first block
-    len: usize,
+    pub blocks: BlockRefPool,
+    pub offset: usize, // into first block
+    pub len: usize, /// header + key + data
+    pub keylen: u32,
+    pub datalen: u32,
 }
 
 impl EntryReference {
