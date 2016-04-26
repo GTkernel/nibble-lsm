@@ -8,3 +8,4 @@ authors = ["Alexander Merritt <merritt.alex@gatech.edu>"]
 libc = "0.2.7"
 log = "0.3.5"
 time = "0.1.34"
+rand = "0.3.14"

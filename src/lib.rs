@@ -15,6 +15,7 @@ extern crate log;
 extern crate libc;
 extern crate test;
 extern crate time;
+extern crate rand;
 
 pub mod nibble;
 pub use nibble::*;
