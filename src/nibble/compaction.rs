@@ -180,7 +180,10 @@ mod tests {
         // populate first segment
 
         // move all objects
-        Compactor::compact(&s1, &s2, |e| true);
+        match Compactor::compact(&s1, &s2, |e| true) {
+            Ok(1) => {},
+            _ => panic!("compact failed"),
+        }
 
         // move every other object TODO
         // etc.
