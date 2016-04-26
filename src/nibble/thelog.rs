@@ -9,6 +9,10 @@ use std::ptr::copy_nonoverlapping;
 use std::sync::Arc;
 use std::cell::RefCell;
 
+//==----------------------------------------------------==//
+//      Entry header
+//==----------------------------------------------------==//
+
 /// Describe entry in the log. Format is:
 ///     | EntryHeader | Key bytes | Data bytes |
 /// This struct MUST NOT contain any pointers.
@@ -71,9 +75,9 @@ impl EntryHeader {
 }
 
 
-// -------------------------------------------------------------------
-// The log
-// -------------------------------------------------------------------
+//==----------------------------------------------------==//
+//      Log head
+//==----------------------------------------------------==//
 
 pub type LogHeadRef = Arc<RefCell<LogHead>>;
 
@@ -149,6 +153,10 @@ impl LogHead {
 
 }
 
+//==----------------------------------------------------==//
+//      The log
+//==----------------------------------------------------==//
+
 pub struct Log {
     head: LogHeadRef, // TODO make multiple
     manager: SegmentManagerRef,
@@ -180,6 +188,10 @@ impl Log {
         unimplemented!();
     }
 }
+
+//==----------------------------------------------------==//
+//      Unit tests
+//==----------------------------------------------------==//
 
 #[cfg(test)]
 mod tests {

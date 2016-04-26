@@ -4,9 +4,9 @@ use std::ptr;
 use std::ptr::copy;
 use std::ptr::copy_nonoverlapping;
 
-// -------------------------------------------------------------------
-// Memory utilities
-// -------------------------------------------------------------------
+//==----------------------------------------------------==//
+//      Buffer
+//==----------------------------------------------------==//
 
 /// Generic heap buffer that uses malloc underneath. Might be better
 /// to back Buffers with a slab allocator to avoid object sizes
@@ -37,6 +37,10 @@ impl Drop for Buffer {
         }
     }
 }
+
+//==----------------------------------------------------==//
+//      Memory map
+//==----------------------------------------------------==//
 
 /// Memory mapped region in our address space.
 pub struct MemMap {
@@ -80,6 +84,10 @@ impl Drop for MemMap {
         unsafe { libc::munmap(p, self.len); }
     }
 }
+
+//==----------------------------------------------------==//
+//      Unit tests
+//==----------------------------------------------------==//
 
 #[cfg(test)]
 mod tests {

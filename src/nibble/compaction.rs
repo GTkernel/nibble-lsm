@@ -52,6 +52,10 @@ use std::collections::LinkedList;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+//==----------------------------------------------------==//
+//      Compactor
+//==----------------------------------------------------==//
+
 pub type CompactorRef = Arc<Mutex<RefCell<Compactor>>>;
 
 /// Make new CompactorRef
@@ -134,6 +138,10 @@ impl Compactor {
 // XXX need some function that can abstract how to determine if an
 // entry in the log is live or not. Avoid having compaction code be
 // aware of the log index itself.
+
+//==----------------------------------------------------==//
+//      Unit tests
+//==----------------------------------------------------==//
 
 #[cfg(test)]
 mod tests {
