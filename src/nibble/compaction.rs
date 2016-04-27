@@ -37,6 +37,12 @@
 //! against race conditions where edit cannot happen to segment behind
 //! progress of cleaner.
 
+// TODO segment manager add newly closed seg to internal list
+// TODO compaction checks this list, adds to candidates set
+// TODO compaction gives cleaned segments to segment manager
+// TODO segment manager adds cleaned segments to reclamation list
+// TODO segment manager checks epoch to release segments - give blocks back to block allocator and
+// destruct segment
 
 // Cleaner must ask segment manager for any newly closed segments when
 // it performs cleaning. For each, it computes the score, then inserts
