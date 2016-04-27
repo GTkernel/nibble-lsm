@@ -83,39 +83,11 @@ impl BlockAllocator {
 }
 
 //==----------------------------------------------------==//
-//      Segment utilities
+//      Segment types
 //==----------------------------------------------------==//
 
 pub type SegmentRef = Arc<RefCell<Segment>>;
 pub type SegmentManagerRef = Arc<RefCell<SegmentManager>>;
-
-/// Instantiate new Segment as a SegmentRef
-macro_rules! seg_ref {
-    ( $id:expr, $blocks:expr ) => {
-        Arc::new( RefCell::new(
-                Segment::new($id, $blocks)
-                ))
-    }
-}
-
-/// Instantiate new Segment with zero blocks
-macro_rules! seg_ref_empty {
-    ( $id:expr ) => {
-        Arc::new( RefCell::new(
-                Segment::empty($id)
-                ))
-    }
-}
-
-/// Make a new segment manager and package into a shareable reference
-#[macro_export]
-macro_rules! segmgr_ref {
-    ( $id:expr, $segsz:expr, $bytes:expr ) => {
-        Arc::new( RefCell::new(
-                SegmentManager::new( $id, $segsz, $bytes)
-                ))
-    }
-}
 
 //==----------------------------------------------------==//
 //      Object descriptor

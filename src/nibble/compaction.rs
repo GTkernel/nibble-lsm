@@ -53,20 +53,14 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 //==----------------------------------------------------==//
-//      Compactor
+//      Compactor types
 //==----------------------------------------------------==//
 
 pub type CompactorRef = Arc<Mutex<RefCell<Compactor>>>;
 
-/// Make new CompactorRef
-// #[macro_export]
-// macro_rules! compref {
-//     ( ) => {
-//         Arc::new( Mutex::new( RefCell::new(
-//                 Compactor::new()
-//                 )))
-//     }
-// }
+//==----------------------------------------------------==//
+//      Compactor
+//==----------------------------------------------------==//
 
 // TODO Keep segments ordered by their usefulness for compaction.
 

@@ -1,9 +1,9 @@
 #[macro_use]
+pub mod macros;
+
 pub mod common;
-#[macro_use]
-pub mod compaction;
-#[macro_use]
 pub mod segment;
+pub mod compaction;
 pub mod store;
 pub mod index;
 pub mod memory;
