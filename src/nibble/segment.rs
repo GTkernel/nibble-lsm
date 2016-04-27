@@ -545,7 +545,7 @@ impl Iterator for SegmentIter {
 
         // determine which blocks belong
         let mut nblks = 1;
-        let blk_tail = BLOCK_SIZE - self.seg_offset;
+        let blk_tail = BLOCK_SIZE - (self.seg_offset % BLOCK_SIZE);
         if obj_len > blk_tail {
             nblks += (obj_len - blk_tail) / BLOCK_SIZE + 1;
         }
@@ -937,37 +937,40 @@ mod tests {
         }
 
         // append the objects
-        for tuple in (&keys).into_iter().zip(&values) {
-            let key = tuple.0;
-            let value = tuple.1;
-            let loc = Some(value.as_ptr());
-            let len = value.len() as u32;
-            let obj = ObjDesc::new(key, loc, len);
-            match seg.append(&obj) {
-                Err(code) => panic!("append error:: {:?}", code),
-                _ => {},
+        for _ in 0..nbatches {
+            for tuple in (&keys).into_iter().zip(&values) {
+                let key = tuple.0;
+                let value = tuple.1;
+                let loc = Some(value.as_ptr());
+                let len = value.len() as u32;
+                let obj = ObjDesc::new(key, loc, len);
+                match seg.append(&obj) {
+                    Err(code) => panic!("append error:: {:?}", code),
+                    _ => {},
+                }
             }
         }
         
         // count and verify the segment iterator
-        let mut counter = 0;
+        let mut counter: usize = 0;
         for entry in seg.into_iter() {
-            assert_eq!(entry.keylen, key_sizes[counter]);
-            assert_eq!(entry.datalen, value_sizes[counter]);
+            let idx = counter % key_sizes.len();
+            assert_eq!(entry.keylen, key_sizes[idx]);
+            assert_eq!(entry.datalen, value_sizes[idx]);
             assert!(total > entry.datalen);
 
             // compare the values
             unsafe {
                 entry.copy_out(buf);
-                let nchars = values[counter].len();
+                let nchars = values[idx].len();
                 let slice = from_raw_parts(buf, nchars);
-                let orig = values[counter].as_bytes();
+                let orig = values[idx].as_bytes();
                 assert_eq!(slice, orig);
             }
 
             counter += 1;
         }
-        assert_eq!(counter, keys.len());
+        assert_eq!(counter, nbatches * keys.len());
 
         unsafe { deallocate::<u8>(buf, total as usize); }
     }
