@@ -53,10 +53,8 @@ use thelog::*;
 use segment::*;
 
 use std::cell::RefCell;
-use std::collections::BinaryHeap;
-use std::collections::LinkedList;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::collections::{BinaryHeap,LinkedList};
+use std::sync::{Arc,Mutex};
 
 //==----------------------------------------------------==//
 //      Compactor types
@@ -147,10 +145,13 @@ mod tests {
     use std::mem;
     use std::ops;
     use std::slice::from_raw_parts;
+    use std::cell::{RefCell};
+    use std::sync::{Arc,Mutex};
 
     use memory::*;
     use segment::*;
     use thelog::*;
+    use index::*;
 
     use rand;
     use rand::Rng;

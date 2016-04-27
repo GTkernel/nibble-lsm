@@ -5,7 +5,7 @@ use segment::*;
 use index::*;
 
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc,Mutex};
 use std::cell::RefCell;
 
 //==----------------------------------------------------==//

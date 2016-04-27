@@ -8,7 +8,7 @@ use std::mem::size_of;
 use std::ptr;
 use std::ptr::copy;
 use std::ptr::copy_nonoverlapping;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::mem::transmute;
 use std::cmp;
 use std::cmp::Ordering;
