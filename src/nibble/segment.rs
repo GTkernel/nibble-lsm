@@ -107,12 +107,12 @@ macro_rules! seg_ref_empty {
     }
 }
 
-/// Make a new SegmentManagerRef
+/// Make a new segment manager and package into a shareable reference
 #[macro_export]
 macro_rules! segmgr_ref {
-    ( $id:expr, $segsz:expr, $blocks:expr ) => {
+    ( $id:expr, $segsz:expr, $bytes:expr ) => {
         Arc::new( RefCell::new(
-                SegmentManager::new( $id, $segsz, $blocks)
+                SegmentManager::new( $id, $segsz, $bytes)
                 ))
     }
 }
