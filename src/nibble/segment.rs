@@ -232,17 +232,6 @@ impl Segment {
         }
     }
 
-    /// Allocate an empty Segment. Used by the compaction code.
-    pub fn empty(id: usize) -> Self {
-        Segment {
-            id: id, closed: true, head: None,
-            len: 0, rem: 0, nobj: 0,
-            curblk: None,
-            front: None,
-            blocks: vec!(),
-        }
-    }
-
     /// Add blocks to a segment to grow its size. Used by the
     /// compaction code, after allocating an empty segment.
     /// TODO need unit test
@@ -501,6 +490,12 @@ impl Segment {
     pub fn head(&self) -> Option<usize> { self.head }
 
     #[cfg(test)]
+    pub fn curblk(&self) -> Option<usize> { self.curblk }
+
+    #[cfg(test)]
+    pub fn nblks(&self) -> usize { self.blocks.len() }
+
+    #[cfg(test)]
     pub fn reset(&mut self) {
         let blk = 0;
         let start = self.blocks[blk].addr + SegmentHeader::len();
@@ -719,7 +714,10 @@ impl SegmentManager {
         }
     }
 
-    pub fn alloc(&mut self) -> Option<SegmentRef> {
+    /// Allocate a segment with a specific number of blocks. Used by
+    /// compaction code.
+    /// TODO wait/return if blocks aren't available (not panic)
+    pub fn alloc_size(&mut self, nblks: usize) -> Option<SegmentRef> {
         // TODO lock, unlock
         if self.free_slots.is_empty() {
             None
@@ -733,9 +731,7 @@ impl SegmentManager {
                 None => {},
                 _ => panic!("Alloc from non-empty slot"),
             };
-            // FIXME use config obj
-            let num = SEGMENT_SIZE / BLOCK_SIZE;
-            let blocks = self.allocator.alloc(num);
+            let blocks = self.allocator.alloc(nblks);
             match blocks {
                 None => panic!("Could not allocate blocks"),
                 _ => {},
@@ -747,27 +743,11 @@ impl SegmentManager {
         }
     }
 
-    /// Grab a Segment without any blocks to use for compaction.
-    /// Blocks are lazily allocated.
-    /// TODO clean this up so it isn't copy/paste with alloc()
-    pub fn allocEmpty(&mut self) -> Option<SegmentRef> {
-        // TODO lock, unlock
-        if self.free_slots.is_empty() {
-            None
-        } else {
-            let slot: usize;
-            match self.free_slots.pop() {
-                None => panic!("No free slots"),
-                Some(v) => slot = v as usize,
-            };
-            match self.segments[slot] {
-                None => {},
-                _ => panic!("Alloc from non-empty slot"),
-            };
-            self.next_seg_id += 1;
-            self.segments[slot] = Some(seg_ref_empty!(self.next_seg_id));
-            self.segments[slot].clone()
-        }
+    /// Allocate a segment with default size.
+    pub fn alloc(&mut self) -> Option<SegmentRef> {
+        // TODO use config obj
+        let nblks = (SEGMENT_SIZE - 1) / BLOCK_SIZE + 1;
+        self.alloc_size(nblks)
     }
 
     pub fn free(&self, segment: SegmentRef) {

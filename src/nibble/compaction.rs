@@ -124,13 +124,6 @@ impl Compactor {
             }
         }
 
-        // for each item, check liveness, 
-
-        // calculate size of all live objects
-        // dynamically allocate sufficient blocks in new seg
-        // iterate over all items and append them to new seg
-        // close new seg
-        // caller will release new blocks
         status
     }
 
@@ -179,14 +172,13 @@ mod tests {
         assert_eq!(c.candidates.lock().unwrap().len(), 8);
     }
 
+    /// Big beasty compaction test. TODO break down into smaller tests
     #[test]
     fn compact() {
         let mut rng = rand::thread_rng();
 
         let mut segmgr = SegmentManager::new(0, 1<<20, 1<<23);
         let mut seg_obj_ref = segmgr.alloc().unwrap();
-        let mut seg_clean_ref = segmgr.alloc().unwrap();
-
 
         // TODO export rand str generation
         // TODO clean this up (is copy/paste from segment tests)
@@ -220,11 +212,8 @@ mod tests {
             values.push(s);
         }
 
-        { // hold segments mutably for limited scope
+        { // hold segment mutably for limited scope
             let mut seg_obj = seg_obj_ref.borrow_mut();
-            let mut seg_clean = seg_clean_ref.borrow_mut();
-
-            seg_clean.close();
 
             // append the objects
             for _ in 0..nbatches {
@@ -241,11 +230,21 @@ mod tests {
                 }
             }
         }
+
+        // we remove all objects whose value is < 500 bytes
+        // using fancy closures
+        let filter = |e: &EntryReference| { e.datalen < 500 };
+
+        // allocate new segment to move objects into
+        let new_capacity = ((value_sizes[0] + key_sizes[0]) as usize
+                            + mem::size_of::<EntryHeader>())*nbatches
+                            + mem::size_of::<SegmentHeader>();
+        let nblks = (new_capacity / BLOCK_SIZE) + 1;
+        let mut seg_clean_ref = segmgr.alloc_size(nblks).unwrap();
         
         // move all objects whose data length < 500
         // given the above, we keep only nbatches of the first entry
-        match Compactor::compact(&seg_obj_ref, &seg_clean_ref,
-                |e: &EntryReference| { e.datalen < 500 } ) {
+        match Compactor::compact(&seg_obj_ref,&seg_clean_ref,filter) {
             Ok(1) => {},
             _ => panic!("compact failed"),
         }
@@ -278,6 +277,9 @@ mod tests {
             assert_eq!(s.nobjects(), nbatches);
             assert_eq!(s.used(), t);
             assert_eq!(s.rem(), s.len() - t);
+            assert_eq!(s.head().is_some(), true);
+            assert_eq!(s.curblk().is_some(), true);
+            assert_eq!(s.curblk().unwrap(), s.nblks()-1);
         }
 
         unsafe { deallocate::<u8>(buf, total as usize); }
