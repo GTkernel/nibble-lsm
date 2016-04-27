@@ -110,15 +110,19 @@ impl Compactor {
     // release unused blocks back to the block allocator, and the
     // segment then added back to the log.
 
-    //
-    // --- Private methods ---
-    //
-
-    pub fn compact<liveFn>(seg: &SegmentRef,
-               fresh: &SegmentRef, isLive: liveFn) -> Status
-        where liveFn : Fn(&EntryHeader) -> bool
+    pub fn compact<liveFn>(dirty_: &SegmentRef,
+               new_: &SegmentRef, isLive: liveFn) -> Status
+        where liveFn : Fn(&EntryReference) -> bool
     {
         let mut status: Status = Ok(1);
+
+        let mut new = new_.borrow_mut();
+        let mut dirty = dirty_.borrow_mut();
+        for entry in dirty.into_iter() {
+            if isLive(&entry) {
+                let va = new.append_entry(&entry);
+            }
+        }
 
         // for each item, check liveness, 
 
@@ -130,14 +134,14 @@ impl Compactor {
         status
     }
 
+    //
+    // --- Private methods ---
+    //
+
     fn spawn(&mut self) -> Status {
         unimplemented!();
     }
 }
-
-// XXX need some function that can abstract how to determine if an
-// entry in the log is live or not. Avoid having compaction code be
-// aware of the log index itself.
 
 //==----------------------------------------------------==//
 //      Unit tests
@@ -147,8 +151,16 @@ impl Compactor {
 mod tests {
     use super::*;
 
+    use std::mem;
+    use std::ops;
+    use std::slice::from_raw_parts;
+
+    use memory::*;
     use segment::*;
     use thelog::*;
+
+    use rand;
+    use rand::Rng;
 
     #[test]
     fn constructor() {
@@ -169,24 +181,106 @@ mod tests {
 
     #[test]
     fn compact() {
+        let mut rng = rand::thread_rng();
+
         let mut segmgr = SegmentManager::new(0, 1<<20, 1<<23);
-        let mut s1 = segmgr.alloc().unwrap().clone();
-        let mut s2 = segmgr.allocEmpty().unwrap().clone();
+        let mut seg_obj_ref = segmgr.alloc().unwrap();
+        let mut seg_clean_ref = segmgr.alloc().unwrap();
 
-        let key: &'static str = "onlyone";
-        let val: &'static str = "valuevaluevalue";
-        let obj = ObjDesc::new(key, Some(val.as_ptr()), val.len() as u32);
 
-        // populate first segment
+        // TODO export rand str generation
+        // TODO clean this up (is copy/paste from segment tests)
 
-        // move all objects
-        match Compactor::compact(&s1, &s2, |e| true) {
+        // create the key value pairs
+        let alpha: Vec<char> =
+            "qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM"
+            .chars().collect();
+
+        let key_sizes: Vec<u32> = vec!(30, 89, 372); // arbitrary
+        let value_sizes: Vec<u32> = vec!(433, 884, 511); // arbitrary
+        let total: u32 = key_sizes.iter().fold(0, ops::Add::add)
+            + value_sizes.iter().fold(0, ops::Add::add);
+        let nbatches = (SEGMENT_SIZE - BLOCK_SIZE) / (total as usize);
+
+        // create key-value pairs
+        let mut keys: Vec<String> = Vec::new();
+        let mut values: Vec<String> = Vec::new();
+        for tuple in (&key_sizes).into_iter().zip(&value_sizes) {
+            let mut s = String::with_capacity(*tuple.0 as usize);
+            for i in 0..*tuple.0 {
+                let r = rng.gen::<usize>() % alpha.len();
+                s.push( alpha[ r ] );
+            }
+            keys.push(s);
+            s = String::with_capacity(*tuple.1 as usize);
+            for i in 0..*tuple.1 {
+                let r = rng.gen::<usize>() % alpha.len();
+                s.push( alpha[ r ] );
+            }
+            values.push(s);
+        }
+
+        { // hold segments mutably for limited scope
+            let mut seg_obj = seg_obj_ref.borrow_mut();
+            let mut seg_clean = seg_clean_ref.borrow_mut();
+
+            seg_clean.close();
+
+            // append the objects
+            for _ in 0..nbatches {
+                for tuple in (&keys).into_iter().zip(&values) {
+                    let key = tuple.0;
+                    let value = tuple.1;
+                    let loc = Some(value.as_ptr());
+                    let len = value.len() as u32;
+                    let obj = ObjDesc::new(key, loc, len);
+                    match seg_obj.append(&obj) {
+                        Err(code) => panic!("append error:: {:?}", code),
+                        _ => {},
+                    }
+                }
+            }
+        }
+        
+        // move all objects whose data length < 500
+        // given the above, we keep only nbatches of the first entry
+        match Compactor::compact(&seg_obj_ref, &seg_clean_ref,
+                |e: &EntryReference| { e.datalen < 500 } ) {
             Ok(1) => {},
             _ => panic!("compact failed"),
         }
 
-        // move every other object TODO
-        // etc.
+        // Buffer to receive items into
+        let total = (key_sizes[0] + value_sizes[0]) << 1;
+        let mut buf: *mut u8 = allocate::<u8>(total as usize);
+
+        let mut counter = 0;
+        for entry in seg_clean_ref.borrow().into_iter() {
+            assert_eq!(entry.keylen, key_sizes[0]);
+            assert_eq!(entry.datalen, value_sizes[0]);
+            unsafe {
+                entry.copy_out(buf);
+                let nchars = values[0].len();
+                let slice = from_raw_parts(buf, nchars);
+                let orig = values[0].as_bytes();
+                assert_eq!(slice, orig);
+            }
+            counter += 1;
+        }
+
+        assert_eq!(counter, nbatches);
+
+        {
+            let s = seg_clean_ref.borrow();
+            let t = ((value_sizes[0] + key_sizes[0]) as usize
+                     + mem::size_of::<EntryHeader>()) * nbatches
+                     + mem::size_of::<SegmentHeader>();
+            assert_eq!(s.nobjects(), nbatches);
+            assert_eq!(s.used(), t);
+            assert_eq!(s.rem(), s.len() - t);
+        }
+
+        unsafe { deallocate::<u8>(buf, total as usize); }
     }
 
     // TODO add objects to some segments

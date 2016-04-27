@@ -297,6 +297,39 @@ impl Segment {
         } else { Err(ErrorCode::SegmentClosed) }
     }
 
+    /// Copy an entry from one set of blocks to this segment. Used by
+    /// the compaction logic. Returns address of relocated entry.
+    /// TODO optimize to know when the blocks are contiguous
+    /// TODO optimize for large objects: transfer whole blocks?
+    /// TODO use Pointer or something to represent return address
+    pub fn append_entry(&mut self, entry: &EntryReference) -> usize {
+        assert_eq!(self.head.is_some(), true);
+        assert_eq!(self.can_hold_amt(entry.len), true);
+
+        let new_va = self.headref() as usize;
+
+        // append by-block since entry may not be virtually contiguous
+        let mut va = entry.blocks[0].addr + entry.offset;
+        let mut amt = cmp::min(BLOCK_SIZE - entry.offset, entry.len);
+        self.append_safe(va as *const u8, amt);
+
+        // go for the rest
+        let mut remaining = entry.len - amt;
+        let mut bidx = 1;
+        while remaining > 0 {
+            va = entry.blocks[bidx].addr;
+            amt = cmp::min(BLOCK_SIZE, remaining);
+            self.append_safe(va as *const u8, amt);
+            remaining -= amt;
+            bidx += 1;
+        }
+
+        self.nobj += 1;
+        self.update_header(1);
+
+        new_va
+    }
+
     pub fn close(&mut self) {
         self.closed = true;
     }
@@ -383,8 +416,12 @@ impl Segment {
 //        count
 //    }
 
+    pub fn can_hold_amt(&self, len: usize) -> bool {
+        self.rem >= len
+    }
+
     pub fn can_hold(&self, buf: &ObjDesc) -> bool {
-        self.rem >= buf.len_with_header()
+        self.can_hold_amt(buf.len_with_header())
     }
 
     //
@@ -450,6 +487,18 @@ impl Segment {
     //
     // --- Test methods ---
     //
+
+    #[cfg(test)]
+    pub fn rem(&self) -> usize { self.rem }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize { self.len }
+
+    #[cfg(test)]
+    pub fn used(&self) -> usize { self.len - self.rem }
+
+    #[cfg(test)]
+    pub fn head(&self) -> Option<usize> { self.head }
 
     #[cfg(test)]
     pub fn reset(&mut self) {
