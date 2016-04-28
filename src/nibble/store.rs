@@ -112,7 +112,8 @@ mod tests {
         // insert initial object
         let key = String::from("keykeykeykey");
         let val = String::from("valuevaluevalue");
-        let obj = ObjDesc::new(key.as_str(), Some(val.as_ptr()), val.len() as u32);
+        let obj = ObjDesc::new(key.as_str(),
+                        Some(val.as_ptr()), val.len() as u32);
         match nib.put_object(&obj) {
             Ok(ign) => {},
             Err(code) => panic!("{:?}", code),
@@ -140,7 +141,7 @@ mod tests {
                             assert_eq!(compareto, string);
                         },
                         Err(code) => {
-                            panic!("error converting utf8 from log: {:?}", code);
+                            panic!("utf8 error: {:?}", code);
                         },
                     }
                 },
@@ -150,7 +151,8 @@ mod tests {
 
         // shove in the object multiple times to cross many blocks
         let val2: &'static str = "VALUEVALUEVALUE";
-        let obj2 = ObjDesc::new(key.as_str(), Some(val2.as_ptr()), val2.len() as u32);
+        let obj2 = ObjDesc::new(key.as_str(),
+                            Some(val2.as_ptr()), val2.len() as u32);
         for i in 0..100000 {
             match nib.put_object(&obj2) {
                 Ok(ign) => {},
@@ -179,7 +181,7 @@ mod tests {
                             assert_eq!(compareto, string);
                         },
                         Err(code) => {
-                            panic!("error converting utf8 from log: {:?}", code);
+                            panic!("utf8 error: {:?}", code);
                         },
                     }
                 },

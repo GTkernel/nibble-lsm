@@ -256,7 +256,8 @@ mod tests {
                             + mem::size_of::<EntryHeader>())*nbatches
                             + mem::size_of::<SegmentHeader>();
         let nblks = (new_capacity / BLOCK_SIZE) + 1;
-        let mut seg_clean_ref = segmgr.borrow_mut().alloc_size(nblks).unwrap();
+        let mut seg_clean_ref = segmgr.borrow_mut()
+            .alloc_size(nblks).unwrap();
         
         // move all objects whose data length < 500
         // given the above, we keep only nbatches of the first entry

@@ -1,3 +1,5 @@
+// TODO create a block allocator for each CPU socket
+
 use common::*;
 use thelog::*;
 use memory::*;
@@ -195,7 +197,8 @@ impl Segment {
         let header = SegmentHeader::new(0);
         unsafe { ptr::write(start as *mut SegmentHeader, header); }
         Segment {
-            id: id, closed: false, head: Some(start + SegmentHeader::len()),
+            id: id, closed: false,
+            head: Some(start + SegmentHeader::len()),
             len: len, rem: len - SegmentHeader::len(),
             nobj: 0, curblk: Some(blk),
             front: Some(blocks[blk].addr as *mut SegmentHeader),
