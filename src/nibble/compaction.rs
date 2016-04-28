@@ -61,7 +61,7 @@ use std::sync::{Arc,Mutex};
 //      Compactor types
 //==----------------------------------------------------==//
 
-pub type CompactorRef<'a> = Arc<Mutex<RefCell<Compactor<'a>>>>;
+pub type CompactorRef = Arc<Mutex<RefCell< Compactor >>>;
 
 //==----------------------------------------------------==//
 //      Compactor
@@ -69,11 +69,11 @@ pub type CompactorRef<'a> = Arc<Mutex<RefCell<Compactor<'a>>>>;
 
 // TODO Keep segments ordered by their usefulness for compaction.
 
-pub struct Compactor<'a> {
+pub struct Compactor {
     // candidates: BinaryHeap<SegmentRef>,
     candidates: Mutex<LinkedList<SegmentRef>>,
     manager: SegmentManagerRef,
-    index: IndexRef<'a>,
+    index: IndexRef,
 }
 
 // TODO need a way to return clean segments back to the segment
@@ -83,10 +83,10 @@ pub struct Compactor<'a> {
 
 // TODO metrics for when compaction should begin
 
-impl<'a> Compactor<'a> {
+impl Compactor {
 
     pub fn new(manager_: &SegmentManagerRef,
-               index_: &IndexRef<'a>) -> Self {
+               index_: &IndexRef) -> Self {
         let mut c = Compactor {
             candidates: Mutex::new(LinkedList::new()),
             manager: manager_.clone(),
@@ -129,7 +129,7 @@ impl<'a> Compactor<'a> {
                         let key: String;
                         let va = new.borrow_mut().append_entry(&entry);
                         unsafe { key = entry.get_key(); }
-                        index.update(key.as_str(), va);
+                        index.update(&key, va);
                     }
                 }
             },

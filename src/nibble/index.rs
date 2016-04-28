@@ -6,19 +6,18 @@ use std::cell::RefCell;
 //      Index
 //==----------------------------------------------------==//
 
-// XXX XXX change the damn key type to String to avoid these stupid
-// lifetime modifiers!!
-
-pub type IndexRef<'a> = Arc<Mutex<RefCell<Index<'a>>>>;
+pub type IndexRef = Arc<Mutex<RefCell<Index>>>;
 
 /// Index structure that allows us to retreive objects from the log.
 /// It is just a simple wrapper over whatever data structure we wish
 /// to eventually use.
-pub struct Index<'a> {
-    table: HashMap<&'a str, usize>,
+/// TODO what if i store the hash of a key instead of the key itself?
+/// save space? all the keys are kept in the log anyway
+pub struct Index {
+    table: HashMap<String, usize>,
 }
 
-impl<'a> Index<'a> {
+impl Index {
 
     pub fn new() -> Self {
         Index {
@@ -27,20 +26,20 @@ impl<'a> Index<'a> {
     }
 
     /// Return value of object if it exists, else None.
-    pub fn get(&self, key: &'a str) -> Option<usize> {
+    pub fn get(&self, key: &str) -> Option<usize> {
         self.table.get(key).map(|r| *r) // &usize -> usize
     }
 
     /// Update location of object in the index. Returns None if object
     /// was newly inserted, or the virtual address of the prior
     /// object.
-    pub fn update(&mut self, key: &'a str, value: usize) -> Option<usize> {
-        self.table.insert(key, value)
+    pub fn update(&mut self, key: &String, value: usize) -> Option<usize> {
+        self.table.insert(key.clone(), value)
     }
 
     /// Remove an entry. If it existed, return value, else return
     /// None.
-    pub fn remove(&mut self, key: &'a str) -> Option<usize> {
+    pub fn remove(&mut self, key: &String) -> Option<usize> {
         self.table.remove(key)
     }
 
@@ -72,21 +71,24 @@ mod tests {
     fn index_basic() {
         let mut index = Index::new();
 
-        match index.update("alex", 42) {
+        let key1 = String::from("alex");
+        let key2 = String::from("notexist");
+
+        match index.update(&key1, 42) {
             None => {}, // expected
             Some(v) => panic!("key should not exist"),
         }
-        match index.update("alex", 24) {
+        match index.update(&key1, 24) {
             None => panic!("key should exist"),
             Some(v) => assert_eq!(v, 42),
         }
 
-        match index.get("notexist") {
+        match index.get(key2.as_str()) {
             None => {}, // ok
             Some(v) => panic!("get on nonexistent key"),
         }
 
-        match index.get("alex") {
+        match index.get(key1.as_str()) {
             None => panic!("key should exist"),
             Some(vref) => {}, // ok
         }

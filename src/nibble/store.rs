@@ -12,13 +12,13 @@ use std::cell::RefCell;
 //      Nibble interface
 //==----------------------------------------------------==//
 
-pub struct Nibble<'a> {
-    index: IndexRef<'a>,
+pub struct Nibble {
+    index: IndexRef,
     manager: SegmentManagerRef,
     log: Log,
 }
 
-impl<'a> Nibble<'a> {
+impl Nibble {
 
     pub fn new(capacity: usize) -> Self {
         let manager_ref = segmgr_ref!(0, SEGMENT_SIZE, capacity);
@@ -30,7 +30,7 @@ impl<'a> Nibble<'a> {
     }
 
     // TODO add some locking
-    pub fn put_object(&mut self, obj: &ObjDesc<'a>) -> Status {
+    pub fn put_object(&mut self, obj: &ObjDesc) -> Status {
         let va: usize;
         // 1. add object to log
         match self.log.append(obj) {
@@ -41,14 +41,14 @@ impl<'a> Nibble<'a> {
         match self.index.lock() {
             Ok(index) => {
                 index.borrow_mut()
-                    .update(obj.getkey(), va);
+                    .update(&String::from(obj.getkey()), va);
             },
             Err(poison) => panic!("index lock poisoned"),
         }
         Ok(1)
     }
 
-    pub fn get_object(&self, key: &'a str) -> (Status,Option<Buffer>) {
+    pub fn get_object(&self, key: &String) -> (Status,Option<Buffer>) {
         let va: usize;
         match self.index.lock() {
             Ok(index) => {
@@ -110,9 +110,9 @@ mod tests {
         let mut nib = Nibble::new(mem);
 
         // insert initial object
-        let key: &'static str = "keykeykeykey";
-        let val: &'static str = "valuevaluevalue";
-        let obj = ObjDesc::new(key, Some(val.as_ptr()), val.len() as u32);
+        let key = String::from("keykeykeykey");
+        let val = String::from("valuevaluevalue");
+        let obj = ObjDesc::new(key.as_str(), Some(val.as_ptr()), val.len() as u32);
         match nib.put_object(&obj) {
             Ok(ign) => {},
             Err(code) => panic!("{:?}", code),
@@ -121,7 +121,7 @@ mod tests {
         // verify what we wrote is correct FIXME reduce copy/paste
         {
             let status: Status;
-            let ret = nib.get_object(key); // XXX
+            let ret = nib.get_object(&key);
             let string: String;
             match ret {
                 (Err(code),_) => panic!("key should exist: {:?}", code),
@@ -136,7 +136,7 @@ mod tests {
                     match String::from_utf8(v) {
                         Ok(string) => {
                             let mut compareto = String::new();
-                            compareto.push_str(val);
+                            compareto.push_str(val.as_str());
                             assert_eq!(compareto, string);
                         },
                         Err(code) => {
@@ -150,7 +150,7 @@ mod tests {
 
         // shove in the object multiple times to cross many blocks
         let val2: &'static str = "VALUEVALUEVALUE";
-        let obj2 = ObjDesc::new(key, Some(val2.as_ptr()), val2.len() as u32);
+        let obj2 = ObjDesc::new(key.as_str(), Some(val2.as_ptr()), val2.len() as u32);
         for i in 0..100000 {
             match nib.put_object(&obj2) {
                 Ok(ign) => {},
@@ -160,7 +160,7 @@ mod tests {
 
         {
             let status: Status;
-            let ret = nib.get_object(key);
+            let ret = nib.get_object(&key);
             let string: String;
             match ret {
                 (Err(code),_) => panic!("key should exist: {:?}", code),

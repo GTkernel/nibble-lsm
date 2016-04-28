@@ -101,6 +101,7 @@ pub struct ObjDesc<'a> {
     vlen: u32,
 }
 
+
 impl<'a> ObjDesc<'a> {
 
     pub fn new(key: &'a str, value: Pointer, vlen: u32) -> Self {
@@ -896,9 +897,10 @@ mod tests {
         let manager = segmgr_ref!(0, SEGMENT_SIZE, memlen);
         let mut log = Log::new(manager.clone());
 
-        let key: &'static str = "onlyone";
-        let val: &'static str = "valuevaluevalue";
-        let obj = ObjDesc::new(key, Some(val.as_ptr()), val.len() as u32);
+        let key = String::from("onlyone");
+        let val = String::from("valuevaluevalue");
+        let obj = ObjDesc::new(key.as_str(),
+                        Some(val.as_ptr()), val.len() as u32);
         // fill up the log
         let mut count: usize = 0;
         loop {
@@ -971,7 +973,7 @@ mod tests {
                 let value = tuple.1;
                 let loc = Some(value.as_ptr());
                 let len = value.len() as u32;
-                let obj = ObjDesc::new(key, loc, len);
+                let obj = ObjDesc::new(key.as_str(), loc, len);
                 match seg.append(&obj) {
                     Err(code) => panic!("append error:: {:?}", code),
                     _ => {},
