@@ -51,6 +51,7 @@
 use common::*;
 use thelog::*;
 use segment::*;
+use index::*;
 
 use std::cell::RefCell;
 use std::collections::{BinaryHeap,LinkedList};
@@ -60,7 +61,7 @@ use std::sync::{Arc,Mutex};
 //      Compactor types
 //==----------------------------------------------------==//
 
-pub type CompactorRef = Arc<Mutex<RefCell<Compactor>>>;
+pub type CompactorRef<'a> = Arc<Mutex<RefCell<Compactor<'a>>>>;
 
 //==----------------------------------------------------==//
 //      Compactor
@@ -68,9 +69,11 @@ pub type CompactorRef = Arc<Mutex<RefCell<Compactor>>>;
 
 // TODO Keep segments ordered by their usefulness for compaction.
 
-pub struct Compactor {
-    // TODO candidates: BinaryHeap<SegmentRef>,
+pub struct Compactor<'a> {
+    // candidates: BinaryHeap<SegmentRef>,
     candidates: Mutex<LinkedList<SegmentRef>>,
+    manager: SegmentManagerRef,
+    index: IndexRef<'a>,
 }
 
 // TODO need a way to return clean segments back to the segment
@@ -80,11 +83,14 @@ pub struct Compactor {
 
 // TODO metrics for when compaction should begin
 
-impl Compactor {
+impl<'a> Compactor<'a> {
 
-    pub fn new() -> Self {
+    pub fn new(manager_: &SegmentManagerRef,
+               index_: &IndexRef<'a>) -> Self {
         let mut c = Compactor {
             candidates: Mutex::new(LinkedList::new()),
+            manager: manager_.clone(),
+            index: index_.clone(),
         };
         //c.spawn();
         c
@@ -108,18 +114,26 @@ impl Compactor {
     // release unused blocks back to the block allocator, and the
     // segment then added back to the log.
 
-    pub fn compact<liveFn>(dirty_: &SegmentRef,
-               new_: &SegmentRef, isLive: liveFn) -> Status
+    pub fn compact<liveFn>(&mut self, dirty: &SegmentRef,
+               new: &SegmentRef, isLive: liveFn) -> Status
         where liveFn : Fn(&EntryReference) -> bool
     {
         let mut status: Status = Ok(1);
 
-        let mut new = new_.borrow_mut();
-        let mut dirty = dirty_.borrow_mut();
-        for entry in dirty.into_iter() {
-            if isLive(&entry) {
-                let va = new.append_entry(&entry);
-            }
+        // FIXME don't lock entire index
+        match self.index.lock() {
+            Ok(index_) => {
+                let mut index = index_.borrow_mut();
+                for entry in dirty.borrow_mut().into_iter() {
+                    if isLive(&entry) {
+                        let key: String;
+                        let va = new.borrow_mut().append_entry(&entry);
+                        unsafe { key = entry.get_key(); }
+                        index.update(key.as_str(), va);
+                    }
+                }
+            },
+            Err(poison) => panic!("index lock poisoned"),
         }
 
         status
@@ -157,20 +171,18 @@ mod tests {
     use rand::Rng;
 
     #[test]
-    fn constructor() {
-        let c = Compactor::new();
-        assert_eq!(c.candidates.lock().unwrap().len(), 0);
-    }
-
-    #[test]
     fn add_segments() {
-        let mut c = Compactor::new();
-        let mut segmgr = SegmentManager::new(0, 1<<20, 1<<23);
+        let nseg = 8;
+        let mut index = index_ref!();
+        let mut segmgr = segmgr_ref!(0, SEGMENT_SIZE, SEGMENT_SIZE*nseg);
+        let mut c = Compactor::new(&segmgr, &index);
+        assert_eq!(c.candidates.lock().unwrap().len(), 0);
         let mut x: usize;
-        for x in 0..8 {
-            c.add( segmgr.alloc().as_ref().expect("alloc segment") );
+        for x in 0..nseg {
+            c.add( segmgr.borrow_mut()
+                   .alloc().as_ref().expect("alloc segment") );
         }
-        assert_eq!(c.candidates.lock().unwrap().len(), 8);
+        assert_eq!(c.candidates.lock().unwrap().len(), nseg);
     }
 
     /// Big beasty compaction test. TODO break down into smaller tests
@@ -178,8 +190,11 @@ mod tests {
     fn compact() {
         let mut rng = rand::thread_rng();
 
-        let mut segmgr = SegmentManager::new(0, 1<<20, 1<<23);
-        let mut seg_obj_ref = segmgr.alloc().unwrap();
+        let mut index = index_ref!();
+        let mut segmgr = segmgr_ref!(0, SEGMENT_SIZE, SEGMENT_SIZE<<3);
+        let mut c = Compactor::new(&segmgr, &index);
+
+        let mut seg_obj_ref = segmgr.borrow_mut().alloc().unwrap();
 
         // TODO export rand str generation
         // TODO clean this up (is copy/paste from segment tests)
@@ -241,11 +256,11 @@ mod tests {
                             + mem::size_of::<EntryHeader>())*nbatches
                             + mem::size_of::<SegmentHeader>();
         let nblks = (new_capacity / BLOCK_SIZE) + 1;
-        let mut seg_clean_ref = segmgr.alloc_size(nblks).unwrap();
+        let mut seg_clean_ref = segmgr.borrow_mut().alloc_size(nblks).unwrap();
         
         // move all objects whose data length < 500
         // given the above, we keep only nbatches of the first entry
-        match Compactor::compact(&seg_obj_ref,&seg_clean_ref,filter) {
+        match c.compact(&seg_obj_ref,&seg_clean_ref,filter) {
             Ok(1) => {},
             _ => panic!("compact failed"),
         }
@@ -259,11 +274,13 @@ mod tests {
             assert_eq!(entry.keylen, key_sizes[0]);
             assert_eq!(entry.datalen, value_sizes[0]);
             unsafe {
-                entry.copy_out(buf);
+                entry.get_data(buf);
                 let nchars = values[0].len();
                 let slice = from_raw_parts(buf, nchars);
                 let orig = values[0].as_bytes();
                 assert_eq!(slice, orig);
+                let key = entry.get_key();
+                assert_eq!(keys[0], key);
             }
             counter += 1;
         }

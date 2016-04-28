@@ -13,7 +13,7 @@ use std::cell::RefCell;
 //==----------------------------------------------------==//
 
 pub struct Nibble<'a> {
-    index: Index<'a>,
+    index: IndexRef<'a>,
     manager: SegmentManagerRef,
     log: Log,
 }
@@ -23,7 +23,7 @@ impl<'a> Nibble<'a> {
     pub fn new(capacity: usize) -> Self {
         let manager_ref = segmgr_ref!(0, SEGMENT_SIZE, capacity);
         Nibble {
-            index: Index::new(),
+            index: index_ref!(),
             manager: manager_ref.clone(),
             log: Log::new(manager_ref.clone()),
         }
@@ -38,17 +38,26 @@ impl<'a> Nibble<'a> {
             Ok(v) => va = v,
         }
         // 2. update reference to object
-        self.index.update(obj.getkey(), va);
+        match self.index.lock() {
+            Ok(index) => {
+                index.borrow_mut()
+                    .update(obj.getkey(), va);
+            },
+            Err(poison) => panic!("index lock poisoned"),
+        }
         Ok(1)
     }
 
     pub fn get_object(&self, key: &'a str) -> (Status,Option<Buffer>) {
-        // TODO lock the object? need to make sure it isn't relocated
-        // or deleted while we read it
         let va: usize;
-        match self.index.get(key) {
-            None => return (Err(ErrorCode::KeyNotExist),None),
-            Some(v) => va = v,
+        match self.index.lock() {
+            Ok(index) => {
+                match index.borrow().get(key) {
+                    None => return (Err(ErrorCode::KeyNotExist),None),
+                    Some(v) => va = v,
+                }
+            },
+            Err(poison) => panic!("index lock poisoned"),
         }
         let mut header: EntryHeader;
         unsafe {
@@ -68,7 +77,10 @@ impl<'a> Nibble<'a> {
 
     #[cfg(test)]
     pub fn nlive(&self) -> usize {
-        self.index.len()
+        match self.index.lock() {
+            Ok(index) => index.borrow().len(),
+            Err(poison) => panic!("index lock poisoned"),
+        }
     }
 }
 

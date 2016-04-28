@@ -6,6 +6,11 @@ use std::cell::RefCell;
 //      Index
 //==----------------------------------------------------==//
 
+// XXX XXX change the damn key type to String to avoid these stupid
+// lifetime modifiers!!
+
+pub type IndexRef<'a> = Arc<Mutex<RefCell<Index<'a>>>>;
+
 /// Index structure that allows us to retreive objects from the log.
 /// It is just a simple wrapper over whatever data structure we wish
 /// to eventually use.

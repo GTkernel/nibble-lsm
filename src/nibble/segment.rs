@@ -4,14 +4,12 @@ use memory::*;
 use compaction::*;
 
 use std::cell::RefCell;
-use std::mem::size_of;
-use std::ptr;
-use std::ptr::copy;
-use std::ptr::copy_nonoverlapping;
-use std::sync::{Arc, Mutex};
-use std::mem::transmute;
 use std::cmp;
 use std::cmp::Ordering;
+use std::mem::size_of;
+use std::ptr;
+use std::slice::from_raw_parts;
+use std::sync::{Arc, Mutex};
 
 pub const BLOCK_SIZE: usize = 1 << 16;
 pub const SEGMENT_SIZE: usize = 1 << 20;
@@ -263,6 +261,7 @@ impl Segment {
     /// TODO optimize to know when the blocks are contiguous
     /// TODO optimize for large objects: transfer whole blocks?
     /// TODO use Pointer or something to represent return address
+    /// nearly verbatim overlap with EntryReference::copy_out
     pub fn append_entry(&mut self, entry: &EntryReference) -> usize {
         assert_eq!(self.head.is_some(), true);
         assert_eq!(self.can_hold_amt(entry.len), true);
@@ -406,7 +405,7 @@ impl Segment {
         // 1. If buffer fits in remainder of block, just copy it
         if len <= remblk {
             unsafe {
-                copy_nonoverlapping(from,self.headref(),len);
+                ptr::copy_nonoverlapping(from,self.headref(),len);
             }
             incr!(self.head, len);
             if len == remblk {
@@ -423,7 +422,7 @@ impl Segment {
                 remblk = self.rem_in_block();
                 let amt = cmp::min(remblk,rem);
                 unsafe {
-                    copy_nonoverlapping(loc,self.headref(), amt);
+                    ptr::copy_nonoverlapping(loc,self.headref(), amt);
                 }
                 incr!(self.head, amt);
                 rem -= amt;
@@ -597,51 +596,72 @@ pub struct EntryReference {
     pub datalen: u32,
 }
 
+// TODO optimize for cases where the blocks are contiguous
+// copying directly, or avoid copying (provide reference to it)
 impl EntryReference {
 
-    /// Copies the data to a separate buffer.  Caller provides buffer
-    /// to copy into and ensures buffer is sufficiently large.  Blocks
-    /// are not guaranteed virtually contiguous, so we must copy the
-    /// object out pieces at a time.
-    /// TODO clean up code
-    pub unsafe fn copy_out(&self, out: *mut u8) {
-        let mut remaining = self.datalen as usize;
+    /// Copy out the key
+    pub unsafe fn get_key(&self) -> String {
+        let mut v: Vec<u8> = Vec::with_capacity(self.keylen as usize);
+        v.set_len(self.keylen as usize);
+        let mut offset = self.offset + size_of::<EntryHeader>();
+        let block  = offset / BLOCK_SIZE;
+        offset = offset % BLOCK_SIZE;
+        let mut ptr = v.as_mut_ptr();
+        self.copy_out(ptr, block, offset, self.keylen as usize);
+        match String::from_utf8(v) {
+            Ok(string) => string,
+            Err(err) => panic!("{:?}", err),
+        }
+    }
 
-        // Logical offset into block space; jump over header+key
-        let mut offset = self.offset + (self.len - remaining);
+    /// Copy out the value
+    pub unsafe fn get_data(&self, out: *mut u8) {
+        let mut offset = self.offset + self.len
+                            - self.datalen as usize;
+        let block  = offset / BLOCK_SIZE;
+        offset = offset % BLOCK_SIZE;
+        self.copy_out(out, block, offset, self.datalen as usize)
+    }
+
+    //
+    // --- Private methods ---
+    //
+
+    /// TODO clean up code
+    /// nearly verbatim overlap with Segment::append_entry
+    unsafe fn copy_out(&self, out: *mut u8,
+                       block: usize, offset: usize,
+                       remaining: usize) {
+        // reassign as mutable
+        let mut block = block;
+        let mut offset = offset;
+        let mut remaining = remaining;
+
+        let mut src: *const u8;
+        let mut dst: *mut u8;
 
         // Logical offset into new buffer
         let mut poffset: usize = 0;
 
-        // Copy head in first block.
-        // ----+-------+----
-        //     |   dddd|ddd...
-        // ----+-------+----
-        //         ^--^ amt
-        let boffset = offset % BLOCK_SIZE;
-        let bidx = offset / BLOCK_SIZE;
-        let amt = cmp::min(BLOCK_SIZE - boffset, remaining);
-        let src = (self.blocks[bidx].addr + boffset) as *const u8;
-        let to = (out as usize + poffset) as *mut u8;
-        copy_nonoverlapping(src, to, amt);
+        let mut va = self.blocks[block].addr + offset;
+        let mut amt = cmp::min(BLOCK_SIZE - offset, remaining);
+        src = va as *const u8;
+        dst = ((out as usize) + poffset) as *mut u8;
+        ptr::copy_nonoverlapping(src, dst, amt);
         remaining -= amt;
         poffset += amt;
-        offset += amt;
+        block += 1;
 
-        // Copy remaining, if any. Always starts at block boundary.
-        // ----+-------+-------+-------+
-        //   dd|ddddddd|ddddddd|ddd    |
-        // ----+-------+-------+-------+
-        //      ^ start, copying <= |block| at a time
         while remaining > 0 {
-            let amt = cmp::min(BLOCK_SIZE, remaining);
-            let bidx = offset / BLOCK_SIZE;
-            let src = (self.blocks[bidx].addr) as *const u8;
-            let to = (out as usize + poffset) as *mut u8;
-            copy_nonoverlapping(src, to, amt);
+            va = self.blocks[block].addr;
+            amt = cmp::min(BLOCK_SIZE, remaining);
+            src = va as *const u8;
+            dst = ((out as usize) + poffset) as *mut u8;
+            ptr::copy_nonoverlapping(src, dst, amt);
             remaining -= amt;
             poffset += amt;
-            offset += amt;
+            block += 1;
         }
     }
 }
@@ -658,7 +678,8 @@ pub struct SegmentManager {
     allocator: BlockAllocator,
     segments: Vec<Option<SegmentRef>>,
     free_slots: Vec<u32>,
-    //compactor: CompactorRef,
+    segments_newly_closed: Vec<SegmentRef>,
+    segments_to_reclaim: Vec<SegmentRef>,
 }
 
 impl SegmentManager {
@@ -682,7 +703,8 @@ impl SegmentManager {
             allocator: b,
             segments: v,
             free_slots: s,
-            //compactor: compref!(),
+            segments_newly_closed: Vec::new(),
+            segments_to_reclaim: Vec::new(),
         }
     }
 
@@ -726,12 +748,19 @@ impl SegmentManager {
         unimplemented!();
     }
 
-    //    pub fn newly_closed(&mut self, seg: &SegmentRef) {
-    //        match self.compactor.lock() {
-    //            Ok(ref mut 
-    //        }
-    //        self.compactor.add(seg);
-    //    }
+    /// The compaction code pushes segments it cleans to us. We use
+    /// epochs to know when no operations have references into a
+    /// segment, before releasing it back to the block pool.
+    pub fn was_cleaned(&mut self, seg: &SegmentRef) {
+        self.segments_to_reclaim.push(seg.clone());
+    }
+
+    /// Log heads pass segments here when it rolls over. Compaction
+    /// threads will periodically query this queue for new segments to
+    /// add to its candidate list.
+    pub fn newly_closed(&mut self, seg: &SegmentRef) {
+        self.segments_newly_closed.push(seg.clone());
+    }
 
     //
     // --- Internal methods used for testing only ---
@@ -774,10 +803,8 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::mem::size_of;
-    use std::mem::transmute;
     use std::ops;
-    use std::ptr::copy;
-    use std::ptr::copy_nonoverlapping;
+    use std::ptr;
     use std::rc::Rc;
     use std::slice::from_raw_parts;
     use std::sync::Arc;
@@ -962,7 +989,7 @@ mod tests {
 
             // compare the values
             unsafe {
-                entry.copy_out(buf);
+                entry.get_data(buf);
                 let nchars = values[idx].len();
                 let slice = from_raw_parts(buf, nchars);
                 let orig = values[idx].as_bytes();

@@ -138,10 +138,8 @@ impl LogHead {
             },
             Some(segref) => {
                 segref.borrow_mut().close();
-                // TODO this line might change to just move the
-                // segment to a small closed segment pool
-                //self.manager.borrow_mut().newly_closed(&segref);
-                // TODO add segment to 'closed' list
+                // TODO move to log head closed seg pool?
+                self.manager.borrow_mut().newly_closed(&segref);
                 self.segment = self.manager.borrow_mut().alloc();
                 match self.segment {
                     None => Err(ErrorCode::OutOfMemory),
