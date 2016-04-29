@@ -41,8 +41,8 @@
 // TODO compaction checks this list, adds to candidates set
 // TODO compaction gives cleaned segments to segment manager
 // TODO segment manager adds cleaned segments to reclamation list
-// TODO segment manager checks epoch to release segments - give blocks back to block allocator and
-// destruct segment
+// TODO segment manager checks epoch to release segments - give blocks
+// back to block allocator and destruct segment
 
 // Cleaner must ask segment manager for any newly closed segments when
 // it performs cleaning. For each, it computes the score, then inserts
@@ -56,6 +56,7 @@ use index::*;
 use std::cell::RefCell;
 use std::collections::{BinaryHeap,LinkedList};
 use std::sync::{Arc,Mutex};
+use std::thread;
 
 //==----------------------------------------------------==//
 //      Compactor types
@@ -71,7 +72,7 @@ pub type CompactorRef = Arc<Mutex<RefCell< Compactor >>>;
 
 pub struct Compactor {
     // candidates: BinaryHeap<SegmentRef>,
-    candidates: Mutex<LinkedList<SegmentRef>>,
+    candidates: Mutex<Vec<SegmentRef>>,
     manager: SegmentManagerRef,
     index: IndexRef,
 }
@@ -88,11 +89,10 @@ impl Compactor {
     pub fn new(manager_: &SegmentManagerRef,
                index_: &IndexRef) -> Self {
         let mut c = Compactor {
-            candidates: Mutex::new(LinkedList::new()),
+            candidates: Mutex::new(Vec::new()),
             manager: manager_.clone(),
             index: index_.clone(),
         };
-        //c.spawn();
         c
     }
 
@@ -102,7 +102,7 @@ impl Compactor {
     /// instances (else this is a bottleneck).
     pub fn add(&mut self, seg: &SegmentRef) {
         match self.candidates.lock() {
-            Ok(ref mut list) => list.push_back(seg.clone()),
+            Ok(ref mut list) => list.push(seg.clone()),
             Err(pe) => panic!("Compactor lock poisoned"),
         }
     }
@@ -135,17 +135,44 @@ impl Compactor {
             },
             Err(poison) => panic!("index lock poisoned"),
         }
-
         status
+    }
+
+    /// Select a segment, grab a clean one, compact. Remove cleaned
+    /// segment from candidates and notify segment manager it must be
+    /// reclaimed. 
+    pub fn try_compact(&mut self) {
+        unimplemented!();
+    }
+
+    /// Look in segment manager for newly closed segments. If any,
+    /// move to our candidates list. Returns number of segments moved.
+    pub fn check_new(&mut self) -> usize {
+        // TODO if only one thread accesses this list, no need for
+        // lock
+        let mut n: usize = 0;
+        match self.candidates.lock() {
+            Ok(ref mut cand) => {
+                match self.manager.lock() {
+                    Ok(mang) => {
+                        let mut m = mang.borrow_mut();
+                        n = m.grab_closed(cand);
+                    },
+                    Err(_) => panic!("lock poison"),
+                }
+            },
+            Err(_) => panic!("lock poison"),
+        }
+        n
     }
 
     //
     // --- Private methods ---
     //
 
-    fn spawn(&mut self) -> Status {
-        unimplemented!();
-    }
+    //
+    // --- For unit tests ---
+    //
 }
 
 //==----------------------------------------------------==//
@@ -166,6 +193,7 @@ mod tests {
     use segment::*;
     use thelog::*;
     use index::*;
+    use common::*;
 
     use rand;
     use rand::Rng;
@@ -178,23 +206,33 @@ mod tests {
         let mut c = Compactor::new(&segmgr, &index);
         assert_eq!(c.candidates.lock().unwrap().len(), 0);
         let mut x: usize;
-        for x in 0..nseg {
-            c.add( segmgr.borrow_mut()
-                   .alloc().as_ref().expect("alloc segment") );
+        if let Ok(manager) = segmgr.lock() {
+            for x in 0..nseg {
+                c.add( manager.borrow_mut()
+                       .alloc().as_ref()
+                       .expect("alloc segment")
+                     );
+            }
         }
         assert_eq!(c.candidates.lock().unwrap().len(), nseg);
     }
 
     /// Big beasty compaction test. TODO break down into smaller tests
     #[test]
-    fn compact() {
+    fn compact_two() {
         let mut rng = rand::thread_rng();
 
         let mut index = index_ref!();
         let mut segmgr = segmgr_ref!(0, SEGMENT_SIZE, SEGMENT_SIZE<<3);
         let mut c = Compactor::new(&segmgr, &index);
 
-        let mut seg_obj_ref = segmgr.borrow_mut().alloc().unwrap();
+        let mut seg_obj_ref;
+        match segmgr.lock() {
+            Ok(mgr) => {
+                seg_obj_ref = mgr.borrow_mut().alloc().unwrap();
+            },
+            Err(_) => panic!("mgr lock poison"),
+        }
 
         // TODO export rand str generation
         // TODO clean this up (is copy/paste from segment tests)
@@ -256,8 +294,14 @@ mod tests {
                             + mem::size_of::<EntryHeader>())*nbatches
                             + mem::size_of::<SegmentHeader>();
         let nblks = (new_capacity / BLOCK_SIZE) + 1;
-        let mut seg_clean_ref = segmgr.borrow_mut()
-            .alloc_size(nblks).unwrap();
+        let mut seg_clean_ref;
+        match segmgr.lock() {
+            Ok(mgr) => {
+                seg_clean_ref = mgr.borrow_mut()
+                    .alloc_size(nblks).unwrap();
+            },
+            Err(_) => panic!("manager lock poison"),
+        }
         
         // move all objects whose data length < 500
         // given the above, we keep only nbatches of the first entry
@@ -304,5 +348,45 @@ mod tests {
         unsafe { deallocate::<u8>(buf, total as usize); }
     }
 
-    // TODO add objects to some segments
+    #[test]
+    fn check_new() {
+        let mut index = index_ref!();
+        let nseg = 4;
+        let mut segmgr = segmgr_ref!(0, SEGMENT_SIZE,
+                                     nseg*SEGMENT_SIZE);
+        let mut c = Compactor::new(&segmgr, &index);
+        let mut log = Log::new(segmgr);
+
+        let mut key = String::from("laskdjflskdjflskjdflskdf");
+        let mut value = String::from("sldfkjslkfjsldkjfksjdlfjsdfjslkd");
+
+        // fill up the log
+        {
+            let obj = ObjDesc::new(key.as_str(),
+                            Some(value.as_ptr()),
+                            value.len() as u32);
+            loop {
+                match log.append(&obj) {
+                    Err(code) => match code {
+                        ErrorCode::OutOfMemory => break,
+                        _ => panic!("log append {:?}", code),
+                    },
+                    _ => {},
+                }
+            }
+        }
+
+        let mut n = c.check_new();
+        assert_eq!(n, nseg);
+
+        match c.candidates.lock() {
+            Ok(cand) => n = cand.len(),
+            Err(_) => panic!("poison lock"),
+        }
+        assert_eq!(n, nseg);
+    }
+
+    #[test]
+    fn try_compact() {
+    }
 }

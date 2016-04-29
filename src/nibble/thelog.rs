@@ -1,13 +1,13 @@
 use common::*;
 use segment::*;
 
-use std::mem::transmute;
+use std::cell::RefCell;
 use std::mem::size_of;
+use std::mem::transmute;
 use std::ptr;
 use std::ptr::copy;
 use std::ptr::copy_nonoverlapping;
-use std::sync::Arc;
-use std::cell::RefCell;
+use std::sync::{Arc,Mutex};
 
 //==----------------------------------------------------==//
 //      Entry header
@@ -126,25 +126,42 @@ impl LogHead {
     // --- Private methods ---
     //
 
+    /// Replace the head segment.
+    fn replace(&mut self) -> Status {
+        match self.manager.lock() {
+            Ok(manager) => {
+                self.segment = manager.borrow_mut().alloc();
+            },
+            Err(poison) => panic!("segmgr lock poison"),
+        }
+        match self.segment {
+            None => Err(ErrorCode::OutOfMemory),
+            _ => Ok(1),
+        }
+    }
+
+    /// Upon closing a head segment, add reference to the recently
+    /// closed list for the compaction code to pick up.
+    /// TODO move to local head-specific pool to avoid locking
+    fn add_closed(&mut self) {
+        if let Some(segref) = self.segment.clone() {
+            match self.manager.lock() {
+                Ok(manager) => {
+                    manager.borrow_mut().add_closed(&segref);
+                },
+                Err(poison) => panic!("segmgr lock poison"),
+            }
+        }
+    }
+
     /// Roll head. Close current and allocate new.
     fn roll(&mut self) -> Status {
         match self.segment.clone() {
-            None => {
-                self.segment = self.manager.borrow_mut().alloc();
-                match self.segment {
-                    None => Err(ErrorCode::OutOfMemory),
-                    _ => Ok(1),
-                }
-            },
+            None => self.replace(),
             Some(segref) => {
                 segref.borrow_mut().close();
-                // TODO move to log head closed seg pool?
-                self.manager.borrow_mut().newly_closed(&segref);
-                self.segment = self.manager.borrow_mut().alloc();
-                match self.segment {
-                    None => Err(ErrorCode::OutOfMemory),
-                    _ => Ok(1),
-                }
+                self.add_closed();
+                self.replace()
             },
         }
     }
@@ -201,7 +218,7 @@ mod tests {
     use std::mem::transmute;
     use std::ptr;
     use std::rc::Rc;
-    use std::sync::Arc;
+    use std::sync::{Arc,Mutex};
 
     use test::Bencher;
     use segment::*;

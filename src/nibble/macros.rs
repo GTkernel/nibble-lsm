@@ -74,9 +74,9 @@ macro_rules! seg_ref_empty {
 #[macro_export]
 macro_rules! segmgr_ref {
     ( $id:expr, $segsz:expr, $bytes:expr ) => {
-        Arc::new( RefCell::new(
+        Arc::new( Mutex::new( RefCell::new(
                 SegmentManager::new( $id, $segsz, $bytes)
-                ))
+                )))
     }
 }
 

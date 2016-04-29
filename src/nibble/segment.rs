@@ -83,13 +83,6 @@ impl BlockAllocator {
 }
 
 //==----------------------------------------------------==//
-//      Segment types
-//==----------------------------------------------------==//
-
-pub type SegmentRef = Arc<RefCell<Segment>>;
-pub type SegmentManagerRef = Arc<RefCell<SegmentManager>>;
-
-//==----------------------------------------------------==//
 //      Object descriptor
 //==----------------------------------------------------==//
 
@@ -159,6 +152,9 @@ impl SegmentHeader {
 //==----------------------------------------------------==//
 //      Segment
 //==----------------------------------------------------==//
+
+pub type SegmentRef = Arc<RefCell<Segment>>;
+pub type SegmentManagerRef = Arc<Mutex<RefCell<SegmentManager>>>;
 
 // TODO need metrics for computing compaction weights
 // TODO head,len,rem as atomics
@@ -636,8 +632,9 @@ pub struct SegmentManager {
     allocator: BlockAllocator,
     segments: Vec<Option<SegmentRef>>,
     free_slots: Vec<u32>,
-    segments_newly_closed: Vec<SegmentRef>,
-    segments_to_reclaim: Vec<SegmentRef>,
+    // TODO lock these
+    closed: Vec<SegmentRef>,
+    reclaim: Vec<SegmentRef>,
 }
 
 impl SegmentManager {
@@ -661,8 +658,8 @@ impl SegmentManager {
             allocator: b,
             segments: v,
             free_slots: s,
-            segments_newly_closed: Vec::new(),
-            segments_to_reclaim: Vec::new(),
+            closed: Vec::new(),
+            reclaim: Vec::new(),
         }
     }
 
@@ -709,15 +706,22 @@ impl SegmentManager {
     /// The compaction code pushes segments it cleans to us. We use
     /// epochs to know when no operations have references into a
     /// segment, before releasing it back to the block pool.
-    pub fn was_cleaned(&mut self, seg: &SegmentRef) {
-        self.segments_to_reclaim.push(seg.clone());
+    pub fn add_cleaned(&mut self, seg: &SegmentRef) {
+        self.reclaim.push(seg.clone());
     }
 
     /// Log heads pass segments here when it rolls over. Compaction
     /// threads will periodically query this queue for new segments to
     /// add to its candidate list.
-    pub fn newly_closed(&mut self, seg: &SegmentRef) {
-        self.segments_newly_closed.push(seg.clone());
+    pub fn add_closed(&mut self, seg: &SegmentRef) {
+        self.closed.push(seg.clone());
+    }
+
+    pub fn grab_closed(&mut self,
+                       to: &mut Vec<SegmentRef>) -> usize {
+        let n: usize = self.closed.len();
+        to.append(&mut self.closed);
+        n
     }
 
     //
@@ -765,7 +769,7 @@ mod tests {
     use std::ptr;
     use std::rc::Rc;
     use std::slice::from_raw_parts;
-    use std::sync::Arc;
+    use std::sync::{Arc,Mutex};
 
     use test::Bencher;
 
@@ -869,7 +873,14 @@ mod tests {
                 },
             }
         }
-        assert_eq!(manager.borrow().test_scan_objects(), count);
+        // FIXME rust complains when we match on the expr directly
+        let l = manager.lock();
+        match l {
+            Ok(mgr) =>
+                assert_eq!(mgr.borrow()
+                           .test_scan_objects(), count),
+            Err(poison) => panic!("manager lock poison"),
+        }
     }
 
     // TODO entry reference types
