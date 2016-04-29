@@ -334,52 +334,6 @@ impl Segment {
         }
     }
 
-    // TODO should have test code that scrapes the segment to find
-    // actual entries
-//    /// Count entries written to segment (ignoring index). mainly for
-//    /// testing.
-//    #[cfg(test)]
-//    pub fn scan_entries(&self) -> usize {
-//        let mut count: usize = 0;
-//        let mut header = EntryHeader::empty();
-//        let mut offset: usize = 0; // offset into segment (logical)
-//        let mut curblk: usize = 0; // Block that offset refers to
-//        // Manually cross block boundaries searching for entries.
-//        while offset < self.len {
-//            assert!(curblk < self.blocks.len());
-//            let base: usize = self.blocks[curblk].addr;
-//            let addr: usize = base + (offset % BLOCK_SIZE);
-//
-//            let rem = BLOCK_SIZE - (offset % BLOCK_SIZE); // remaining in block
-//
-//            // If header is split across block boundaries
-//            if rem < size_of::<EntryHeader>() {
-//                // Can't be last block if header is partial
-//                assert!(curblk != self.blocks.len()-1);
-//                unsafe {
-//                    let mut from = addr;
-//                    let mut to: usize = transmute(&header);
-//                    copy(from as *const u8, to as *mut u8, rem);
-//                    from = self.blocks[curblk+1].addr; // start at next block
-//                    to += rem;
-//                    copy(from as *const u8, to as *mut u8,
-//                         size_of::<EntryHeader>() - rem);
-//                }
-//            }
-//            // Header is fully contained in the block
-//            else {
-//                unsafe { header.read(addr); }
-//            }
-//
-//            count += 1;
-//
-//            // Determine next location to jump to
-//            offset += header.len();
-//            curblk = offset / BLOCK_SIZE;
-//        }
-//        count
-//    }
-
     pub fn can_hold_amt(&self, len: usize) -> bool {
         self.rem >= len
     }
