@@ -188,6 +188,7 @@ impl Log {
 
     /// Append an object to the log. If successful, returns the
     /// virtual address within the log inside Ok().
+    /// FIXME check key is valid UTF-8
     pub fn append(&mut self, buf: &ObjDesc) -> Status {
         // 1. determine log head to use
         let head = &self.head;

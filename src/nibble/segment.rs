@@ -554,6 +554,10 @@ pub struct EntryReference {
 // copying directly, or avoid copying (provide reference to it)
 impl EntryReference {
 
+    pub fn get_loc(&self) -> usize {
+        self.offset + self.blocks[0].addr
+    }
+
     /// Copy out the key
     pub unsafe fn get_key(&self) -> String {
         let mut v: Vec<u8> = Vec::with_capacity(self.keylen as usize);
@@ -621,6 +625,12 @@ impl EntryReference {
 }
 
 //==----------------------------------------------------==//
+//      Segment usage table
+//==----------------------------------------------------==//
+
+// TODO
+
+//==----------------------------------------------------==//
 //      Segment manager
 //==----------------------------------------------------==//
 
@@ -637,6 +647,7 @@ pub struct SegmentManager {
     reclaim: Vec<SegmentRef>,
 }
 
+// TODO reclaim segments function and thread
 impl SegmentManager {
     // TODO write an iterator; update unit test below
 
@@ -724,9 +735,24 @@ impl SegmentManager {
         n
     }
 
+    #[cfg(IGNORE)] // TODO
+    pub fn liveness_fn(&self) -> Box<Fn> {
+        unimplemented!();
+    }
+
     //
     // --- Internal methods used for testing only ---
     //
+
+    #[cfg(test)]
+    pub fn n_closed(&self) -> usize {
+        self.closed.len()
+    }
+
+    #[cfg(test)]
+    pub fn n_reclaim(&self) -> usize {
+        self.reclaim.len()
+    }
 
     #[cfg(test)]
     pub fn test_all_segrefs_allocated(&mut self) -> bool {

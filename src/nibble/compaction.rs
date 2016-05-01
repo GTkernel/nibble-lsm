@@ -37,12 +37,15 @@
 //! against race conditions where edit cannot happen to segment behind
 //! progress of cleaner.
 
-// TODO segment manager add newly closed seg to internal list
-// TODO compaction checks this list, adds to candidates set
-// TODO compaction gives cleaned segments to segment manager
-// TODO segment manager adds cleaned segments to reclamation list
+// DONE segment manager add newly closed seg to internal list
+// DONE compaction checks this list, adds to candidates set
+// DONE compaction gives cleaned segments to segment manager
+// DONE segment manager adds cleaned segments to reclamation list
 // TODO segment manager checks epoch to release segments - give blocks
 // back to block allocator and destruct segment
+// TODO add statistics to segments, segment manager, nibble, etc.
+// TODO segment usage table to assist compactor
+// TODO implement reclamation pathway (register new ops, use epoch)
 
 // Cleaner must ask segment manager for any newly closed segments when
 // it performs cleaning. For each, it computes the score, then inserts
@@ -71,6 +74,7 @@ pub type CompactorRef = Arc<Mutex<RefCell< Compactor >>>;
 // TODO Keep segments ordered by their usefulness for compaction.
 
 pub struct Compactor {
+    // TODO approximate sorting?
     // candidates: BinaryHeap<SegmentRef>,
     candidates: Mutex<Vec<SegmentRef>>,
     manager: SegmentManagerRef,
@@ -102,7 +106,7 @@ impl Compactor {
     /// instances (else this is a bottleneck).
     pub fn add(&mut self, seg: &SegmentRef) {
         match self.candidates.lock() {
-            Ok(ref mut list) => list.push(seg.clone()),
+            Ok(ref mut cand) => cand.push(seg.clone()),
             Err(pe) => panic!("Compactor lock poisoned"),
         }
     }
@@ -115,7 +119,7 @@ impl Compactor {
     // segment then added back to the log.
 
     pub fn compact<liveFn>(&mut self, dirty: &SegmentRef,
-               new: &SegmentRef, isLive: liveFn) -> Status
+               new_: &SegmentRef, isLive: liveFn) -> Status
         where liveFn : Fn(&EntryReference) -> bool
     {
         let mut status: Status = Ok(1);
@@ -124,10 +128,11 @@ impl Compactor {
         match self.index.lock() {
             Ok(index_) => {
                 let mut index = index_.borrow_mut();
+                let mut new = new_.borrow_mut();
                 for entry in dirty.borrow_mut().into_iter() {
                     if isLive(&entry) {
                         let key: String;
-                        let va = new.borrow_mut().append_entry(&entry);
+                        let va = new.append_entry(&entry);
                         unsafe { key = entry.get_key(); }
                         index.update(&key, va);
                     }
@@ -138,11 +143,99 @@ impl Compactor {
         status
     }
 
+    /// Pick a next candidate segment and remove from set.
+    pub fn next_candidate(&mut self) -> Option<SegmentRef> {
+        let mut segref: Option<SegmentRef> = None;
+        match self.candidates.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(mut cand) => {
+                match cand.pop() {
+                    None => {},
+                    Some(seg) => segref = Some(seg.clone()),
+                }
+            },
+        }
+        segref
+    }
+
     /// Select a segment, grab a clean one, compact. Remove cleaned
     /// segment from candidates and notify segment manager it must be
     /// reclaimed. 
     pub fn try_compact(&mut self) {
-        unimplemented!();
+
+        // pick a segment
+        let mut segref = match self.next_candidate() {
+            Some(seg) => seg,
+            None => return,
+        };
+
+        // determine live amount for new segment
+        // XXX XXX need segment summary table XXX XXX
+        let mut newlen: usize = 0;
+        // iterate segment, check entry is live in index, if it
+        // matches into our segment, tally newlen
+        // TODO use std::iter::Inspect trait?
+        match self.index.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(index_) => {
+                let index = index_.borrow_mut();
+                for entry in segref.borrow_mut().into_iter() {
+                    let key = unsafe { entry.get_key() };
+                    match index.get(key.as_str()) {
+                        None => continue,
+                        Some(loc) => {
+                            if loc == entry.get_loc() {
+                                newlen += entry.len;
+                            }
+                        },
+                    } // match index
+                } // segment iter
+            },
+        }
+        debug!("newlen {}", newlen);
+
+        // newlen may be stale by the time we start cleaning (it's ok)
+        // if significant, we may TODO free more blocks after
+        // compaction
+
+        if newlen > 0  {
+            // allocate new segment
+            let opt: Option<SegmentRef> = 
+                match self.manager.lock() {
+                    Err(_) => panic!("lock poison"),
+                    Ok(mang) => {
+                        let mut manager = mang.borrow_mut();
+                        let nblks = (newlen - 1) / BLOCK_SIZE + 1;
+                        debug!("nblks {}", nblks);
+                        manager.alloc_size(nblks)
+                    },
+                };
+
+            // unwrap it
+            let mut newseg: SegmentRef =
+                match opt {
+                    None => panic!("OOM"),
+                    Some(seg) => seg,
+                };
+
+            // do the work
+            match self.compact(&segref, &newseg, |_| false) {
+                Ok(1) => {},
+                _ => panic!("compact failed"),
+            }
+
+            // monitor the new segment, too
+            match self.candidates.lock() {
+                Err(_) => panic!("lock poison"),
+                Ok(ref mut cand) => cand.push(newseg.clone()),
+            }
+        }
+
+        // tell manager we released this segment's memory
+        match self.manager.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(mang) => mang.borrow_mut().add_cleaned(&segref),
+        }
     }
 
     /// Look in segment manager for newly closed segments. If any,
@@ -152,23 +245,25 @@ impl Compactor {
         // lock
         let mut n: usize = 0;
         match self.candidates.lock() {
+            Err(_) => panic!("lock poison"),
             Ok(ref mut cand) => {
                 match self.manager.lock() {
+                    Err(_) => panic!("lock poison"),
                     Ok(mang) => {
                         let mut m = mang.borrow_mut();
                         n = m.grab_closed(cand);
                     },
-                    Err(_) => panic!("lock poison"),
                 }
             },
-            Err(_) => panic!("lock poison"),
-        }
+        } // candidates lock
         n
     }
 
     //
     // --- Private methods ---
     //
+
+    // TODO background thread: check_new, try_compact, etc.
 
     //
     // --- For unit tests ---
@@ -349,44 +444,72 @@ mod tests {
     }
 
     #[test]
-    fn check_new() {
+    fn try_compact() {
         let mut index = index_ref!();
-        let nseg = 4;
+        let nseg = 32; // multiple of 4 (for this test)
         let mut segmgr = segmgr_ref!(0, SEGMENT_SIZE,
                                      nseg*SEGMENT_SIZE);
         let mut c = Compactor::new(&segmgr, &index);
-        let mut log = Log::new(segmgr);
+        let mut log = Log::new(segmgr.clone());
 
         let mut key = String::from("laskdjflskdjflskjdflskdf");
         let mut value = String::from("sldfkjslkfjsldkjfksjdlfjsdfjslkd");
 
-        // fill up the log
+        // fill half the number of segments
         {
             let obj = ObjDesc::new(key.as_str(),
                             Some(value.as_ptr()),
                             value.len() as u32);
+            let size = obj.len_with_header();
+            let bytes_needed = (nseg/2) * SEGMENT_SIZE;
+            let mut many = 0;
             loop {
                 match log.append(&obj) {
                     Err(code) => match code {
-                        ErrorCode::OutOfMemory => break,
+                        ErrorCode::OutOfMemory => 
+                            panic!("ran out of memory?"),
                         _ => panic!("log append {:?}", code),
                     },
                     _ => {},
                 }
+                many += size;
+                if many >= bytes_needed {
+                    break;
+                }
             }
         }
 
+        // check segments move properly
+        match segmgr.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(mang) => 
+                assert_eq!(mang.borrow().n_closed(), nseg/2),
+        };
+
+        // move them
         let mut n = c.check_new();
-        assert_eq!(n, nseg);
+        assert_eq!(n, nseg/2);
 
         match c.candidates.lock() {
             Ok(cand) => n = cand.len(),
             Err(_) => panic!("poison lock"),
         }
-        assert_eq!(n, nseg);
-    }
+        assert_eq!(n, nseg/2);
 
-    #[test]
-    fn try_compact() {
-    }
+        // manually engage compaction
+        let ncompact = nseg/4;
+        for i in 0..ncompact {
+            c.try_compact();
+        }
+
+        // check manager has received a few segments to reclaim
+        match segmgr.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(mang) =>  {
+                assert_eq!(mang.borrow().n_closed(), 0);
+                assert_eq!(mang.borrow().n_reclaim(), ncompact);
+            },
+        };
+    } // try_compact
+
 }
