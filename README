@@ -20,3 +20,16 @@ impl can be split across multple files
 might be good to put test-enabled code in separate files
 e.g., segment.rs segment_test.rs
 or move them to tests/ entirely
+
+doc comments PRECEDE the item they refer to
+struct Type {
+    var: usize, /// comment actually for var2!
+    var2: usize,
+}
+should be
+struct Type {
+    /// var is cool
+    var: usize,
+    /// var2 is cooler
+    var2: usize,
+}
