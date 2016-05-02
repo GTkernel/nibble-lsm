@@ -7,11 +7,12 @@ use compaction::*;
 
 use std::cell::RefCell;
 use std::cmp;
-use std::cmp::Ordering;
 use std::mem::size_of;
 use std::ptr;
 use std::slice::from_raw_parts;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic;
+use std::sync::atomic::AtomicUsize;
 
 pub const BLOCK_SIZE: usize = 1 << 16;
 pub const SEGMENT_SIZE: usize = 1 << 20;
@@ -625,10 +626,70 @@ impl EntryReference {
 }
 
 //==----------------------------------------------------==//
-//      Segment usage table
+//      Cleaning and reclamation support
 //==----------------------------------------------------==//
 
-// TODO
+// TODO static AtomicUsize as global epoch
+
+pub struct SegmentUsage {
+    epoch: AtomicUsize,
+    live:  AtomicUsize,
+}
+
+impl SegmentUsage {
+
+    pub fn new() -> Self {
+        SegmentUsage {
+            epoch: AtomicUsize::new(0),
+            live: AtomicUsize::new(0),
+        }
+    }
+}
+
+pub type EpochTableRef = Arc<EpochTable>;
+
+pub struct EpochTable {
+    /// shares index with SegmentManager::segments
+    table: Vec<SegmentUsage>,
+}
+
+impl EpochTable {
+
+    pub fn new(slots: usize) -> Self {
+        let mut v: Vec<SegmentUsage> = Vec::with_capacity(slots);
+        for _ in 0..slots {
+            v.push(SegmentUsage::new());
+        }
+        EpochTable { table: v, }
+    }
+
+    pub fn get_live(&self, index: usize) -> usize {
+        self.table[index].live.load(atomic::Ordering::SeqCst)
+    }
+
+    pub fn get_epoch(&self, index: usize) -> usize {
+        self.table[index].epoch.load(atomic::Ordering::SeqCst)
+    }
+
+    pub fn set_live(&self, index: usize, value: usize) {
+        self.table[index].live.store(value, atomic::Ordering::SeqCst)
+    }
+
+    pub fn set_epoch(&self, index: usize, value: usize) {
+        self.table[index].epoch.store(value, atomic::Ordering::SeqCst)
+    }
+
+    pub fn incr_live(&self, index: usize) -> usize {
+        self.table[index].live.fetch_add(1, atomic::Ordering::SeqCst)
+    }
+
+    pub fn incr_epoch(&self, index: usize) -> usize {
+        self.table[index].epoch.fetch_add(1, atomic::Ordering::SeqCst)
+    }
+}
+
+// TODO set of pending ops
+// use VecDeque
 
 //==----------------------------------------------------==//
 //      Segment manager
@@ -641,6 +702,7 @@ pub struct SegmentManager {
     segment_size: usize,
     allocator: BlockAllocator,
     segments: Vec<Option<SegmentRef>>,
+    epochs: EpochTableRef,
     free_slots: Vec<u32>,
     // TODO lock these
     closed: Vec<SegmentRef>,
@@ -654,21 +716,22 @@ impl SegmentManager {
     pub fn new(id: usize, segsz: usize, len: usize) -> Self {
         let b = BlockAllocator::new(BLOCK_SIZE, len);
         let num = len / segsz;
-        let mut v: Vec<Option<SegmentRef>> = Vec::new();
-        for i in 0..num {
-            v.push(None);
+        let mut segments: Vec<Option<SegmentRef>> = Vec::with_capacity(num);
+        for _ in 0..num {
+            segments.push(None);
         }
-        let mut s: Vec<u32> = vec![0; num];
+        let mut free_slots: Vec<u32> = vec![0; num];
         for i in 0..num {
-            s[i] = i as u32;
+            free_slots[i] = i as u32;
         }
         SegmentManager {
             id: id, size: len,
             next_seg_id: 0,
             segment_size: segsz,
             allocator: b,
-            segments: v,
-            free_slots: s,
+            segments: segments,
+            epochs: Arc::new(EpochTable::new(num)),
+            free_slots: free_slots,
             closed: Vec::new(),
             reclaim: Vec::new(),
         }
@@ -735,9 +798,8 @@ impl SegmentManager {
         n
     }
 
-    #[cfg(IGNORE)] // TODO
-    pub fn liveness_fn(&self) -> Box<Fn> {
-        unimplemented!();
+    pub fn epochs(&self) -> EpochTableRef {
+        self.epochs.clone()
     }
 
     //
