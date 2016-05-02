@@ -53,9 +53,9 @@ macro_rules! compref {
 /// Instantiate new Segment as a SegmentRef
 #[macro_export]
 macro_rules! seg_ref {
-    ( $id:expr, $blocks:expr ) => {
+    ( $id:expr, $slot:expr, $blocks:expr ) => {
         Arc::new( RefCell::new(
-                Segment::new($id, $blocks)
+                Segment::new($id, $slot, $blocks)
                 ))
     }
 }

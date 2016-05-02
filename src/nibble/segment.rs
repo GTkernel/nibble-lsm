@@ -161,6 +161,7 @@ pub type SegmentManagerRef = Arc<Mutex<RefCell<SegmentManager>>>;
 // TODO head,len,rem as atomics
 pub struct Segment {
     id: usize,
+    slot: usize, /// index into segment table TODO add unit test?
     closed: bool,
     head: Option<usize>, /// Virtual address of head TODO atomic
     len: usize, /// Total capacity TODO atomic
@@ -181,7 +182,7 @@ pub struct Segment {
 impl Segment {
 
     // TODO make blocks a ref
-    pub fn new(id: usize, blocks: BlockRefPool) -> Self {
+    pub fn new(id: usize, slot: usize, blocks: BlockRefPool) -> Self {
         let mut len: usize = 0;
         assert!(blocks.len() > 0);
         for b in blocks.iter() {
@@ -194,7 +195,7 @@ impl Segment {
         let header = SegmentHeader::new(0);
         unsafe { ptr::write(start as *mut SegmentHeader, header); }
         Segment {
-            id: id, closed: false,
+            id: id, slot: slot, closed: false,
             head: Some(start + SegmentHeader::len()),
             len: len, rem: len - SegmentHeader::len(),
             nobj: 0, curblk: Some(blk),
@@ -297,6 +298,10 @@ impl Segment {
 
     pub fn nobjects(&self) -> usize {
         self.nobj
+    }
+
+    pub fn slot(&self) -> usize {
+        self.slot
     }
 
     /// Increment values in header by specified amount
@@ -761,6 +766,7 @@ impl SegmentManager {
             };
             self.next_seg_id += 1;
             self.segments[slot] = Some(seg_ref!(self.next_seg_id,
+                                                slot,
                                                 blocks.unwrap()));
             self.segments[slot].clone()
         }
@@ -911,7 +917,8 @@ mod tests {
             opt => set = opt.unwrap(),
         }
         let id = 42;
-        let seg = Segment::new(id, set);
+        let slot = 0;
+        let seg = Segment::new(id, slot, set);
         assert_eq!(seg.closed, false);
         assert_eq!(seg.head.is_some(), true);
         assert_eq!(seg.len, bytes);
