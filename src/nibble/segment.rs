@@ -636,9 +636,12 @@ impl EntryReference {
 
 // TODO static AtomicUsize as global epoch
 
+/// Structure to track information about Segments.
+/// Compactor uses 'live' to allocate new segments. Manager uses the
+/// epoch to release cleaned segments.
 pub struct SegmentUsage {
-    epoch: AtomicUsize,
-    live:  AtomicUsize,
+    epoch: AtomicUsize, /// segment timestamp
+    live:  AtomicUsize, /// live bytes in segment
 }
 
 impl SegmentUsage {
