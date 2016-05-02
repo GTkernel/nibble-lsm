@@ -1,0 +1,22 @@
+crates to consider
+
+mempool by Andrew Gallant
+
+
+
+Compile with MIR support using
+RUSTFLAGS="-Z orbit"
+
+Use when running tests to limit concurrency
+RUST_TEST_THREADS=1
+
+Remove use of RefCell in these compositons:
+Arc<Mutex<RefCell<>>>
+
+Cell, RefCell, UnsafeCell do not share across threads
+as they aren't Sync
+
+impl can be split across multple files
+might be good to put test-enabled code in separate files
+e.g., segment.rs segment_test.rs
+or move them to tests/ entirely
