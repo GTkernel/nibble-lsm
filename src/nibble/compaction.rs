@@ -58,7 +58,7 @@ use index::*;
 
 use std::cell::RefCell;
 use std::collections::{BinaryHeap,LinkedList};
-use std::sync::{Arc,Mutex};
+use std::sync::{Arc,Mutex,MutexGuard};
 use std::thread;
 
 //==----------------------------------------------------==//
@@ -66,6 +66,8 @@ use std::thread;
 //==----------------------------------------------------==//
 
 pub type CompactorRef = Arc<Mutex<RefCell< Compactor >>>;
+
+pub type LiveFn = Box<Fn(&EntryReference, &MutexGuard<RefCell<Index>>) -> bool>;
 
 //==----------------------------------------------------==//
 //      Compactor
@@ -118,23 +120,21 @@ impl Compactor {
     // release unused blocks back to the block allocator, and the
     // segment then added back to the log.
 
-    pub fn compact<liveFn>(&mut self, dirty: &SegmentRef,
-               new_: &SegmentRef, isLive: liveFn) -> Status
-        where liveFn : Fn(&EntryReference) -> bool
+    pub fn compact(&mut self, dirty: &SegmentRef,
+               new_: &SegmentRef, isLive: &LiveFn) -> Status
     {
         let mut status: Status = Ok(1);
 
         // FIXME don't lock entire index
         match self.index.lock() {
-            Ok(index_) => {
-                let mut index = index_.borrow_mut();
+            Ok(guard) => {
                 let mut new = new_.borrow_mut();
                 for entry in dirty.borrow_mut().into_iter() {
-                    if isLive(&entry) {
+                    if isLive(&entry, &guard) {
                         let key: String;
                         let va = new.append_entry(&entry);
                         unsafe { key = entry.get_key(); }
-                        index.update(&key, va);
+                        guard.borrow_mut().update(&key, va);
                     }
                 }
             },
@@ -163,6 +163,16 @@ impl Compactor {
     /// reclaimed. 
     pub fn try_compact(&mut self) {
 
+        // liveness checking function
+        let is_live: LiveFn = Box::new( move | entry, guard | {
+            let key = unsafe { entry.get_key() };
+            let index = guard.borrow();
+            match index.get(key.as_str()) {
+                Some(loc) => (loc == entry.get_loc()),
+                None => false,
+            } // match
+        });
+
         // pick a segment
         let mut segref = match self.next_candidate() {
             Some(seg) => seg,
@@ -177,19 +187,13 @@ impl Compactor {
         // TODO use std::iter::Inspect trait?
         match self.index.lock() {
             Err(_) => panic!("lock poison"),
-            Ok(index_) => {
-                let index = index_.borrow_mut();
+            Ok(guard) => {
                 for entry in segref.borrow_mut().into_iter() {
-                    let key = unsafe { entry.get_key() };
-                    match index.get(key.as_str()) {
-                        None => continue,
-                        Some(loc) => {
-                            if loc == entry.get_loc() {
-                                newlen += entry.len;
-                            }
-                        },
-                    } // match index
-                } // segment iter
+                    match is_live(&entry, &guard) {
+                        true => newlen += entry.len,
+                        false => continue,
+                    }
+                }
             },
         }
         debug!("newlen {}", newlen);
@@ -219,7 +223,7 @@ impl Compactor {
                 };
 
             // do the work
-            match self.compact(&segref, &newseg, |_| false) {
+            match self.compact(&segref, &newseg, &is_live) {
                 Ok(1) => {},
                 _ => panic!("compact failed"),
             }
@@ -382,7 +386,8 @@ mod tests {
 
         // we remove all objects whose value is < 500 bytes
         // using fancy closures
-        let filter = |e: &EntryReference| { e.datalen < 500 };
+        let filter: LiveFn =
+            Box::new( | entry, guard | { entry.datalen < 500 });
 
         // allocate new segment to move objects into
         let new_capacity = ((value_sizes[0] + key_sizes[0]) as usize
@@ -400,7 +405,7 @@ mod tests {
         
         // move all objects whose data length < 500
         // given the above, we keep only nbatches of the first entry
-        match c.compact(&seg_obj_ref,&seg_clean_ref,filter) {
+        match c.compact(&seg_obj_ref, &seg_clean_ref, &filter) {
             Ok(1) => {},
             _ => panic!("compact failed"),
         }
