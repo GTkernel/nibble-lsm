@@ -640,8 +640,10 @@ impl EntryReference {
 /// Compactor uses 'live' to allocate new segments. Manager uses the
 /// epoch to release cleaned segments.
 pub struct SegmentUsage {
-    epoch: AtomicUsize, /// segment timestamp
-    live:  AtomicUsize, /// live bytes in segment
+    /// segment timestamp
+    epoch: AtomicUsize,
+    /// live bytes in segment
+    live:  AtomicUsize,
 }
 
 impl SegmentUsage {
