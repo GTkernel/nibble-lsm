@@ -33,3 +33,4 @@ struct Type {
     /// var2 is cooler
     var2: usize,
 }
+See http://internals.rust-lang.org/t/any-interest-in-same-line-doc-comments/3212/2
