@@ -34,3 +34,22 @@ struct Type {
     var2: usize,
 }
 See http://internals.rust-lang.org/t/any-interest-in-same-line-doc-comments/3212/2
+
+
+in order to decr live bytes on a segment (in the segment usage table),
+need a reverse lookup table of some kind to find segment, given a VA
+(from the index).
+A) one idea is to use some of the other bits in the
+index for the segment ID:
+- 48 bits for a VA
+- given a terabyte region (1<<40) only need 40 to encode address +base
+    - remaining 64-40 = 24 bits could encode segment ID (16 mil.)
+        - each must be 1<<19 or 64KiB
+- with 32 terabytes (1<<45) need 45 bits of encoding
+    - remaning 64-45 = 19 bits for ID (512K)
+        - each must be 1<<26 or 64MB
+B) another is to convert VA (from index) of old location to block base
+address. Use this to get block index (all blocks are contiguous and
+thus ordered), then to lookup the block struct, which will have the
+segment ID. Maintaining the segment ID this way, means when
+adding/removing blocks from segments we must edit this information.
