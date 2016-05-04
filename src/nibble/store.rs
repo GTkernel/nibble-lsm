@@ -16,16 +16,20 @@ pub struct Nibble {
     index: IndexRef,
     manager: SegmentManagerRef,
     log: Log,
+    epochs: EpochTableRef,
 }
 
 impl Nibble {
 
     pub fn new(capacity: usize) -> Self {
-        let manager_ref = segmgr_ref!(0, SEGMENT_SIZE, capacity);
+        let manager = SegmentManager::new(0, SEGMENT_SIZE, capacity);
+        let epochs = manager.epochs();
+        let mref = Arc::new(Mutex::new(RefCell::new(manager)));
         Nibble {
             index: index_ref!(),
-            manager: manager_ref.clone(),
-            log: Log::new(manager_ref.clone()),
+            manager: mref.clone(),
+            log: Log::new(mref.clone()),
+            epochs: epochs,
         }
     }
 
@@ -38,12 +42,25 @@ impl Nibble {
             Ok(v) => va = v,
         }
         // 2. update reference to object
-        match self.index.lock() {
-            Ok(index) => {
+        let opt = match self.index.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(index) => 
                 index.borrow_mut()
-                    .update(&String::from(obj.getkey()), va);
-            },
-            Err(poison) => panic!("index lock poisoned"),
+                    .update(&String::from(obj.getkey()), va),
+        };
+        // 3. decrement live size of segment if we overwrite object
+        if let Some(old) = opt {
+            // FIXME this shouldn't need a lock..
+            let idx: usize = match self.manager.lock() {
+                Err(_) => panic!("lock poison"),
+                Ok(manager) =>  {
+                    // should not fail
+                    let opt = manager.borrow().segment_of(old);
+                    assert_eq!(opt.is_some(), true);
+                    opt.unwrap()
+                },
+            };
+            self.epochs.decr_live(idx, obj.len_with_header());
         }
         Ok(1)
     }

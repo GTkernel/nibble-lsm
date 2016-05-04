@@ -175,14 +175,20 @@ impl LogHead {
 pub struct Log {
     head: LogHeadRef, // TODO make multiple
     manager: SegmentManagerRef,
+    epochs: EpochTableRef,
 }
 
 impl Log {
 
     pub fn new(manager: SegmentManagerRef) -> Self {
+        let epochs = match manager.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(guard) => guard.borrow().epochs(),
+        };
         Log {
             head: Arc::new(RefCell::new(LogHead::new(manager.clone()))),
             manager: manager.clone(),
+            epochs: epochs,
         }
     }
 
@@ -193,7 +199,21 @@ impl Log {
         // 1. determine log head to use
         let head = &self.head;
         // 2. call append on the log head
-        head.borrow_mut().append(buf) // returns address if ok
+        match head.borrow_mut().append(buf) {
+            e @ Err(_) => return e,
+            Ok(va) => {
+                match self.manager.lock() {
+                    Err(_) => panic!("lock poison"),
+                    Ok(guard) => {
+                        let idx = guard.borrow().segment_of(va);
+                        assert_eq!(idx.is_some(), true);
+                        let len = buf.len_with_header();
+                        self.epochs.incr_live(idx.unwrap(), len);
+                    },
+                } // manager lock
+                Ok(va)
+            },
+        } // head append
     }
 
     pub fn enable_cleaning(&mut self) {

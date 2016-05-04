@@ -7,6 +7,7 @@ use compaction::*;
 
 use std::cell::RefCell;
 use std::cmp;
+use std::mem;
 use std::mem::size_of;
 use std::ptr;
 use std::slice::from_raw_parts;
@@ -14,26 +15,48 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic;
 use std::sync::atomic::AtomicUsize;
 
-pub const BLOCK_SIZE: usize = 1 << 16;
-pub const SEGMENT_SIZE: usize = 1 << 20;
+pub const BLOCK_SHIFT:   usize = 16;
+pub const BLOCK_SIZE:    usize = 1 << BLOCK_SHIFT;
+pub const SEGMENT_SHIFT: usize = 20;
+pub const SEGMENT_SIZE:  usize = 1 << SEGMENT_SHIFT;
 
 //==----------------------------------------------------==//
 //      Block structures
 //==----------------------------------------------------==//
 
 
+/// A contiguous region of virtual memory.
+/// FIXME seg may alias others across NUMA domains
+#[derive(Debug)]
 pub struct Block {
     addr: usize,
     len: usize,
-    // TODO owning Segment
+    slot: usize,
+    seg: Option<usize>,
 }
 
 impl Block {
 
-    pub fn new(addr: usize, len: usize) -> Self {
-        debug!("new Block 0x{:x} {}", addr, len);
-        Block { addr: addr, len: len }
+    pub fn new(addr: usize, slot: usize, len: usize) -> Self {
+        debug!("new Block 0x{:x} slot {} len {}", addr, slot, len);
+        Block { addr: addr, len: len, slot: slot, seg: None }
     }
+
+    pub unsafe fn set_segment(&self, seg: usize) {
+        let p: *mut Option<usize> = mem::transmute(&self.seg);
+        ptr::write(p, Some(seg));
+    }
+
+    pub unsafe fn clear_segment(&self) {
+        let p: *mut Option<usize> = mem::transmute(&self.seg);
+        ptr::write(p, None);
+    }
+
+    pub fn addr(&self) -> usize { self.addr }
+    pub fn len(&self)  -> usize { self.len }
+    pub fn slot(&self) -> usize { self.slot }
+    pub fn seg(&self)  -> Option<usize> { self.seg }
+
 }
 
 pub type BlockRef = Arc<Block>;
@@ -55,11 +78,11 @@ impl BlockAllocator {
     pub fn new(block_size: usize, bytes: usize) -> Self {
         let mmap = MemMap::new(bytes);
         let count = bytes / block_size;
-        let mut pool: Vec<Arc<Block>> = Vec::new();
-        let mut freepool: Vec<Arc<Block>> = Vec::new();
+        let mut pool: Vec<Arc<Block>> = Vec::with_capacity(count);
+        let mut freepool: Vec<Arc<Block>> = Vec::with_capacity(count);
         for b in 0..count {
             let addr = mmap.addr() + b*block_size;
-            let b = Arc::new(Block::new(addr, block_size));
+            let b = Arc::new(Block::new(addr, b, block_size));
             pool.push(b.clone());
             freepool.push(b.clone());
         }
@@ -81,6 +104,19 @@ impl BlockAllocator {
 
     pub fn len(&self) -> usize { self.pool.len() }
     pub fn freelen(&self) -> usize { self.freepool.len() }
+
+    /// Convert virtual address to containing block.
+    pub fn block_of(&self, addr: usize) -> Option<BlockRef> {
+        let idx: usize = (addr - self.mmap.addr()) >> BLOCK_SHIFT;
+        if idx < self.pool.len() {
+            let b = self.pool[idx].clone();
+            assert!(addr >= b.addr);
+            assert!(addr < (b.addr + BLOCK_SIZE));
+            Some(self.pool[idx].clone())
+        } else {
+            None
+        }
+    }
 }
 
 //==----------------------------------------------------==//
@@ -241,9 +277,8 @@ impl Segment {
                     None => return Err(ErrorCode::EmptyObject),
                     Some(va) => { val = va; },
                 }
-                match buf.vlen {
-                    0 => return Err(ErrorCode::EmptyObject),
-                    _ => {},
+                if 0 == buf.vlen {
+                    return Err(ErrorCode::EmptyObject);
                 }
                 let va = self.headref() as usize;
                 let header = EntryHeader::new(buf);
@@ -689,12 +724,20 @@ impl EpochTable {
         self.table[index].epoch.store(value, atomic::Ordering::SeqCst)
     }
 
-    pub fn incr_live(&self, index: usize) -> usize {
-        self.table[index].live.fetch_add(1, atomic::Ordering::SeqCst)
+    pub fn incr_live(&self, index: usize, amt: usize) -> usize {
+        self.table[index].live.fetch_add(amt, atomic::Ordering::SeqCst)
     }
 
-    pub fn incr_epoch(&self, index: usize) -> usize {
-        self.table[index].epoch.fetch_add(1, atomic::Ordering::SeqCst)
+    pub fn incr_epoch(&self, index: usize, amt: usize) -> usize {
+        self.table[index].epoch.fetch_add(amt, atomic::Ordering::SeqCst)
+    }
+
+    pub fn decr_live(&self, index: usize, amt: usize) -> usize {
+        self.table[index].live.fetch_sub(amt, atomic::Ordering::SeqCst)
+    }
+
+    pub fn decr_epoch(&self, index: usize, amt: usize) -> usize {
+        self.table[index].epoch.fetch_sub(amt, atomic::Ordering::SeqCst)
     }
 }
 
@@ -764,15 +807,16 @@ impl SegmentManager {
                 None => {},
                 _ => panic!("Alloc from non-empty slot"),
             };
-            let blocks = self.allocator.alloc(nblks);
-            match blocks {
+            let blocks = match self.allocator.alloc(nblks) {
                 None => panic!("Could not allocate blocks"),
-                _ => {},
+                Some(b) => b,
             };
+            for block in &blocks {
+                unsafe { block.set_segment(slot); }
+            }
             self.next_seg_id += 1;
             self.segments[slot] = Some(seg_ref!(self.next_seg_id,
-                                                slot,
-                                                blocks.unwrap()));
+                                                slot, blocks));
             self.segments[slot].clone()
         }
     }
@@ -785,7 +829,19 @@ impl SegmentManager {
     }
 
     pub fn free(&self, segment: SegmentRef) {
+        // release blocks (reset their segment ID)
         unimplemented!();
+    }
+
+    pub fn segment_of(&self, va: usize) -> Option<usize> {
+        let mut ret: Option<usize> = None;
+        if let Some(block) = self.allocator.block_of(va) {
+            if let Some(idx) = block.seg() {
+                assert!(idx < self.segments.len());
+                ret = Some(idx);
+            }
+        }
+        ret
     }
 
     /// The compaction code pushes segments it cleans to us. We use
@@ -881,9 +937,11 @@ mod tests {
 
     #[test]
     fn block() {
-        let b = Block::new(42, 37);
+        let b = Block::new(42, 0, 37);
         assert_eq!(b.addr, 42);
+        assert_eq!(b.slot, 0);
         assert_eq!(b.len, 37);
+        assert_eq!(b.seg, None);
     }
 
     #[test]
