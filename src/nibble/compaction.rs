@@ -81,6 +81,7 @@ pub struct Compactor {
     candidates: Mutex<Vec<SegmentRef>>,
     manager: SegmentManagerRef,
     index: IndexRef,
+    epochs: EpochTableRef,
 }
 
 // TODO need a way to return clean segments back to the segment
@@ -92,12 +93,17 @@ pub struct Compactor {
 
 impl Compactor {
 
-    pub fn new(manager_: &SegmentManagerRef,
-               index_: &IndexRef) -> Self {
+    pub fn new(manager: &SegmentManagerRef,
+               index: &IndexRef) -> Self {
+        let epochs = match manager.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(guard) => guard.borrow().epochs(),
+        };
         let mut c = Compactor {
             candidates: Mutex::new(Vec::new()),
-            manager: manager_.clone(),
-            index: index_.clone(),
+            manager: manager.clone(),
+            index: index.clone(),
+            epochs: epochs,
         };
         c
     }
@@ -180,23 +186,9 @@ impl Compactor {
         };
 
         // determine live amount for new segment
-        // XXX XXX need segment summary table XXX XXX
-        let mut newlen: usize = 0;
-        // iterate segment, check entry is live in index, if it
-        // matches into our segment, tally newlen
-        // TODO use std::iter::Inspect trait?
-        match self.index.lock() {
-            Err(_) => panic!("lock poison"),
-            Ok(guard) => {
-                for entry in segref.borrow_mut().into_iter() {
-                    match is_live(&entry, &guard) {
-                        true => newlen += entry.len,
-                        false => continue,
-                    }
-                }
-            },
-        }
-        debug!("newlen {}", newlen);
+        let slot = segref.borrow().slot();
+        let newlen = self.epochs.get_live(slot) >> 1;
+        debug!("slot {} newlen {}", slot, newlen);
 
         // newlen may be stale by the time we start cleaning (it's ok)
         // if significant, we may TODO free more blocks after

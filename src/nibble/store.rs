@@ -76,6 +76,9 @@ impl Nibble {
             },
             Err(poison) => panic!("index lock poisoned"),
         }
+        //
+        // XXX XXX use EntryReference to copy out data!! XXX XXX
+        //
         let mut header: EntryHeader;
         unsafe {
             header = ptr::read(va as *const EntryHeader);
@@ -88,8 +91,45 @@ impl Nibble {
         (Ok(1),Some(buf))
     }
 
-    pub fn del_object(&mut self) -> Status {
-        unimplemented!();
+    pub fn del_object(&mut self, key: &String) -> Status {
+        let va: usize;
+        match self.index.lock() {
+            Err(poison) => panic!("index lock poisoned"),
+            Ok(guard) => {
+                match guard.borrow_mut().remove(key) {
+                    None => return Err(ErrorCode::KeyNotExist),
+                    Some(v) => va = v,
+                }
+            },
+        } // index lock
+
+        //
+        // XXX XXX use EntryReference to copy out data!! XXX XXX
+        //
+
+        // determine object size (to decr epoch table)
+        // TODO maybe keep this in the index?
+        let mut header: EntryHeader;
+        unsafe {
+            header = ptr::read(va as *const EntryHeader);
+        }
+
+        // get segment this object belongs to
+        // XXX need to make sure delete and object cleaning don't
+        // result in decrementing twice!
+        let idx: usize = match self.manager.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(guard) =>  {
+                // should not fail
+                let opt = guard.borrow().segment_of(va);
+                assert_eq!(opt.is_some(), true);
+                opt.unwrap()
+            },
+        };
+
+        // update epoch table
+        self.epochs.decr_live(idx, header.len_with_header());
+        Ok(1)
     }
 
     #[cfg(test)]
@@ -209,4 +249,141 @@ mod tests {
         assert_eq!(nib.nlive(), 1);
     }
 
+    /// Give the segment index of the specified key (as String)
+    fn segment_of(nib: &Nibble, key: &String) -> usize {
+
+        // look up virtual address
+        let va: usize = match nib.index.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(guard) => match guard.borrow().get(key.as_str()) {
+                None => panic!("key should exist"),
+                Some(va_) => va_,
+            },
+        };
+
+        // associate with segment and return
+        match nib.manager.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(guard) => match guard.borrow().segment_of(va) {
+                None => panic!("segment should exist"),
+                Some(idx) => idx,
+            },
+        }
+    }
+
+    /// on init, epoch table should be zero
+    #[test]
+    fn epoch_0() {
+        let mem = 1 << 23;
+        let mut nib = Nibble::new(mem);
+
+        for idx in 0..nib.epochs.len() {
+            assert_eq!(nib.epochs.get_live(idx), 0usize);
+            assert_eq!(nib.epochs.get_epoch(idx), 0usize);
+        }
+    }
+
+    /// add one item repeatedly and observe the live size of the
+    /// segment remains constant. upon rolling the head, check the
+    /// segment live size is zero and the new is updated
+    #[test]
+    fn epoch_1() {
+        let mut nib = Nibble::new(1<<23);
+
+        let key = String::from("keykeykeykey");
+        let val = String::from("valuevaluevalue");
+        let obj = ObjDesc::new2(&key, &val);
+        let size = obj.len_with_header();
+
+        if let Err(code) = nib.put_object(&obj) {
+            panic!("{:?}", code)
+        }
+
+        // do first insertion, grab head idx used
+        if let Err(code) = nib.put_object(&obj) {
+            panic!("{:?}", code)
+        }
+        let mut head = segment_of(&nib, &key);
+        assert_eq!(nib.epochs.get_live(head), size);
+
+        // insert until the head rolls
+        loop {
+            if let Err(code) = nib.put_object(&obj) {
+                panic!("{:?}", code)
+            }
+            let segidx = segment_of(&nib, &key);
+            assert_eq!(nib.epochs.get_live(segidx), size);
+            if head != segidx {
+                // head rolled. let's check prior segment live size
+                assert_eq!(nib.epochs.get_live(head), 0usize);
+                break;
+            }
+        }
+    }
+
+    /// add unique items, observe the live size of the segment grows
+    #[test]
+    fn epoch_2() {
+        let mut nib = Nibble::new(1<<23);
+        let mut keyv = 0usize;
+        let value = String::from("sldkfslkfjlsdjflksdjfksjddfdfdf");
+
+        // do first insertion, grab head idx used
+        let key = keyv.to_string();
+        let obj = ObjDesc::new2(&key, &value);
+        let mut len = obj.len_with_header();
+        if let Err(code) = nib.put_object(&obj) {
+            panic!("{:?}", code)
+        }
+        let head = segment_of(&nib, &key);
+        assert_eq!(nib.epochs.get_live(head), len);
+        keyv += 1;
+
+        let mut total = len; // accumulator excluding current obj
+
+        // insert until the head rolls
+        loop {
+            let key = keyv.to_string();
+            let obj = ObjDesc::new2(&key, &value);
+            len = obj.len_with_header();
+            if let Err(code) = nib.put_object(&obj) {
+                panic!("{:?}", code)
+            }
+            let segidx = segment_of(&nib, &key);
+            if head == segidx {
+                assert_eq!(nib.epochs.get_live(segidx), total+len);
+            } else {
+                // head rolled. check old and new live sizes
+                assert_eq!(nib.epochs.get_live(head), total);
+                assert_eq!(nib.epochs.get_live(segidx), len);
+                break;
+            }
+            keyv += 1;
+            total += len;
+        }
+    }
+
+    /// add/remove one item and observe the live size is set then zero
+    #[test]
+    fn epoch_3() {
+        let mut nib = Nibble::new(1<<23);
+
+        let key = String::from("lsfkjlksdjflks");
+        let value = String::from("sldkfslkfjlsdjflksdjfksjddfdfdf");
+
+        // insert, then delete
+        let obj = ObjDesc::new2(&key, &value);
+        if let Err(code) = nib.put_object(&obj) {
+            panic!("{:?}", code)
+        }
+
+        let idx = segment_of(&nib, &key);
+        let mut len = obj.len_with_header();
+        assert_eq!(nib.epochs.get_live(idx), len);
+
+        if let Err(code) = nib.del_object(&key) {
+            panic!("{:?}", code)
+        }
+        assert_eq!(nib.epochs.get_live(idx), 0usize);
+    }
 }

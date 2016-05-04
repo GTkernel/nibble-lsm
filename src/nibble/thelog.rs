@@ -46,6 +46,9 @@ impl EntryHeader {
     pub fn getdatalen(&self) -> u32 { self.datalen }
     pub fn getkeylen(&self) -> u32 { self.keylen }
     pub fn object_length(&self) -> u32 { self.datalen + self.keylen }
+    pub fn len_with_header(&self) -> usize {
+        (self.object_length() as usize) + size_of::<EntryHeader>()
+    }
 
     /// Size of this (entire) entry in the log.
     pub fn len(&self) -> usize {
@@ -223,6 +226,13 @@ impl Log {
     pub fn disable_cleaning(&mut self) {
         unimplemented!();
     }
+
+    //
+    // --- Internal methods used for testing only ---
+    //
+
+    #[cfg(test)]
+    pub fn epochs(&self) -> EpochTableRef { self.epochs.clone() }
 }
 
 //==----------------------------------------------------==//

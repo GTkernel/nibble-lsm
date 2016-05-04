@@ -136,8 +136,18 @@ pub struct ObjDesc<'a> {
 
 impl<'a> ObjDesc<'a> {
 
+    /// Create ObjDesc where key is str and value is arbitrary memory.
     pub fn new(key: &'a str, value: Pointer, vlen: u32) -> Self {
         ObjDesc { key: key, value: value, vlen: vlen }
+    }
+
+    /// Create ObjDesc where key and value are String
+    pub fn new2(key: &'a String, value: &'a String) -> Self {
+        ObjDesc {
+            key: key.as_str(),
+            value: Some(value.as_ptr()),
+            vlen: value.len() as u32,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -739,6 +749,13 @@ impl EpochTable {
     pub fn decr_epoch(&self, index: usize, amt: usize) -> usize {
         self.table[index].epoch.fetch_sub(amt, atomic::Ordering::SeqCst)
     }
+
+    //
+    // --- Internal methods used for testing only ---
+    //
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize { self.table.len() }
 }
 
 // TODO set of pending ops
