@@ -53,3 +53,6 @@ address. Use this to get block index (all blocks are contiguous and
 thus ordered), then to lookup the block struct, which will have the
 segment ID. Maintaining the segment ID this way, means when
 adding/removing blocks from segments we must edit this information.
+
+command-line parsing crate
+http://kbknapp.github.io/clap-rs/clap/index.html
