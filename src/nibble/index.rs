@@ -69,8 +69,11 @@ mod tests {
 
     use test::Bencher;
 
+    use super::super::logger;
+
     #[test]
     fn index_basic() {
+        logger::enable();
         let mut index = Index::new();
 
         let key1 = String::from("alex");

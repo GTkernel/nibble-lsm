@@ -8,3 +8,5 @@ pub mod store;
 pub mod index;
 pub mod memory;
 pub mod thelog;
+
+pub mod logger;

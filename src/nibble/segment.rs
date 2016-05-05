@@ -952,8 +952,11 @@ mod tests {
     use rand;
     use rand::Rng;
 
+    use super::super::logger;
+
     #[test]
     fn block() {
+        logger::enable();
         let b = Block::new(42, 0, 37);
         assert_eq!(b.addr, 42);
         assert_eq!(b.slot, 0);
@@ -963,6 +966,7 @@ mod tests {
 
     #[test]
     fn block_allocator_alloc_all() {
+        logger::enable();
         let num = 64;
         let bytes = num * BLOCK_SIZE;
         let mut ba = BlockAllocator::new(BLOCK_SIZE, bytes);
@@ -988,6 +992,7 @@ mod tests {
 
     #[test]
     fn alloc_segment() {
+        logger::enable();
         let num = 64;
         let bytes = num * BLOCK_SIZE;
         let mut ba = BlockAllocator::new(BLOCK_SIZE, bytes);
@@ -1009,6 +1014,7 @@ mod tests {
 
     #[test]
     fn segment_manager_alloc_all() {
+        logger::enable();
         let memlen = 1<<23;
         let numseg = memlen / SEGMENT_SIZE;
         let mut mgr = SegmentManager::new(0, SEGMENT_SIZE, memlen);
@@ -1028,6 +1034,7 @@ mod tests {
     /// lots of copy/paste...
     #[test]
     fn segment_manager_one_obj_overwrite() {
+        logger::enable();
         let memlen = 1<<23;
         let numseg = memlen / SEGMENT_SIZE;
         let manager = segmgr_ref!(0, SEGMENT_SIZE, memlen);
@@ -1062,6 +1069,7 @@ mod tests {
 
     #[test]
     fn iterate_segment() {
+        logger::enable();
         let mut rng = rand::thread_rng();
 
         // TODO make a macro out of these lines

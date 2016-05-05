@@ -37,3 +37,9 @@ impl SimpleLogger {
         })
     }
 }
+
+/// Invoked by unit tests to enable logging.
+#[cfg(test)]
+pub fn enable() {
+    let _ = SimpleLogger::init(LogLevel::Debug);
+}

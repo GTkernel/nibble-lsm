@@ -289,8 +289,11 @@ mod tests {
     use rand;
     use rand::Rng;
 
+    use super::super::logger;
+
     #[test]
     fn add_segments() {
+        logger::enable();
         let nseg = 8;
         let mut index = index_ref!();
         let mut segmgr = segmgr_ref!(0, SEGMENT_SIZE, SEGMENT_SIZE*nseg);
@@ -311,6 +314,7 @@ mod tests {
     /// Big beasty compaction test. TODO break down into smaller tests
     #[test]
     fn compact_two() {
+        logger::enable();
         let mut rng = rand::thread_rng();
 
         let mut index = index_ref!();
@@ -442,6 +446,7 @@ mod tests {
 
     #[test]
     fn try_compact() {
+        logger::enable();
         let mut index = index_ref!();
         let nseg = 32; // multiple of 4 (for this test)
         let mut segmgr = segmgr_ref!(0, SEGMENT_SIZE,

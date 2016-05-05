@@ -161,8 +161,11 @@ mod tests {
     use segment::*;
     use common::*;
 
+    use super::super::logger;
+
     #[test]
     fn nibble_single_small_object() {
+        logger::enable();
         let mem = 1 << 23;
         let mut nib = Nibble::new(mem);
 
@@ -251,6 +254,7 @@ mod tests {
 
     /// Give the segment index of the specified key (as String)
     fn segment_of(nib: &Nibble, key: &String) -> usize {
+        logger::enable();
 
         // look up virtual address
         let va: usize = match nib.index.lock() {
@@ -274,6 +278,7 @@ mod tests {
     /// on init, epoch table should be zero
     #[test]
     fn epoch_0() {
+        logger::enable();
         let mem = 1 << 23;
         let mut nib = Nibble::new(mem);
 
@@ -288,6 +293,7 @@ mod tests {
     /// segment live size is zero and the new is updated
     #[test]
     fn epoch_1() {
+        logger::enable();
         let mut nib = Nibble::new(1<<23);
 
         let key = String::from("keykeykeykey");
@@ -324,6 +330,7 @@ mod tests {
     /// add unique items, observe the live size of the segment grows
     #[test]
     fn epoch_2() {
+        logger::enable();
         let mut nib = Nibble::new(1<<23);
         let mut keyv = 0usize;
         let value = String::from("sldkfslkfjlsdjflksdjfksjddfdfdf");
@@ -366,6 +373,7 @@ mod tests {
     /// add/remove one item and observe the live size is set then zero
     #[test]
     fn epoch_3() {
+        logger::enable();
         let mut nib = Nibble::new(1<<23);
 
         let key = String::from("lsfkjlksdjflks");

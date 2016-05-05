@@ -123,8 +123,11 @@ mod tests {
 
     use test::Bencher;
 
+    use super::super::logger;
+
     #[test]
     fn memory_map_init() {
+        logger::enable();
         let len = 1<<26;
         let mm = MemMap::new(len);
         assert_eq!(mm.len, len);

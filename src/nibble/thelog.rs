@@ -255,8 +255,11 @@ mod tests {
     use segment::*;
     use common::*;
 
+    use super::super::logger;
+
     #[test]
     fn log_alloc_until_full() {
+        logger::enable();
         let memlen = 1<<23;
         let numseg = memlen / SEGMENT_SIZE;
         let manager = segmgr_ref!(0, SEGMENT_SIZE, memlen);
@@ -282,6 +285,7 @@ mod tests {
 
     #[test]
     fn entry_header_readwrite() {
+        logger::enable();
         // get some raw memory
         let mem: Box<[u8;32]> = Box::new([0 as u8; 32]);
         let ptr = Box::into_raw(mem);
