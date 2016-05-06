@@ -132,8 +132,8 @@ impl LogHead {
     /// Replace the head segment.
     fn replace(&mut self) -> Status {
         match self.manager.lock() {
-            Ok(manager) => {
-                self.segment = manager.borrow_mut().alloc();
+            Ok(mut manager) => {
+                self.segment = manager.alloc();
             },
             Err(poison) => panic!("segmgr lock poison"),
         }
@@ -149,8 +149,8 @@ impl LogHead {
     fn add_closed(&mut self) {
         if let Some(segref) = self.segment.clone() {
             match self.manager.lock() {
-                Ok(manager) => {
-                    manager.borrow_mut().add_closed(&segref);
+                Ok(mut manager) => {
+                    manager.add_closed(&segref);
                 },
                 Err(poison) => panic!("segmgr lock poison"),
             }
@@ -186,7 +186,7 @@ impl Log {
     pub fn new(manager: SegmentManagerRef) -> Self {
         let epochs = match manager.lock() {
             Err(_) => panic!("lock poison"),
-            Ok(guard) => guard.borrow().epochs(),
+            Ok(guard) => guard.epochs(),
         };
         Log {
             head: Arc::new(RefCell::new(LogHead::new(manager.clone()))),
@@ -208,7 +208,7 @@ impl Log {
                 match self.manager.lock() {
                     Err(_) => panic!("lock poison"),
                     Ok(guard) => {
-                        let idx = guard.borrow().segment_of(va);
+                        let idx = guard.segment_of(va);
                         assert_eq!(idx.is_some(), true);
                         let len = buf.len_with_header();
                         self.epochs.incr_live(idx.unwrap(), len);
@@ -243,7 +243,6 @@ impl Log {
 mod tests {
     use super::*;
 
-    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::mem::size_of;
     use std::mem::transmute;

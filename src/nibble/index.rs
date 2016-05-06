@@ -2,13 +2,12 @@ use segment::EntryReference;
 
 use std::collections::HashMap;
 use std::sync::{Arc,Mutex};
-use std::cell::RefCell;
 
 //==----------------------------------------------------==//
 //      Index
 //==----------------------------------------------------==//
 
-pub type IndexRef = Arc<Mutex<RefCell<Index>>>;
+pub type IndexRef = Arc<Mutex<Index>>;
 
 /// Index structure that allows us to retreive objects from the log.
 /// It is just a simple wrapper over whatever data structure we wish
@@ -58,7 +57,6 @@ impl Index {
 mod tests {
     use super::*;
 
-    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::mem::size_of;
     use std::mem::transmute;

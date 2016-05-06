@@ -6,7 +6,6 @@ use index::*;
 
 use std::ptr;
 use std::sync::{Arc,Mutex};
-use std::cell::RefCell;
 
 //==----------------------------------------------------==//
 //      Nibble interface
@@ -24,7 +23,7 @@ impl Nibble {
     pub fn new(capacity: usize) -> Self {
         let manager = SegmentManager::new(0, SEGMENT_SIZE, capacity);
         let epochs = manager.epochs();
-        let mref = Arc::new(Mutex::new(RefCell::new(manager)));
+        let mref = Arc::new(Mutex::new(manager));
         Nibble {
             index: index_ref!(),
             manager: mref.clone(),
@@ -44,9 +43,8 @@ impl Nibble {
         // 2. update reference to object
         let opt = match self.index.lock() {
             Err(_) => panic!("lock poison"),
-            Ok(index) => 
-                index.borrow_mut()
-                    .update(&String::from(obj.getkey()), va),
+            Ok(mut index) => 
+                index.update(&String::from(obj.getkey()), va),
         };
         // 3. decrement live size of segment if we overwrite object
         if let Some(old) = opt {
@@ -55,7 +53,7 @@ impl Nibble {
                 Err(_) => panic!("lock poison"),
                 Ok(manager) =>  {
                     // should not fail
-                    let opt = manager.borrow().segment_of(old);
+                    let opt = manager.segment_of(old);
                     assert_eq!(opt.is_some(), true);
                     opt.unwrap()
                 },
@@ -69,7 +67,7 @@ impl Nibble {
         let va: usize;
         match self.index.lock() {
             Ok(index) => {
-                match index.borrow().get(key) {
+                match index.get(key) {
                     None => return (Err(ErrorCode::KeyNotExist),None),
                     Some(v) => va = v,
                 }
@@ -95,8 +93,8 @@ impl Nibble {
         let va: usize;
         match self.index.lock() {
             Err(poison) => panic!("index lock poisoned"),
-            Ok(guard) => {
-                match guard.borrow_mut().remove(key) {
+            Ok(mut guard) => {
+                match guard.remove(key) {
                     None => return Err(ErrorCode::KeyNotExist),
                     Some(v) => va = v,
                 }
@@ -121,7 +119,7 @@ impl Nibble {
             Err(_) => panic!("lock poison"),
             Ok(guard) =>  {
                 // should not fail
-                let opt = guard.borrow().segment_of(va);
+                let opt = guard.segment_of(va);
                 assert_eq!(opt.is_some(), true);
                 opt.unwrap()
             },
@@ -135,7 +133,7 @@ impl Nibble {
     #[cfg(test)]
     pub fn nlive(&self) -> usize {
         match self.index.lock() {
-            Ok(index) => index.borrow().len(),
+            Ok(index) => index.len(),
             Err(poison) => panic!("index lock poisoned"),
         }
     }
@@ -149,7 +147,6 @@ impl Nibble {
 mod tests {
     use super::*;
 
-    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::mem::size_of;
     use std::mem::transmute;
@@ -259,7 +256,7 @@ mod tests {
         // look up virtual address
         let va: usize = match nib.index.lock() {
             Err(_) => panic!("lock poison"),
-            Ok(guard) => match guard.borrow().get(key.as_str()) {
+            Ok(guard) => match guard.get(key.as_str()) {
                 None => panic!("key should exist"),
                 Some(va_) => va_,
             },
@@ -268,7 +265,7 @@ mod tests {
         // associate with segment and return
         match nib.manager.lock() {
             Err(_) => panic!("lock poison"),
-            Ok(guard) => match guard.borrow().segment_of(va) {
+            Ok(guard) => match guard.segment_of(va) {
                 None => panic!("segment should exist"),
                 Some(idx) => idx,
             },

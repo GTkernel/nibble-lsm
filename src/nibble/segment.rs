@@ -201,7 +201,7 @@ impl SegmentHeader {
 //==----------------------------------------------------==//
 
 pub type SegmentRef = Arc<RefCell<Segment>>;
-pub type SegmentManagerRef = Arc<Mutex<RefCell<SegmentManager>>>;
+pub type SegmentManagerRef = Arc<Mutex<SegmentManager>>;
 
 // TODO need metrics for computing compaction weights
 // TODO head,len,rem as atomics
@@ -786,7 +786,8 @@ impl SegmentManager {
     pub fn new(id: usize, segsz: usize, len: usize) -> Self {
         let b = BlockAllocator::new(BLOCK_SIZE, len);
         let num = len / segsz;
-        let mut segments: Vec<Option<SegmentRef>> = Vec::with_capacity(num);
+        let mut segments: Vec<Option<SegmentRef>>
+            = Vec::with_capacity(num);
         for _ in 0..num {
             segments.push(None);
         }
@@ -1059,8 +1060,7 @@ mod tests {
         let l = manager.lock();
         match l {
             Ok(mgr) =>
-                assert_eq!(mgr.borrow()
-                           .test_scan_objects(), count),
+                assert_eq!(mgr.test_scan_objects(), count),
             Err(poison) => panic!("manager lock poison"),
         }
     }

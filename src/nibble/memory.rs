@@ -112,7 +112,6 @@ impl Drop for MemMap {
 mod tests {
     use super::*;
 
-    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::mem::size_of;
     use std::mem::transmute;

@@ -56,7 +56,6 @@ use thelog::*;
 use segment::*;
 use index::*;
 
-use std::cell::RefCell;
 use std::collections::{BinaryHeap,LinkedList};
 use std::sync::{Arc,Mutex,MutexGuard};
 use std::thread;
@@ -65,9 +64,9 @@ use std::thread;
 //      Compactor types
 //==----------------------------------------------------==//
 
-pub type CompactorRef = Arc<Mutex<RefCell< Compactor >>>;
+pub type CompactorRef = Arc<Mutex< Compactor >>;
 
-pub type LiveFn = Box<Fn(&EntryReference, &MutexGuard<RefCell<Index>>) -> bool>;
+pub type LiveFn = Box<Fn(&EntryReference, &MutexGuard<Index>) -> bool>;
 
 //==----------------------------------------------------==//
 //      Compactor
@@ -97,7 +96,7 @@ impl Compactor {
                index: &IndexRef) -> Self {
         let epochs = match manager.lock() {
             Err(_) => panic!("lock poison"),
-            Ok(guard) => guard.borrow().epochs(),
+            Ok(guard) => guard.epochs(),
         };
         let mut c = Compactor {
             candidates: Mutex::new(Vec::new()),
@@ -133,14 +132,14 @@ impl Compactor {
 
         // FIXME don't lock entire index
         match self.index.lock() {
-            Ok(guard) => {
+            Ok(mut guard) => {
                 let mut new = new_.borrow_mut();
                 for entry in dirty.borrow_mut().into_iter() {
                     if isLive(&entry, &guard) {
                         let key: String;
                         let va = new.append_entry(&entry);
                         unsafe { key = entry.get_key(); }
-                        guard.borrow_mut().update(&key, va);
+                        guard.update(&key, va);
                     }
                 }
             },
@@ -172,8 +171,7 @@ impl Compactor {
         // liveness checking function
         let is_live: LiveFn = Box::new( move | entry, guard | {
             let key = unsafe { entry.get_key() };
-            let index = guard.borrow();
-            match index.get(key.as_str()) {
+            match guard.get(key.as_str()) {
                 Some(loc) => (loc == entry.get_loc()),
                 None => false,
             } // match
@@ -199,8 +197,7 @@ impl Compactor {
             let opt: Option<SegmentRef> = 
                 match self.manager.lock() {
                     Err(_) => panic!("lock poison"),
-                    Ok(mang) => {
-                        let mut manager = mang.borrow_mut();
+                    Ok(mut manager) => {
                         let nblks = (newlen - 1) / BLOCK_SIZE + 1;
                         debug!("nblks {}", nblks);
                         manager.alloc_size(nblks)
@@ -230,7 +227,7 @@ impl Compactor {
         // tell manager we released this segment's memory
         match self.manager.lock() {
             Err(_) => panic!("lock poison"),
-            Ok(mang) => mang.borrow_mut().add_cleaned(&segref),
+            Ok(mut manager) => manager.add_cleaned(&segref),
         }
     }
 
@@ -245,9 +242,8 @@ impl Compactor {
             Ok(ref mut cand) => {
                 match self.manager.lock() {
                     Err(_) => panic!("lock poison"),
-                    Ok(mang) => {
-                        let mut m = mang.borrow_mut();
-                        n = m.grab_closed(cand);
+                    Ok(mut manager) => {
+                        n = manager.grab_closed(cand);
                     },
                 }
             },
@@ -277,7 +273,6 @@ mod tests {
     use std::mem;
     use std::ops;
     use std::slice::from_raw_parts;
-    use std::cell::{RefCell};
     use std::sync::{Arc,Mutex};
 
     use memory::*;
@@ -300,10 +295,9 @@ mod tests {
         let mut c = Compactor::new(&segmgr, &index);
         assert_eq!(c.candidates.lock().unwrap().len(), 0);
         let mut x: usize;
-        if let Ok(manager) = segmgr.lock() {
+        if let Ok(mut manager) = segmgr.lock() {
             for x in 0..nseg {
-                c.add( manager.borrow_mut()
-                       .alloc().as_ref()
+                c.add( manager.alloc().as_ref()
                        .expect("alloc segment")
                      );
             }
@@ -323,8 +317,8 @@ mod tests {
 
         let mut seg_obj_ref;
         match segmgr.lock() {
-            Ok(mgr) => {
-                seg_obj_ref = mgr.borrow_mut().alloc().unwrap();
+            Ok(mut mgr) => {
+                seg_obj_ref = mgr.alloc().unwrap();
             },
             Err(_) => panic!("mgr lock poison"),
         }
@@ -392,9 +386,8 @@ mod tests {
         let nblks = (new_capacity / BLOCK_SIZE) + 1;
         let mut seg_clean_ref;
         match segmgr.lock() {
-            Ok(mgr) => {
-                seg_clean_ref = mgr.borrow_mut()
-                    .alloc_size(nblks).unwrap();
+            Ok(mut mgr) => {
+                seg_clean_ref = mgr.alloc_size(nblks).unwrap();
             },
             Err(_) => panic!("manager lock poison"),
         }
@@ -485,7 +478,7 @@ mod tests {
         match segmgr.lock() {
             Err(_) => panic!("lock poison"),
             Ok(mang) => 
-                assert_eq!(mang.borrow().n_closed(), nseg/2),
+                assert_eq!(mang.n_closed(), nseg/2),
         };
 
         // move them
@@ -508,8 +501,8 @@ mod tests {
         match segmgr.lock() {
             Err(_) => panic!("lock poison"),
             Ok(mang) =>  {
-                assert_eq!(mang.borrow().n_closed(), 0);
-                assert_eq!(mang.borrow().n_reclaim(), ncompact);
+                assert_eq!(mang.n_closed(), 0);
+                assert_eq!(mang.n_reclaim(), ncompact);
             },
         };
     } // try_compact

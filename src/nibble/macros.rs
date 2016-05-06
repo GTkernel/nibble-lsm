@@ -40,9 +40,9 @@ macro_rules! incr {
 #[macro_export]
 macro_rules! compref {
     ( $segmgr:expr ) => {
-        Arc::new( Mutex::new( RefCell::new(
+        Arc::new( Mutex::new( 
                 Compactor::new($segmgr)
-                )))
+                ))
     }
 }
 
@@ -74,9 +74,9 @@ macro_rules! seg_ref_empty {
 #[macro_export]
 macro_rules! segmgr_ref {
     ( $id:expr, $segsz:expr, $bytes:expr ) => {
-        Arc::new( Mutex::new( RefCell::new(
+        Arc::new( Mutex::new(
                 SegmentManager::new( $id, $segsz, $bytes)
-                )))
+                ))
     }
 }
 
@@ -88,9 +88,9 @@ macro_rules! segmgr_ref {
 #[macro_export]
 macro_rules! index_ref {
     ( ) => {
-        Arc::new( Mutex::new( RefCell::new(
+        Arc::new( Mutex::new(
                 Index::new()
-                )))
+                ))
     }
 }
 
