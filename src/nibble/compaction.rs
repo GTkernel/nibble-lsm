@@ -235,19 +235,17 @@ impl Compactor {
     pub fn check_new(&mut self) -> usize {
         // TODO if only one thread accesses this list, no need for
         // lock
-        let mut n: usize = 0;
         match self.candidates.lock() {
             Err(_) => panic!("lock poison"),
             Ok(ref mut cand) => {
                 match self.manager.lock() {
                     Err(_) => panic!("lock poison"),
                     Ok(mut manager) => {
-                        n = manager.grab_closed(cand);
+                        manager.grab_closed(cand)
                     },
                 }
             },
         } // candidates lock
-        n
     }
 
     //
