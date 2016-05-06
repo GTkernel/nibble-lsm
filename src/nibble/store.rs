@@ -77,7 +77,7 @@ impl Nibble {
         //
         // XXX XXX use EntryReference to copy out data!! XXX XXX
         //
-        let mut header: EntryHeader;
+        let header: EntryHeader;
         unsafe {
             header = ptr::read(va as *const EntryHeader);
         }
@@ -107,7 +107,7 @@ impl Nibble {
 
         // determine object size (to decr epoch table)
         // TODO maybe keep this in the index?
-        let mut header: EntryHeader;
+        let header: EntryHeader;
         unsafe {
             header = ptr::read(va as *const EntryHeader);
         }

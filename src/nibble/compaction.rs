@@ -102,14 +102,13 @@ impl Compactor {
             Err(_) => panic!("lock poison"),
             Ok(guard) => guard.epochs(),
         };
-        let mut c = Compactor {
+        Compactor {
             candidates: Mutex::new(VecDeque::new()),
             manager: manager.clone(),
             index: index.clone(),
             epochs: epochs,
             reclaim: Arc::new(SegQueue::new()),
-        };
-        c
+        }
     }
 
     /// Add newly closed segment to the candidate set.
@@ -133,7 +132,7 @@ impl Compactor {
     pub fn compact(&mut self, dirty: &SegmentRef,
                new_: &SegmentRef, isLive: &LiveFn) -> Status
     {
-        let mut status: Status = Ok(1);
+        let status: Status = Ok(1);
 
         // FIXME don't lock entire index
         match self.index.lock() {
@@ -183,7 +182,7 @@ impl Compactor {
         });
 
         // pick a segment
-        let mut segref = match self.next_candidate() {
+        let segref = match self.next_candidate() {
             Some(seg) => seg,
             None => return,
         };
@@ -210,7 +209,7 @@ impl Compactor {
                 };
 
             // unwrap it
-            let mut newseg: SegmentRef =
+            let newseg: SegmentRef =
                 match opt {
                     None => panic!("OOM"),
                     Some(seg) => seg,

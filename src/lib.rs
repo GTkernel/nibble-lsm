@@ -5,10 +5,6 @@
 #![allow(non_snake_case)]
 #![allow(unused_assignments)]
 #![allow(unused_imports)]
-#![allow(unused_imports)]
-#![allow(unused_mut)]
-#![allow(unused_mut)]
-#![allow(unused_variables)]
 #![allow(unused_variables)]
 
 #[macro_use]

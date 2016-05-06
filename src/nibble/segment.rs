@@ -549,7 +549,7 @@ impl Iterator for SegmentIter {
         if self.next_obj > 0 {
             // read length of current entry
             let addr = self.blocks[self.cur_blk].addr + self.blk_offset;
-            let mut entry: EntryHeader;
+            let entry: EntryHeader;
             unsafe {
                 entry = ptr::read(addr as *const EntryHeader);
             }
@@ -562,7 +562,7 @@ impl Iterator for SegmentIter {
 
         // read entry info
         let addr = self.blocks[self.cur_blk].addr + self.blk_offset;
-        let mut entry: EntryHeader;
+        let entry: EntryHeader;
         unsafe {
             entry = ptr::read(addr as *const EntryHeader);
         }
@@ -621,7 +621,7 @@ impl EntryReference {
         let mut offset = self.offset + size_of::<EntryHeader>();
         let block  = offset / BLOCK_SIZE;
         offset = offset % BLOCK_SIZE;
-        let mut ptr = v.as_mut_ptr();
+        let ptr = v.as_mut_ptr();
         self.copy_out(ptr, block, offset, self.keylen as usize);
         match String::from_utf8(v) {
             Ok(string) => string,
@@ -649,7 +649,6 @@ impl EntryReference {
                        remaining: usize) {
         // reassign as mutable
         let mut block = block;
-        let mut offset = offset;
         let mut remaining = remaining;
 
         let mut src: *const u8;
