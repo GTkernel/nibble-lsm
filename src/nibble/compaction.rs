@@ -118,7 +118,7 @@ impl Compactor {
     pub fn add(&mut self, seg: &SegmentRef) {
         match self.candidates.lock() {
             Ok(ref mut cand) => cand.push_back(seg.clone()),
-            Err(pe) => panic!("Compactor lock poisoned"),
+            Err(_) => panic!("lock poison"),
         }
     }
 
@@ -147,7 +147,7 @@ impl Compactor {
                     }
                 }
             },
-            Err(poison) => panic!("index lock poisoned"),
+            Err(_) => panic!("lock poison"),
         }
         status
     }

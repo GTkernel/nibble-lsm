@@ -72,7 +72,7 @@ impl Nibble {
                     Some(v) => va = v,
                 }
             },
-            Err(poison) => panic!("index lock poisoned"),
+            Err(_) => panic!("lock poison"),
         }
         //
         // XXX XXX use EntryReference to copy out data!! XXX XXX
@@ -92,7 +92,7 @@ impl Nibble {
     pub fn del_object(&mut self, key: &String) -> Status {
         let va: usize;
         match self.index.lock() {
-            Err(poison) => panic!("index lock poisoned"),
+            Err(_) => panic!("lock poison"),
             Ok(mut guard) => {
                 match guard.remove(key) {
                     None => return Err(ErrorCode::KeyNotExist),

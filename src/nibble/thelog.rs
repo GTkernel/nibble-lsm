@@ -103,24 +103,21 @@ impl LogHead {
 
     pub fn append(&mut self, buf: &ObjDesc) -> Status {
         // allocate if head not exist
-        match self.segment {
-            None => { match self.roll() {
-                Err(code) => return Err(code),
-                Ok(ign) => {},
-            }},
-            _ => {},
+        if let None = self.segment {
+            if let Err(code) = self.roll() {
+                return Err(code);
+            }
         }
         if !rbm!(self.segment).can_hold(buf) {
-            match self.roll() {
-                Err(code) => return Err(code),
-                Ok(ign) => {},
+            if let Err(code) = self.roll() {
+                return Err(code);
             }
         }
         let mut seg = rbm!(self.segment);
         let va: usize;
         match seg.append(buf) {
             Ok(va_) => va = va_,
-            Err(code) => panic!("has space but append failed"),
+            Err(_) => panic!("has space but append failed"),
         }
         Ok(va)
     }
@@ -135,7 +132,7 @@ impl LogHead {
             Ok(mut manager) => {
                 self.segment = manager.alloc();
             },
-            Err(poison) => panic!("segmgr lock poison"),
+            Err(_) => panic!("lock poison"),
         }
         match self.segment {
             None => Err(ErrorCode::OutOfMemory),
@@ -152,7 +149,7 @@ impl LogHead {
                 Ok(mut manager) => {
                     manager.add_closed(&segref);
                 },
-                Err(poison) => panic!("segmgr lock poison"),
+                Err(_) => panic!("lock poison"),
             }
         }
     }

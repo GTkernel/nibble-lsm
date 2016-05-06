@@ -70,7 +70,6 @@ pub type BlockRefPool = Vec<BlockRef>;
 //==----------------------------------------------------==//
 
 pub struct BlockAllocator {
-    block_size: usize,
     pool: BlockRefPool,
     freepool: BlockRefPool,
     mmap: MemMap,
@@ -78,20 +77,18 @@ pub struct BlockAllocator {
 
 impl BlockAllocator {
 
-    pub fn new(block_size: usize, bytes: usize) -> Self {
+    pub fn new(bytes: usize) -> Self {
         let mmap = MemMap::new(bytes);
-        let count = bytes / block_size;
+        let count = bytes / BLOCK_SIZE;
         let mut pool: Vec<Arc<Block>> = Vec::with_capacity(count);
         let mut freepool: Vec<Arc<Block>> = Vec::with_capacity(count);
         for b in 0..count {
-            let addr = mmap.addr() + b*block_size;
-            let b = Arc::new(Block::new(addr, b, block_size));
+            let addr = mmap.addr() + b*BLOCK_SIZE;
+            let b = Arc::new(Block::new(addr, b, BLOCK_SIZE));
             pool.push(b.clone());
             freepool.push(b.clone());
         }
-        BlockAllocator { block_size: block_size,
-            pool: pool, freepool: freepool, mmap: mmap,
-        }
+        BlockAllocator { pool: pool, freepool: freepool, mmap: mmap, }
     }
 
     pub fn alloc(&mut self, count: usize) -> Option<BlockRefPool> {
@@ -163,6 +160,7 @@ impl<'a> ObjDesc<'a> {
 
     /// Releases memory associated with a .value that is allocated
     /// internally upon retreiving an object from the log.
+    #[cfg(IGNORE)]
     pub unsafe fn release_value(&mut self) {
         match self.value.take() {
             // v goes out of scope and its memory released
@@ -208,6 +206,7 @@ pub type SegmentManagerRef = Arc<Mutex<SegmentManager>>;
 
 // TODO need metrics for computing compaction weights
 // TODO head,len,rem as atomics
+#[allow(dead_code)]
 pub struct Segment {
     id: usize,
     slot: usize, /// index into segment table TODO add unit test?
@@ -489,11 +488,11 @@ impl Segment {
 impl Drop for Segment {
 
     fn drop(&mut self) {
-        for b in self.blocks.iter() {
+        //for b in self.blocks.iter() {
             // TODO push .clone() to BlockAllocator
             // release slot
             // add to freeslots list
-        }
+        //}
     }
 }
 
@@ -769,11 +768,12 @@ impl EpochTable {
 //      Segment manager
 //==----------------------------------------------------==//
 
+#[allow(dead_code)]
 pub struct SegmentManager {
     id: usize,
-    size: usize, /// Total memory
+    /// Total memory
+    size: usize,
     next_seg_id: usize, // FIXME atomic
-    segment_size: usize,
     allocator: BlockAllocator,
     segments: Vec<Option<SegmentRef>>,
     epochs: EpochTableRef,
@@ -787,7 +787,7 @@ impl SegmentManager {
     // TODO write an iterator; update unit test below
 
     pub fn new(id: usize, segsz: usize, len: usize) -> Self {
-        let b = BlockAllocator::new(BLOCK_SIZE, len);
+        let b = BlockAllocator::new(len);
         let num = len / segsz;
         let mut segments: Vec<Option<SegmentRef>>
             = Vec::with_capacity(num);
@@ -801,7 +801,6 @@ impl SegmentManager {
         SegmentManager {
             id: id, size: len,
             next_seg_id: 0,
-            segment_size: segsz,
             allocator: b,
             segments: segments,
             epochs: Arc::new(EpochTable::new(num)),
@@ -843,6 +842,8 @@ impl SegmentManager {
         self.alloc_size(nblks)
     }
 
+    // TODO implement
+    #[cfg(IGNORE)]
     pub fn free(&self, segment: SegmentRef) {
         // release blocks (reset their segment ID)
         unimplemented!();
