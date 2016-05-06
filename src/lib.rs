@@ -18,6 +18,7 @@ extern crate libc;
 extern crate rand;
 extern crate test;
 extern crate time;
+extern crate crossbeam;
 
 pub mod nibble;
 pub use nibble::*;

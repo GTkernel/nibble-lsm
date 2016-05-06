@@ -56,9 +56,11 @@ use thelog::*;
 use segment::*;
 use index::*;
 
-use std::collections::{BinaryHeap,LinkedList};
+use std::collections::{VecDeque,BinaryHeap,LinkedList};
 use std::sync::{Arc,Mutex,MutexGuard};
 use std::thread;
+
+use crossbeam::sync::SegQueue;
 
 //==----------------------------------------------------==//
 //      Compactor types
@@ -77,10 +79,12 @@ pub type LiveFn = Box<Fn(&EntryReference, &MutexGuard<Index>) -> bool>;
 pub struct Compactor {
     // TODO approximate sorting?
     // candidates: BinaryHeap<SegmentRef>,
-    candidates: Mutex<Vec<SegmentRef>>,
+    candidates: Mutex<VecDeque<SegmentRef>>,
     manager: SegmentManagerRef,
     index: IndexRef,
     epochs: EpochTableRef,
+    /// Cleaned segments that are waiting to be released
+    reclaim: Arc<SegQueue<SegmentRef>>,
 }
 
 // TODO need a way to return clean segments back to the segment
@@ -99,10 +103,11 @@ impl Compactor {
             Ok(guard) => guard.epochs(),
         };
         let mut c = Compactor {
-            candidates: Mutex::new(Vec::new()),
+            candidates: Mutex::new(VecDeque::new()),
             manager: manager.clone(),
             index: index.clone(),
             epochs: epochs,
+            reclaim: Arc::new(SegQueue::new()),
         };
         c
     }
@@ -113,7 +118,7 @@ impl Compactor {
     /// instances (else this is a bottleneck).
     pub fn add(&mut self, seg: &SegmentRef) {
         match self.candidates.lock() {
-            Ok(ref mut cand) => cand.push(seg.clone()),
+            Ok(ref mut cand) => cand.push_back(seg.clone()),
             Err(pe) => panic!("Compactor lock poisoned"),
         }
     }
@@ -154,7 +159,7 @@ impl Compactor {
         match self.candidates.lock() {
             Err(_) => panic!("lock poison"),
             Ok(mut cand) => {
-                match cand.pop() {
+                match cand.pop_front() {
                     None => {},
                     Some(seg) => segref = Some(seg.clone()),
                 }
@@ -220,15 +225,11 @@ impl Compactor {
             // monitor the new segment, too
             match self.candidates.lock() {
                 Err(_) => panic!("lock poison"),
-                Ok(ref mut cand) => cand.push(newseg.clone()),
+                Ok(ref mut cand) => cand.push_back(newseg.clone()),
             }
         }
 
-        // tell manager we released this segment's memory
-        match self.manager.lock() {
-            Err(_) => panic!("lock poison"),
-            Ok(mut manager) => manager.add_cleaned(&segref),
-        }
+        self.reclaim.push(segref.clone());
     }
 
     /// Look in segment manager for newly closed segments. If any,
@@ -256,6 +257,7 @@ impl Compactor {
     //
 
     // TODO background thread: check_new, try_compact, etc.
+
 
     //
     // --- For unit tests ---
@@ -497,14 +499,15 @@ mod tests {
             c.try_compact();
         }
 
-        // check manager has received a few segments to reclaim
         match segmgr.lock() {
             Err(_) => panic!("lock poison"),
             Ok(mang) =>  {
                 assert_eq!(mang.n_closed(), 0);
-                assert_eq!(mang.n_reclaim(), ncompact);
             },
         };
+
+        // TODO verify we moved segments to reclaim list
+
     } // try_compact
 
 }

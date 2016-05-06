@@ -14,6 +14,9 @@ use std::slice::from_raw_parts;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic;
 use std::sync::atomic::AtomicUsize;
+use std::collections::VecDeque;
+
+use crossbeam::sync::SegQueue;
 
 pub const BLOCK_SHIFT:   usize = 16;
 pub const BLOCK_SIZE:    usize = 1 << BLOCK_SHIFT;
@@ -488,6 +491,8 @@ impl Drop for Segment {
     fn drop(&mut self) {
         for b in self.blocks.iter() {
             // TODO push .clone() to BlockAllocator
+            // release slot
+            // add to freeslots list
         }
     }
 }
@@ -773,10 +778,9 @@ pub struct SegmentManager {
     allocator: BlockAllocator,
     segments: Vec<Option<SegmentRef>>,
     epochs: EpochTableRef,
-    free_slots: Vec<u32>,
+    free_slots: Arc<SegQueue<u32>>,
     // TODO lock these
-    closed: Vec<SegmentRef>,
-    reclaim: Vec<SegmentRef>,
+    closed: VecDeque<SegmentRef>,
 }
 
 // TODO reclaim segments function and thread
@@ -791,9 +795,9 @@ impl SegmentManager {
         for _ in 0..num {
             segments.push(None);
         }
-        let mut free_slots: Vec<u32> = vec![0; num];
+        let free_slots: SegQueue<u32> = SegQueue::new();
         for i in 0..num {
-            free_slots[i] = i as u32;
+            free_slots.push(i as u32);
         }
         SegmentManager {
             id: id, size: len,
@@ -802,9 +806,8 @@ impl SegmentManager {
             allocator: b,
             segments: segments,
             epochs: Arc::new(EpochTable::new(num)),
-            free_slots: free_slots,
-            closed: Vec::new(),
-            reclaim: Vec::new(),
+            free_slots: Arc::new(free_slots),
+            closed: VecDeque::new(),
         }
     }
 
@@ -813,18 +816,12 @@ impl SegmentManager {
     /// TODO wait/return if blocks aren't available (not panic)
     pub fn alloc_size(&mut self, nblks: usize) -> Option<SegmentRef> {
         // TODO lock, unlock
-        if self.free_slots.is_empty() {
-            None
-        } else {
-            let slot: usize;
-            match self.free_slots.pop() {
-                None => panic!("No free slots"),
-                Some(v) => slot = v as usize,
-            };
-            match self.segments[slot] {
-                None => {},
-                _ => panic!("Alloc from non-empty slot"),
-            };
+        let mut ret: Option<SegmentRef> = None;
+        if let Some(s) = self.free_slots.try_pop() {
+            let slot = s as usize;
+            if let Some(_) = self.segments[slot] {
+                panic!("Alloc from non-empty slot");
+            }
             let blocks = match self.allocator.alloc(nblks) {
                 None => panic!("Could not allocate blocks"),
                 Some(b) => b,
@@ -835,8 +832,9 @@ impl SegmentManager {
             self.next_seg_id += 1;
             self.segments[slot] = Some(seg_ref!(self.next_seg_id,
                                                 slot, blocks));
-            self.segments[slot].clone()
+            ret = self.segments[slot].clone();
         }
+        ret
     }
 
     /// Allocate a segment with default size.
@@ -862,22 +860,16 @@ impl SegmentManager {
         ret
     }
 
-    /// The compaction code pushes segments it cleans to us. We use
-    /// epochs to know when no operations have references into a
-    /// segment, before releasing it back to the block pool.
-    pub fn add_cleaned(&mut self, seg: &SegmentRef) {
-        self.reclaim.push(seg.clone());
-    }
-
     /// Log heads pass segments here when it rolls over. Compaction
     /// threads will periodically query this queue for new segments to
     /// add to its candidate list.
     pub fn add_closed(&mut self, seg: &SegmentRef) {
-        self.closed.push(seg.clone());
+        self.closed.push_back(seg.clone());
     }
 
+    // TODO if using SegQueue, perhaps add max to pop off
     pub fn grab_closed(&mut self,
-                       to: &mut Vec<SegmentRef>) -> usize {
+                       to: &mut VecDeque<SegmentRef>) -> usize {
         let n: usize = self.closed.len();
         to.append(&mut self.closed);
         n
@@ -894,11 +886,6 @@ impl SegmentManager {
     #[cfg(test)]
     pub fn n_closed(&self) -> usize {
         self.closed.len()
-    }
-
-    #[cfg(test)]
-    pub fn n_reclaim(&self) -> usize {
-        self.reclaim.len()
     }
 
     #[cfg(test)]
