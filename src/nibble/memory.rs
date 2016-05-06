@@ -2,8 +2,6 @@ use libc;
 
 use std::mem;
 use std::ptr;
-use std::ptr::copy;
-use std::ptr::copy_nonoverlapping;
 
 //==----------------------------------------------------==//
 //      Heap allocation

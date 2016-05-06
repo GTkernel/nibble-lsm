@@ -3,7 +3,6 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![allow(unused_assignments)]
-#![allow(unused_imports)]
 
 #[macro_use]
 extern crate log;

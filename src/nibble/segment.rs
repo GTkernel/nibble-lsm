@@ -3,14 +3,12 @@
 use common::*;
 use thelog::*;
 use memory::*;
-use compaction::*;
 
 use std::cell::RefCell;
 use std::cmp;
 use std::mem;
 use std::mem::size_of;
 use std::ptr;
-use std::slice::from_raw_parts;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic;
 use std::sync::atomic::AtomicUsize;

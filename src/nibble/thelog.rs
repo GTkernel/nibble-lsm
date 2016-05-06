@@ -4,10 +4,7 @@ use segment::*;
 use std::cell::RefCell;
 use std::mem::size_of;
 use std::mem::transmute;
-use std::ptr;
-use std::ptr::copy;
-use std::ptr::copy_nonoverlapping;
-use std::sync::{Arc,Mutex};
+use std::sync::{Arc};
 
 //==----------------------------------------------------==//
 //      Entry header

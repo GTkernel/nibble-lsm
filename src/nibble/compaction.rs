@@ -52,13 +52,12 @@
 // into its trees.
 
 use common::*;
-use thelog::*;
 use segment::*;
 use index::*;
 
-use std::collections::{VecDeque,BinaryHeap,LinkedList};
+use std::collections::{VecDeque};
 use std::sync::{Arc,Mutex,MutexGuard};
-use std::thread;
+//use std::thread;
 
 use crossbeam::sync::SegQueue;
 
