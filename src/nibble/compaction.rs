@@ -152,6 +152,8 @@ impl Compactor {
     }
 
     /// Pick a next candidate segment and remove from set.
+    /// TODO use a lazy, batch iterator to get best-N segments, like
+    /// https://github.com/benashford/rust-lazysort
     pub fn next_candidate(&mut self) -> Option<SegmentRef> {
         let mut segref: Option<SegmentRef> = None;
         match self.candidates.lock() {
