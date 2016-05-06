@@ -474,7 +474,6 @@ impl Segment {
     #[cfg(test)]
     pub fn reset(&mut self) {
         let blk = 0;
-        let start = self.blocks[blk].addr + SegmentHeader::len();
         self.closed = false;
         self.head = Some(self.blocks[blk].addr);
         self.rem = self.len - SegmentHeader::len();
@@ -920,16 +919,9 @@ impl SegmentManager {
 mod tests {
     use super::*;
 
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-    use std::mem::size_of;
     use std::ops;
-    use std::ptr;
-    use std::rc::Rc;
     use std::slice::from_raw_parts;
     use std::sync::{Arc,Mutex};
-
-    use test::Bencher;
 
     use thelog::*;
     use common::*;
@@ -955,17 +947,16 @@ mod tests {
         logger::enable();
         let num = 64;
         let bytes = num * BLOCK_SIZE;
-        let mut ba = BlockAllocator::new(BLOCK_SIZE, bytes);
+        let mut ba = BlockAllocator::new(bytes);
         assert_eq!(ba.len(), num);
         assert_eq!(ba.freelen(), num);
-        assert_eq!(ba.block_size, BLOCK_SIZE);
 
         let mut count = 0;
         while ba.freelen() > 0 {
             match ba.alloc(2) {
                 None => break,
                 opt => {
-                    for b in opt.unwrap() {
+                    for _ in opt.unwrap() {
                         count += 1;
                     }
                 },
@@ -981,7 +972,7 @@ mod tests {
         logger::enable();
         let num = 64;
         let bytes = num * BLOCK_SIZE;
-        let mut ba = BlockAllocator::new(BLOCK_SIZE, bytes);
+        let mut ba = BlockAllocator::new(bytes);
         let set;
         match ba.alloc(64) {
             None => panic!("Alloc should not fail"),
@@ -1004,7 +995,7 @@ mod tests {
         let memlen = 1<<23;
         let numseg = memlen / SEGMENT_SIZE;
         let mut mgr = SegmentManager::new(0, SEGMENT_SIZE, memlen);
-        for i in 0..numseg {
+        for _ in 0..numseg {
             match mgr.alloc() {
                 None => panic!("segment alloc failed"),
                 _ => {},
@@ -1022,7 +1013,6 @@ mod tests {
     fn segment_manager_one_obj_overwrite() {
         logger::enable();
         let memlen = 1<<23;
-        let numseg = memlen / SEGMENT_SIZE;
         let manager = segmgr_ref!(0, SEGMENT_SIZE, memlen);
         let mut log = Log::new(manager.clone());
 
@@ -1034,7 +1024,7 @@ mod tests {
         let mut count: usize = 0;
         loop {
             match log.append(&obj) {
-                Ok(va) => count += 1,
+                Ok(_) => count += 1,
                 Err(code) => match code {
                     ErrorCode::OutOfMemory => break,
                     _ => panic!("filling log returned {:?}", code),
@@ -1044,9 +1034,8 @@ mod tests {
         // FIXME rust complains when we match on the expr directly
         let l = manager.lock();
         match l {
-            Ok(mgr) =>
-                assert_eq!(mgr.test_scan_objects(), count),
-            Err(poison) => panic!("manager lock poison"),
+            Ok(mgr) => assert_eq!(mgr.test_scan_objects(), count),
+            Err(_) => panic!("lock poison"),
         }
     }
 
@@ -1059,10 +1048,9 @@ mod tests {
 
         // TODO make a macro out of these lines
         let memlen = 1<<23;
-        let numseg = memlen / SEGMENT_SIZE;
         let mut mgr = SegmentManager::new(0, SEGMENT_SIZE, memlen);
 
-        let mut segref = mgr.alloc();
+        let segref = mgr.alloc();
         let mut seg = rbm!(segref);
 
         // use this to generate random strings
@@ -1082,20 +1070,20 @@ mod tests {
         let nbatches = (SEGMENT_SIZE - BLOCK_SIZE) / (total as usize);
 
         // Buffer to receive items into
-        let mut buf: *mut u8 = allocate::<u8>(total as usize);
+        let buf: *mut u8 = allocate::<u8>(total as usize);
 
         // create the key value pairs
         let mut keys: Vec<String> = Vec::new();
         let mut values: Vec<String> = Vec::new();
         for tuple in (&key_sizes).into_iter().zip(&value_sizes) {
             let mut s = String::with_capacity(*tuple.0 as usize);
-            for i in 0..*tuple.0 {
+            for _ in 0..*tuple.0 {
                 let r = rng.gen::<usize>() % alpha.len();
                 s.push( alpha[ r ] );
             }
             keys.push(s);
             s = String::with_capacity(*tuple.1 as usize);
-            for i in 0..*tuple.1 {
+            for _ in 0..*tuple.1 {
                 let r = rng.gen::<usize>() % alpha.len();
                 s.push( alpha[ r ] );
             }
@@ -1142,9 +1130,4 @@ mod tests {
     }
 
     // TODO test copying out of the iterator
-
-    //#[test]
-    fn iterate_segment_large_objects() {
-        // TODO
-    }
 }

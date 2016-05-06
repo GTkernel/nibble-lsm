@@ -134,7 +134,7 @@ impl Nibble {
     pub fn nlive(&self) -> usize {
         match self.index.lock() {
             Ok(index) => index.len(),
-            Err(poison) => panic!("index lock poisoned"),
+            Err(_) => panic!("index lock poisoned"),
         }
     }
 }
@@ -147,16 +147,7 @@ impl Nibble {
 mod tests {
     use super::*;
 
-    use std::collections::HashMap;
-    use std::mem::size_of;
-    use std::mem::transmute;
-    use std::rc::Rc;
-    use std::sync::Arc;
-
-    use test::Bencher;
-
     use segment::*;
-    use common::*;
 
     use super::super::logger;
 
@@ -171,16 +162,13 @@ mod tests {
         let val = String::from("valuevaluevalue");
         let obj = ObjDesc::new(key.as_str(),
                         Some(val.as_ptr()), val.len() as u32);
-        match nib.put_object(&obj) {
-            Ok(ign) => {},
-            Err(code) => panic!("{:?}", code),
+        if let Err(code) = nib.put_object(&obj) {
+            panic!("{:?}", code);
         }
 
         // verify what we wrote is correct FIXME reduce copy/paste
         {
-            let status: Status;
             let ret = nib.get_object(&key);
-            let string: String;
             match ret {
                 (Err(code),_) => panic!("key should exist: {:?}", code),
                 (Ok(_),Some(buf)) => {
@@ -210,17 +198,14 @@ mod tests {
         let val2: &'static str = "VALUEVALUEVALUE";
         let obj2 = ObjDesc::new(key.as_str(),
                             Some(val2.as_ptr()), val2.len() as u32);
-        for i in 0..100000 {
-            match nib.put_object(&obj2) {
-                Ok(ign) => {},
-                Err(code) => panic!("{:?}", code),
+        for _ in 0..100000 {
+            if let Err(code) = nib.put_object(&obj2) {
+                panic!("{:?}", code);
             }
         }
 
         {
-            let status: Status;
             let ret = nib.get_object(&key);
-            let string: String;
             match ret {
                 (Err(code),_) => panic!("key should exist: {:?}", code),
                 (Ok(_),Some(buf)) => {
@@ -277,7 +262,7 @@ mod tests {
     fn epoch_0() {
         logger::enable();
         let mem = 1 << 23;
-        let mut nib = Nibble::new(mem);
+        let nib = Nibble::new(mem);
 
         for idx in 0..nib.epochs.len() {
             assert_eq!(nib.epochs.get_live(idx), 0usize);
@@ -306,7 +291,7 @@ mod tests {
         if let Err(code) = nib.put_object(&obj) {
             panic!("{:?}", code)
         }
-        let mut head = segment_of(&nib, &key);
+        let head = segment_of(&nib, &key);
         assert_eq!(nib.epochs.get_live(head), size);
 
         // insert until the head rolls
@@ -383,7 +368,7 @@ mod tests {
         }
 
         let idx = segment_of(&nib, &key);
-        let mut len = obj.len_with_header();
+        let len = obj.len_with_header();
         assert_eq!(nib.epochs.get_live(idx), len);
 
         if let Err(code) = nib.del_object(&key) {

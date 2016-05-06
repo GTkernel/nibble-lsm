@@ -288,13 +288,12 @@ mod tests {
     fn add_segments() {
         logger::enable();
         let nseg = 8;
-        let mut index = index_ref!();
-        let mut segmgr = segmgr_ref!(0, SEGMENT_SIZE, SEGMENT_SIZE*nseg);
+        let index = index_ref!();
+        let segmgr = segmgr_ref!(0, SEGMENT_SIZE, SEGMENT_SIZE*nseg);
         let mut c = Compactor::new(&segmgr, &index);
         assert_eq!(c.candidates.lock().unwrap().len(), 0);
-        let mut x: usize;
         if let Ok(mut manager) = segmgr.lock() {
-            for x in 0..nseg {
+            for _ in 0..nseg {
                 c.add( manager.alloc().as_ref()
                        .expect("alloc segment")
                      );
@@ -309,11 +308,11 @@ mod tests {
         logger::enable();
         let mut rng = rand::thread_rng();
 
-        let mut index = index_ref!();
-        let mut segmgr = segmgr_ref!(0, SEGMENT_SIZE, SEGMENT_SIZE<<3);
+        let index = index_ref!();
+        let segmgr = segmgr_ref!(0, SEGMENT_SIZE, SEGMENT_SIZE<<3);
         let mut c = Compactor::new(&segmgr, &index);
 
-        let mut seg_obj_ref;
+        let seg_obj_ref;
         match segmgr.lock() {
             Ok(mut mgr) => {
                 seg_obj_ref = mgr.alloc().unwrap();
@@ -340,13 +339,13 @@ mod tests {
         let mut values: Vec<String> = Vec::new();
         for tuple in (&key_sizes).into_iter().zip(&value_sizes) {
             let mut s = String::with_capacity(*tuple.0 as usize);
-            for i in 0..*tuple.0 {
+            for _ in 0..*tuple.0 {
                 let r = rng.gen::<usize>() % alpha.len();
                 s.push( alpha[ r ] );
             }
             keys.push(s);
             s = String::with_capacity(*tuple.1 as usize);
-            for i in 0..*tuple.1 {
+            for _ in 0..*tuple.1 {
                 let r = rng.gen::<usize>() % alpha.len();
                 s.push( alpha[ r ] );
             }
@@ -375,14 +374,14 @@ mod tests {
         // we remove all objects whose value is < 500 bytes
         // using fancy closures
         let filter: LiveFn =
-            Box::new( | entry, guard | { entry.datalen < 500 });
+            Box::new( | entry, _ | { entry.datalen < 500 });
 
         // allocate new segment to move objects into
         let new_capacity = ((value_sizes[0] + key_sizes[0]) as usize
                             + mem::size_of::<EntryHeader>())*nbatches
                             + mem::size_of::<SegmentHeader>();
         let nblks = (new_capacity / BLOCK_SIZE) + 1;
-        let mut seg_clean_ref;
+        let seg_clean_ref;
         match segmgr.lock() {
             Ok(mut mgr) => {
                 seg_clean_ref = mgr.alloc_size(nblks).unwrap();
@@ -399,7 +398,7 @@ mod tests {
 
         // Buffer to receive items into
         let total = (key_sizes[0] + value_sizes[0]) << 1;
-        let mut buf: *mut u8 = allocate::<u8>(total as usize);
+        let buf: *mut u8 = allocate::<u8>(total as usize);
 
         let mut counter = 0;
         for entry in seg_clean_ref.borrow().into_iter() {
@@ -438,15 +437,15 @@ mod tests {
     #[test]
     fn try_compact() {
         logger::enable();
-        let mut index = index_ref!();
+        let index = index_ref!();
         let nseg = 32; // multiple of 4 (for this test)
-        let mut segmgr = segmgr_ref!(0, SEGMENT_SIZE,
+        let segmgr = segmgr_ref!(0, SEGMENT_SIZE,
                                      nseg*SEGMENT_SIZE);
         let mut c = Compactor::new(&segmgr, &index);
         let mut log = Log::new(segmgr.clone());
 
-        let mut key = String::from("laskdjflskdjflskjdflskdf");
-        let mut value = String::from("sldfkjslkfjsldkjfksjdlfjsdfjslkd");
+        let key = String::from("laskdjflskdjflskjdflskdf");
+        let value = String::from("sldfkjslkfjsldkjfksjdlfjsdfjslkd");
 
         // fill half the number of segments
         {
@@ -491,7 +490,7 @@ mod tests {
 
         // manually engage compaction
         let ncompact = nseg/4;
-        for i in 0..ncompact {
+        for _ in 0..ncompact {
             c.try_compact();
         }
 

@@ -55,43 +55,19 @@ impl Index {
 mod tests {
     use super::*;
 
-    use std::collections::HashMap;
-    use std::mem::size_of;
-    use std::mem::transmute;
-    use std::ptr::copy;
-    use std::ptr::copy_nonoverlapping;
-    use std::rc::Rc;
-    use std::sync::Arc;
-
-    use test::Bencher;
-
     use super::super::logger;
 
     #[test]
     fn index_basic() {
         logger::enable();
         let mut index = Index::new();
-
         let key1 = String::from("alex");
         let key2 = String::from("notexist");
-
-        match index.update(&key1, 42) {
-            None => {}, // expected
-            Some(v) => panic!("key should not exist"),
-        }
-        match index.update(&key1, 24) {
-            None => panic!("key should exist"),
-            Some(v) => assert_eq!(v, 42),
-        }
-
-        match index.get(key2.as_str()) {
-            None => {}, // ok
-            Some(v) => panic!("get on nonexistent key"),
-        }
-
-        match index.get(key1.as_str()) {
-            None => panic!("key should exist"),
-            Some(vref) => {}, // ok
-        }
+        assert_eq!(index.update(&key1, 42).is_some(), false);
+        let opt = index.update(&key1, 24);
+        assert_eq!(opt.is_some(), true);
+        assert_eq!(opt.unwrap(), 42);
+        assert_eq!(index.get(key2.as_str()).is_some(), false);
+        assert_eq!(index.get(key1.as_str()).is_some(), true);
     }
 }

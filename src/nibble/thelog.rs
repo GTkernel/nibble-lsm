@@ -237,14 +237,9 @@ impl Log {
 mod tests {
     use super::*;
 
-    use std::collections::HashMap;
-    use std::mem::size_of;
-    use std::mem::transmute;
     use std::ptr;
-    use std::rc::Rc;
     use std::sync::{Arc,Mutex};
 
-    use test::Bencher;
     use segment::*;
     use common::*;
 
@@ -254,21 +249,19 @@ mod tests {
     fn log_alloc_until_full() {
         logger::enable();
         let memlen = 1<<23;
-        let numseg = memlen / SEGMENT_SIZE;
         let manager = segmgr_ref!(0, SEGMENT_SIZE, memlen);
         let mut log = Log::new(manager);
         let key: &'static str = "keykeykeykey";
         let val: &'static str = "valuevaluevalue";
         let obj = ObjDesc::new(key, Some(val.as_ptr()), val.len() as u32);
         loop {
-            match log.append(&obj) {
-                Ok(ign) => {},
-                Err(code) => match code {
+            if let Err(code) = log.append(&obj) {
+                match code {
                     ErrorCode::OutOfMemory => break,
                     _ => panic!("filling log returned {:?}", code),
-                },
+                }
             }
-        }
+        } // loop
     }
 
     // TODO fill log 50%, delete random items, then manually force
@@ -290,7 +283,6 @@ mod tests {
         assert_eq!(header.getkeylen(), 5);
         assert_eq!(header.getdatalen(), 7);
 
-        let len = size_of::<EntryHeader>();
         unsafe {
             ptr::write(ptr as *mut EntryHeader, header);
         }
@@ -303,6 +295,6 @@ mod tests {
         assert_eq!(header.getdatalen(), 7);
 
         // free the original memory again
-        let mem = unsafe { Box::from_raw(ptr) };
+        unsafe { Box::from_raw(ptr); }
     }
 }

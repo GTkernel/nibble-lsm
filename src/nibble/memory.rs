@@ -110,16 +110,6 @@ impl Drop for MemMap {
 mod tests {
     use super::*;
 
-    use std::collections::HashMap;
-    use std::mem::size_of;
-    use std::mem::transmute;
-    use std::ptr::copy;
-    use std::ptr::copy_nonoverlapping;
-    use std::rc::Rc;
-    use std::sync::Arc;
-
-    use test::Bencher;
-
     use super::super::logger;
 
     #[test]
