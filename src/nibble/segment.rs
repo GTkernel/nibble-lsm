@@ -9,7 +9,7 @@ use std::cmp;
 use std::mem;
 use std::mem::size_of;
 use std::ptr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic;
 use std::sync::atomic::AtomicUsize;
 use std::collections::VecDeque;
@@ -199,7 +199,7 @@ impl SegmentHeader {
 //      Segment
 //==----------------------------------------------------==//
 
-pub type SegmentRef = Arc<RefCell<Segment>>;
+pub type SegmentRef = Arc<RwLock<Segment>>;
 pub type SegmentManagerRef = Arc<Mutex<SegmentManager>>;
 
 // TODO need metrics for computing compaction weights
@@ -814,9 +814,7 @@ impl SegmentManager {
         let mut ret: Option<SegmentRef> = None;
         if let Some(s) = self.free_slots.try_pop() {
             let slot = s as usize;
-            if let Some(_) = self.segments[slot] {
-                panic!("Alloc from non-empty slot");
-            }
+            assert!(self.segments[slot].is_none());
             let blocks = match self.allocator.alloc(nblks) {
                 None => panic!("Could not allocate blocks"),
                 Some(b) => b,
@@ -902,8 +900,9 @@ impl SegmentManager {
         for opt in &self.segments {
             match *opt {
                 None => {},
-                Some(ref seg) => {
-                    count += seg.borrow().nobjects();
+                Some(ref segref) => {
+                    let seg = segref.read().unwrap();
+                    count += seg.nobjects();
                 },
             }
         }
@@ -1050,8 +1049,8 @@ mod tests {
         let memlen = 1<<23;
         let mut mgr = SegmentManager::new(0, SEGMENT_SIZE, memlen);
 
-        let segref = mgr.alloc();
-        let mut seg = rbm!(segref);
+        let segref = mgr.alloc().unwrap();
+        let mut seg = segref.write().unwrap();
 
         // use this to generate random strings
         // split string literal into something we can index with O(1)

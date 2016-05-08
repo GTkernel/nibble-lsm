@@ -20,6 +20,8 @@ pub enum ErrorCode {
     KeyNotExist,
 
     EmptyObject,
+
+    ObjectTooBig,
 }
 
 pub fn err2str(code: ErrorCode) -> &'static str {
@@ -29,6 +31,7 @@ pub fn err2str(code: ErrorCode) -> &'static str {
         ErrorCode::OutOfMemory   => { "Out of memory" },
         ErrorCode::KeyNotExist   => { "Key does not exist" },
         ErrorCode::EmptyObject   => { "Object is empty" },
+        ErrorCode::ObjectTooBig  => { "Object too big" },
     }
 }
 

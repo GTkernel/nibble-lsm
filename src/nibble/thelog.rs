@@ -1,10 +1,22 @@
 use common::*;
 use segment::*;
 
-use std::cell::RefCell;
-use std::mem::size_of;
-use std::mem::transmute;
-use std::sync::{Arc};
+use std::mem::{size_of,transmute};
+use std::sync::{Arc,Mutex};
+
+/// Acquire read lock on SegmentRef
+macro_rules! rlock {
+    ( $segref:expr ) => {
+        $segref.unwrap().read().unwrap()
+    }
+}
+
+/// Acquire write lock on SegmentRef
+macro_rules! wlock {
+    ( $segref:expr ) => {
+        $segref.unwrap().write().unwrap()
+    }
+}
 
 //==----------------------------------------------------==//
 //      Entry header
@@ -79,7 +91,7 @@ impl EntryHeader {
 //      Log head
 //==----------------------------------------------------==//
 
-pub type LogHeadRef = Arc<RefCell<LogHead>>;
+pub type LogHeadRef = Arc<Mutex<LogHead>>;
 
 pub struct LogHead {
     segment: Option<SegmentRef>,
@@ -99,24 +111,33 @@ impl LogHead {
     }
 
     pub fn append(&mut self, buf: &ObjDesc) -> Status {
-        // allocate if head not exist
+        assert!(buf.len_with_header() <
+                (SEGMENT_SIZE-size_of::<SegmentHeader>()));
+
+        let mut roll = false;
+
+        // check if head exists
         if let None = self.segment {
+            roll = true;
+        }
+        // check if the object can fit in remaining space
+        else {
+            let segref = self.segment.clone().unwrap();
+            let seg = segref.read().unwrap();
+            roll = !seg.can_hold(buf);
+        }
+        if roll {
             if let Err(code) = self.roll() {
                 return Err(code);
             }
         }
-        if !rbm!(self.segment).can_hold(buf) {
-            if let Err(code) = self.roll() {
-                return Err(code);
-            }
-        }
-        let mut seg = rbm!(self.segment);
-        let va: usize;
+
+        let segref = self.segment.clone().unwrap();
+        let mut seg = segref.write().unwrap();
         match seg.append(buf) {
-            Ok(va_) => va = va_,
             Err(_) => panic!("has space but append failed"),
+            va @ Ok(_) => va,
         }
-        Ok(va)
     }
 
     //
@@ -153,14 +174,12 @@ impl LogHead {
 
     /// Roll head. Close current and allocate new.
     fn roll(&mut self) -> Status {
-        match self.segment.clone() {
-            None => self.replace(),
-            Some(segref) => {
-                segref.borrow_mut().close();
-                self.add_closed();
-                self.replace()
-            },
+        let segref = self.segment.clone();
+        if let Some(seg) = segref {
+            seg.write().unwrap().close();
+            self.add_closed();
         }
+        self.replace()
     }
 
 }
@@ -183,7 +202,7 @@ impl Log {
             Ok(guard) => guard.epochs(),
         };
         Log {
-            head: Arc::new(RefCell::new(LogHead::new(manager.clone()))),
+            head: Arc::new(Mutex::new(LogHead::new(manager.clone()))),
             manager: manager.clone(),
             epochs: epochs,
         }
@@ -196,7 +215,7 @@ impl Log {
         // 1. determine log head to use
         let head = &self.head;
         // 2. call append on the log head
-        match head.borrow_mut().append(buf) {
+        match head.lock().unwrap().append(buf) {
             e @ Err(_) => return e,
             Ok(va) => {
                 match self.manager.lock() {
@@ -211,14 +230,6 @@ impl Log {
                 Ok(va)
             },
         } // head append
-    }
-
-    pub fn enable_cleaning(&mut self) {
-        unimplemented!();
-    }
-
-    pub fn disable_cleaning(&mut self) {
-        unimplemented!();
     }
 
     //

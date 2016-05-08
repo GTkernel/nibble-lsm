@@ -4,23 +4,6 @@
 //      Common macros
 //==----------------------------------------------------==//
 
-/// Extract reference &T from Option<T>
-#[macro_export]
-macro_rules! r {
-    ( $obj:expr ) => { $obj.as_ref().unwrap() }
-}
-
-/// Borrow on a reference &T from a RefCell<Option<T>>
-#[macro_export]
-macro_rules! rb {
-    ( $obj:expr ) => { r!($obj).borrow() }
-}
-
-/// Same as rb! but mutable
-#[macro_export]
-macro_rules! rbm {
-    ( $obj:expr ) => { r!($obj).borrow_mut() }
-}
 
 /// Update T in an Option<T> where T is an int type
 #[macro_export]
@@ -40,7 +23,7 @@ macro_rules! incr {
 #[macro_export]
 macro_rules! seg_ref {
     ( $id:expr, $slot:expr, $blocks:expr ) => {
-        Arc::new( RefCell::new(
+        Arc::new( RwLock::new(
                 Segment::new($id, $slot, $blocks)
                 ))
     }
