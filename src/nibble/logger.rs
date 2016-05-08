@@ -1,6 +1,7 @@
 use log;
 use log::{LogRecord, LogLevel, LogMetadata};
 use log::{SetLoggerError, LogLevelFilter};
+use std::time;
 
 pub struct SimpleLogger {
     level: LogLevel,
@@ -13,9 +14,14 @@ impl log::Log for SimpleLogger {
     }
     fn log(&self, record: &LogRecord) {
         if self.enabled(record.metadata()) {
+            let loc = record.location();
+            let module = loc.module_path();
+            let file = match loc.file().rfind("/") {
+                None => loc.file(),
+                Some(idx) => loc.file().split_at(idx+1).1,
+            };
             println!("{}/{}:{} [{}] {}",
-                     record.location().module_path(),
-                     record.location().file(), record.location().line(),
+                     module, file, loc.line(),
                      record.level(), record.args());
         }
     }
