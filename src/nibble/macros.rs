@@ -4,7 +4,6 @@
 //      Common macros
 //==----------------------------------------------------==//
 
-
 /// Update T in an Option<T> where T is an int type
 #[macro_export]
 macro_rules! incr {
@@ -59,6 +58,20 @@ macro_rules! index_ref {
     ( ) => {
         Arc::new( Mutex::new(
                 Index::new()
+                ))
+    }
+}
+
+//==----------------------------------------------------==//
+//      Compactor macros
+//==----------------------------------------------------==//
+
+/// Make a new compactor instance.
+#[macro_export]
+macro_rules! comp_ref {
+    ( $manager:expr, $index:expr ) => {
+        Arc::new( Mutex::new(
+                Compactor::new( $manager, $index )
                 ))
     }
 }

@@ -56,8 +56,11 @@ use segment::*;
 use index::*;
 
 use std::collections::{VecDeque};
-use std::sync::{Arc,Mutex,MutexGuard};
-//use std::thread;
+use std::sync::{Arc,Mutex,MutexGuard,RwLock};
+use std::sync::atomic;
+use std::sync::atomic::AtomicBool;
+use std::thread;
+use std::time::Duration;
 
 use crossbeam::sync::SegQueue;
 
@@ -75,21 +78,16 @@ pub type LiveFn = Box<Fn(&EntryReference, &MutexGuard<Index>) -> bool>;
 
 // TODO Keep segments ordered by their usefulness for compaction.
 
+type Handle = thread::JoinHandle<()>;
+
 pub struct Compactor {
-    // TODO approximate sorting?
-    // candidates: BinaryHeap<SegmentRef>,
-    candidates: Mutex<VecDeque<SegmentRef>>,
+    candidates: Arc<Mutex<VecDeque<SegmentRef>>>,
     manager: SegmentManagerRef,
     index: IndexRef,
     epochs: EpochTableRef,
-    /// Cleaned segments that are waiting to be released
-    reclaim: Arc<SegQueue<SegmentRef>>,
+    /// The set of worker threads doing compaction.
+    workers: SegQueue<(Arc<RwLock<Worker>>,Handle)>,
 }
-
-// TODO need a way to return clean segments back to the segment
-// manager
-
-// TODO need a thread
 
 // TODO metrics for when compaction should begin
 
@@ -102,22 +100,11 @@ impl Compactor {
             Ok(guard) => guard.epochs(),
         };
         Compactor {
-            candidates: Mutex::new(VecDeque::new()),
+            candidates: Arc::new(Mutex::new(VecDeque::new())),
             manager: manager.clone(),
             index: index.clone(),
             epochs: epochs,
-            reclaim: Arc::new(SegQueue::new()),
-        }
-    }
-
-    /// Add newly closed segment to the candidate set.
-    /// TODO in the future, this function will be replaced with a
-    /// thread that periodically scraps closed segments from LogHead
-    /// instances (else this is a bottleneck).
-    pub fn add(&mut self, seg: &SegmentRef) {
-        match self.candidates.lock() {
-            Ok(ref mut cand) => cand.push_back(seg.clone()),
-            Err(_) => panic!("lock poison"),
+            workers: SegQueue::new(),
         }
     }
 
@@ -128,32 +115,99 @@ impl Compactor {
     // release unused blocks back to the block allocator, and the
     // segment then added back to the log.
 
-    pub fn compact(&mut self, dirty: &SegmentRef,
-               new_: &SegmentRef, isLive: &LiveFn) -> Status
-    {
-        let status: Status = Ok(1);
+    pub fn spawn(&mut self) {
+        let state = Arc::new(RwLock::new(Worker::new(self)));
+        let give = state.clone();
+        let handle = thread::spawn( move || worker(give) );
+        self.workers.push( (state, handle) );
+    }
 
-        // FIXME don't lock entire index
-        match self.index.lock() {
-            Ok(mut guard) => {
-                let mut new = new_.borrow_mut();
-                for entry in dirty.borrow_mut().into_iter() {
-                    if isLive(&entry, &guard) {
-                        let key: String;
-                        let va = new.append_entry(&entry);
-                        unsafe { key = entry.get_key(); }
-                        guard.update(&key, va);
-                    }
-                }
-            },
+}
+
+impl Drop for Compactor {
+
+    fn drop(&mut self) {
+        //if self.tid.is_some() {
+            //let order = atomic::Ordering::Relaxed;
+            //self.tstop.store(true, order);
+        //}
+    }
+}
+
+//==----------------------------------------------------==//
+//      Worker thread (all private)
+//==----------------------------------------------------==//
+
+macro_rules! park {
+    ( $state:expr ) => {
+        if $state.must_park() { thread::park(); }
+    }
+}
+
+macro_rules! park_or_sleep {
+    ( $state:expr, $duration:expr ) => {
+        if $state.must_park() { thread::park(); }
+        else { thread::sleep($duration); }
+    }
+}
+
+
+fn worker(state: Arc<RwLock<Worker>>) {
+    info!("thread awake");
+    let dur = Duration::from_secs(1);
+    loop {
+        let mut s = state.write().unwrap();
+
+        // check segments to reclaim
+        let new = s.check_new();
+        debug!("{} new candidates", new);
+
+        s.try_compact();
+
+        //park_or_sleep!(state, dur);
+        thread::sleep(dur);
+    }
+}
+
+struct Worker {
+    candidates: Arc<Mutex<VecDeque<SegmentRef>>>,
+    manager: SegmentManagerRef,
+    index: IndexRef,
+    epochs: EpochTableRef,
+    park: AtomicBool,
+    /// This thread's private set of to-be-reclaimed segments
+    /// When this thread stops, it will unload them to the Compactor
+    reclaim: SegQueue<SegmentRef>,
+//    /// Reference to the global list of to-be-reclaimed segments
+//    /// held by the compactor. We load/unload from/to this
+//    reclaim_glob: Arc<SegQueue<SegmentRef>>,
+}
+
+impl Worker {
+
+    pub fn new(compactor: &Compactor) -> Self {
+        Worker {
+            candidates: compactor.candidates.clone(),
+            manager: compactor.manager.clone(),
+            index: compactor.index.clone(),
+            epochs: compactor.epochs.clone(),
+            reclaim: SegQueue::new(),
+            park: AtomicBool::new(false),
+            //reclaim_glob: compactor.reclaim.clone(),
+        }
+    }
+
+    pub fn add_candidate(&mut self, seg: &SegmentRef) {
+        match self.candidates.lock() {
+            Ok(ref mut cand) => cand.push_back(seg.clone()),
             Err(_) => panic!("lock poison"),
         }
-        status
     }
 
     /// Pick a next candidate segment and remove from set.
     /// TODO use a lazy, batch iterator to get best-N segments, like
     /// https://github.com/benashford/rust-lazysort
+    /// TODO create a candidates object instead?
     pub fn next_candidate(&mut self) -> Option<SegmentRef> {
         let mut segref: Option<SegmentRef> = None;
         match self.candidates.lock() {
@@ -168,29 +222,59 @@ impl Compactor {
         segref
     }
 
+    pub fn compact(&mut self, dirty: &SegmentRef,
+               new: &SegmentRef, isLive: &LiveFn) -> Status
+    {
+        let status: Status = Ok(1);
+        let mut new = new.write().unwrap();
+        // XXX need write to iterate?
+        let mut dirty = dirty.write().unwrap();
+
+        // get_object doesn't lock a Segment to retrieve the value
+        // since the virtual address is directly used
+
+        match self.index.lock() {
+            Ok(mut guard) => {
+                for entry in dirty.into_iter() {
+                    if isLive(&entry, &guard) {
+                        let key: String;
+                        let va = new.append_entry(&entry);
+                        unsafe { key = entry.get_key(); }
+                        guard.update(&key, va);
+                    }
+                }
+            },
+            Err(_) => panic!("lock poison"),
+        }
+        status
+    }
+
     /// Select a segment, grab a clean one, compact. Remove cleaned
     /// segment from candidates and notify segment manager it must be
     /// reclaimed. 
     pub fn try_compact(&mut self) {
+        debug!("attempting compaction");
 
         // liveness checking function
-        let is_live: LiveFn = Box::new( move | entry, guard | {
+        // entry: EntryReference
+        // iguard: MutexGuard<Index>
+        let is_live: LiveFn = Box::new( move | entry, iguard | {
             let key = unsafe { entry.get_key() };
-            match guard.get(key.as_str()) {
+            match iguard.get(key.as_str()) {
                 Some(loc) => (loc == entry.get_loc()),
                 None => false,
-            } // match
+            }
         });
 
         // pick a segment
         let segref = match self.next_candidate() {
             Some(seg) => seg,
-            None => return,
+            None => { debug!("no candidates"); return; },
         };
 
         // determine live amount for new segment
-        let slot = segref.borrow().slot();
-        let newlen = self.epochs.get_live(slot) >> 1;
+        let slot = segref.read().unwrap().slot();
+        let newlen = self.epochs.get_live(slot);
         debug!("slot {} newlen {}", slot, newlen);
 
         // newlen may be stale by the time we start cleaning (it's ok)
@@ -209,24 +293,14 @@ impl Compactor {
                     },
                 };
 
-            // unwrap it
-            let newseg: SegmentRef =
-                match opt {
-                    None => panic!("OOM"),
-                    Some(seg) => seg,
-                };
+            if let None = opt { panic!("OOM"); }
+            let newseg: SegmentRef = opt.unwrap();
 
-            // do the work
-            match self.compact(&segref, &newseg, &is_live) {
-                Ok(1) => {},
-                _ => panic!("compact failed"),
-            }
+            let ret = self.compact(&segref, &newseg, &is_live);
+            if ret.is_err() { panic!("compact failed"); }
 
             // monitor the new segment, too
-            match self.candidates.lock() {
-                Err(_) => panic!("lock poison"),
-                Ok(ref mut cand) => cand.push_back(newseg.clone()),
-            }
+            self.add_candidate(&newseg);
         }
 
         self.reclaim.push(segref.clone());
@@ -250,23 +324,17 @@ impl Compactor {
         } // candidates lock
     }
 
-    //
-    // --- Private methods ---
-    //
-
-    // TODO background thread: check_new, try_compact, etc.
-
-
-    //
-    // --- For unit tests ---
-    //
+    pub fn must_park(&self) -> bool {
+        let order = atomic::Ordering::Relaxed;
+        self.park.compare_and_swap(true, false, order)
+    }
 }
 
 //==----------------------------------------------------==//
 //      Unit tests
 //==----------------------------------------------------==//
 
-#[cfg(test)]
+#[cfg(IGNORE)]
 mod tests {
     use super::*;
 

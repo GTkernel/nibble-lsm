@@ -3,6 +3,7 @@ use thelog::*;
 use memory::*;
 use segment::*;
 use index::*;
+use compaction::*;
 
 use std::ptr;
 use std::sync::{Arc,Mutex};
@@ -16,6 +17,7 @@ pub struct Nibble {
     manager: SegmentManagerRef,
     log: Log,
     epochs: EpochTableRef,
+    compactor: CompactorRef,
 }
 
 impl Nibble {
@@ -24,12 +26,23 @@ impl Nibble {
         let manager = SegmentManager::new(0, SEGMENT_SIZE, capacity);
         let epochs = manager.epochs();
         let mref = Arc::new(Mutex::new(manager));
+        let index = index_ref!();
         Nibble {
-            index: index_ref!(),
+            index: index.clone(),
             manager: mref.clone(),
             log: Log::new(mref.clone()),
             epochs: epochs,
+            compactor: comp_ref!(&mref, &index),
         }
+    }
+
+    pub fn enable_compaction(&mut self) {
+        let mut comp = self.compactor.lock().unwrap();
+        comp.spawn();
+    }
+
+    pub fn disable_compaction(&mut self) {
+        unimplemented!();
     }
 
     // TODO add some locking
