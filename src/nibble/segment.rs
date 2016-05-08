@@ -214,7 +214,9 @@ pub struct Segment {
     rem: usize, /// Remaining capacity TODO atomic
     nobj: usize, /// Objects (live or not) appended
     curblk: Option<usize>,
-    front: Option<*mut SegmentHeader>,
+    /// A *mut SegmentHeader, but kept as usize because the Rust
+    /// compiler does not allow sharing of raw pointers.
+    front: Option<usize>,
     blocks: BlockRefPool,
 }
 
@@ -245,7 +247,7 @@ impl Segment {
             head: Some(start + SegmentHeader::len()),
             len: len, rem: len - SegmentHeader::len(),
             nobj: 0, curblk: Some(blk),
-            front: Some(blocks[blk].addr as *mut SegmentHeader),
+            front: Some(blocks[blk].addr),
             blocks: blocks,
         }
     }
@@ -260,7 +262,7 @@ impl Segment {
             None => {
                 self.curblk = Some(0);
                 self.head = Some(blocks[0].addr);
-                self.front = Some(blocks[0].addr as *mut SegmentHeader);
+                self.front = Some(blocks[0].addr);
             },
             _ => {},
         }
@@ -356,9 +358,10 @@ impl Segment {
     fn update_header(&self, n: u32) {
         assert_eq!(self.front.is_some(), true);
         let mut header: SegmentHeader;
-        unsafe { header = ptr::read(self.front.unwrap()); }
+        let p = self.front.unwrap() as *mut SegmentHeader;
+        unsafe { header = ptr::read(p); }
         header.num_objects += n;
-        unsafe { ptr::write(self.front.unwrap(), header); }
+        unsafe { ptr::write(p, header); }
     }
 
     /// Increment the head offset into the start of the next block.
