@@ -118,7 +118,12 @@ impl Compactor {
     pub fn spawn(&mut self) {
         let state = Arc::new(RwLock::new(Worker::new(self)));
         let give = state.clone();
-        let handle = thread::spawn( move || worker(give) );
+        let name = String::from("compaction::worker");
+        let handle = match thread::Builder::new()
+                .name(name).spawn( move || worker(give) ) {
+            Ok(handle) => handle,
+            Err(e) => panic!("spawning thread: {:?}", e),
+        };
         self.workers.push( (state, handle) );
     }
 
@@ -275,25 +280,27 @@ impl Worker {
         // determine live amount for new segment
         let slot = segref.read().unwrap().slot();
         let newlen = self.epochs.get_live(slot);
-        debug!("slot {} newlen {}", slot, newlen);
+        debug!("new segment: slot {} len {}", slot, newlen);
 
         // newlen may be stale by the time we start cleaning (it's ok)
         // if significant, we may TODO free more blocks after
         // compaction
 
         if newlen > 0  {
+            debug!("need to allocate new segment");
             // allocate new segment
             let opt: Option<SegmentRef> = 
                 match self.manager.lock() {
                     Err(_) => panic!("lock poison"),
                     Ok(mut manager) => {
                         let nblks = (newlen - 1) / BLOCK_SIZE + 1;
-                        debug!("nblks {}", nblks);
+                        debug!("need {} blocks", nblks);
                         manager.alloc_size(nblks)
                     },
                 };
 
-            if let None = opt { panic!("OOM"); }
+            // FIXME we should spin here?
+            if let None = opt { panic!("OOM: no segments"); }
             let newseg: SegmentRef = opt.unwrap();
 
             let ret = self.compact(&segref, &newseg, &is_live);
