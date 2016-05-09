@@ -163,14 +163,28 @@ fn worker(state: Arc<RwLock<Worker>>) {
     loop {
         let mut s = state.write().unwrap();
 
-        // check segments to reclaim
+        // check segments to reclaim TODO
+
+        // acquire newly closed segments
         let new = s.check_new();
         debug!("{} new candidates", new);
 
         s.try_compact();
 
-        //park_or_sleep!(state, dur);
-        thread::sleep(dur);
+        let ncand = {
+            match s.candidates.lock() {
+                Err(_) => panic!("lock poison"),
+                Ok(guard) => guard.len(),
+            }
+        };
+
+        drop(s);
+
+        // TODO know better when to park
+        if ncand == 0 {
+            // FIXME crashes if we comment this out
+            thread::sleep(dur);
+        }
     }
 }
 
