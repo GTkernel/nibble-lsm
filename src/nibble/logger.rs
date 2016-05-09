@@ -2,6 +2,7 @@ use log;
 use log::{LogRecord, LogLevel, LogMetadata};
 use log::{SetLoggerError, LogLevelFilter};
 use std::time;
+use std::thread;
 
 use libc;
 
@@ -34,14 +35,18 @@ impl log::Log for SimpleLogger {
     fn log(&self, record: &LogRecord) {
         if self.enabled(record.metadata()) {
             let tid = get_tid();
+            let tname = match thread::current().name() {
+                None => String::from("_noname_"),
+                Some(n) => String::from(n),
+            };
             let loc = record.location();
             let module = loc.module_path();
             let file = match loc.file().rfind("/") {
                 None => loc.file(),
                 Some(idx) => loc.file().split_at(idx+1).1,
             };
-            println!("<{}> {}/{}:{} [{}] {}",
-                     tid, module, file, loc.line(),
+            println!("<{}-{}> {}/{}:{} [{}] {}",
+                     tid, tname, module, file, loc.line(),
                      record.level(), record.args());
         }
     }
