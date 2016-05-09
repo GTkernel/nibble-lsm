@@ -127,9 +127,14 @@ impl LogHead {
             roll = !seg.can_hold(buf);
         }
         if roll {
+            debug!("trying to roll head");
             if let Err(code) = self.roll() {
                 return Err(code);
             }
+            // debug stuff only
+            let segref = self.segment.clone().unwrap();
+            let seg = segref.read().unwrap();
+            debug!("new head: segment slot {}", seg.slot());
         }
 
         let segref = self.segment.clone().unwrap();
