@@ -9,6 +9,23 @@ pub struct SimpleLogger {
     level: LogLevel,
 }
 
+#[cfg(target_os="linux")]
+fn get_tid() -> i32 {
+    unsafe {
+        let id = libc::SYS_gettid;
+        libc::syscall(id) as i32
+    }
+}
+
+#[cfg(target_os="macos")]
+fn get_tid() -> i32 {
+    unsafe {
+        // let id = libc::SYS_thread_selfid;
+        let id = 372; // XXX
+        libc::syscall(id) as i32
+    }
+}
+
 /// A simple logger. Functions invoked by log crate
 impl log::Log for SimpleLogger {
     fn enabled(&self, metadata: &LogMetadata) -> bool {
@@ -16,9 +33,7 @@ impl log::Log for SimpleLogger {
     }
     fn log(&self, record: &LogRecord) {
         if self.enabled(record.metadata()) {
-            let tid = unsafe {
-                libc::syscall(libc::SYS_gettid) as isize
-            };
+            let tid = get_tid();
             let loc = record.location();
             let module = loc.module_path();
             let file = match loc.file().rfind("/") {
