@@ -709,6 +709,7 @@ pub type EpochTableRef = Arc<EpochTable>;
 pub struct EpochTable {
     /// shares index with SegmentManager::segments
     table: Vec<SegmentUsage>,
+    ordering: atomic::Ordering,
 }
 
 impl EpochTable {
@@ -718,39 +719,42 @@ impl EpochTable {
         for _ in 0..slots {
             v.push(SegmentUsage::new());
         }
-        EpochTable { table: v, }
+        EpochTable {
+            table: v,
+            ordering: atomic::Ordering::Relaxed,
+        }
     }
 
     pub fn get_live(&self, index: usize) -> usize {
-        self.table[index].live.load(atomic::Ordering::SeqCst)
+        self.table[index].live.load(self.ordering)
     }
 
     pub fn get_epoch(&self, index: usize) -> usize {
-        self.table[index].epoch.load(atomic::Ordering::SeqCst)
+        self.table[index].epoch.load(self.ordering)
     }
 
     pub fn set_live(&self, index: usize, value: usize) {
-        self.table[index].live.store(value, atomic::Ordering::SeqCst)
+        self.table[index].live.store(value, self.ordering)
     }
 
     pub fn set_epoch(&self, index: usize, value: usize) {
-        self.table[index].epoch.store(value, atomic::Ordering::SeqCst)
+        self.table[index].epoch.store(value, self.ordering)
     }
 
     pub fn incr_live(&self, index: usize, amt: usize) -> usize {
-        self.table[index].live.fetch_add(amt, atomic::Ordering::SeqCst)
+        self.table[index].live.fetch_add(amt, self.ordering)
     }
 
     pub fn incr_epoch(&self, index: usize, amt: usize) -> usize {
-        self.table[index].epoch.fetch_add(amt, atomic::Ordering::SeqCst)
+        self.table[index].epoch.fetch_add(amt, self.ordering)
     }
 
     pub fn decr_live(&self, index: usize, amt: usize) -> usize {
-        self.table[index].live.fetch_sub(amt, atomic::Ordering::SeqCst)
+        self.table[index].live.fetch_sub(amt, self.ordering)
     }
 
     pub fn decr_epoch(&self, index: usize, amt: usize) -> usize {
-        self.table[index].epoch.fetch_sub(amt, atomic::Ordering::SeqCst)
+        self.table[index].epoch.fetch_sub(amt, self.ordering)
     }
 
     //
