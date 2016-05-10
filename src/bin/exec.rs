@@ -5,7 +5,7 @@ extern crate log;
 
 use log::LogLevel;
 use nibble::compaction::Compactor;
-use nibble::store::Nibble;
+use nibble::nib::Nibble;
 use nibble::index::Index;
 use nibble::logger::SimpleLogger;
 use nibble::segment;

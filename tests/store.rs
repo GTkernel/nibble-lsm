@@ -16,7 +16,7 @@ use std::thread;
 use rand::Rng;
 use log::LogLevel;
 
-use nibble::store::Nibble;
+use nibble::nib::Nibble;
 use nibble::segment::ObjDesc;
 use nibble::logger::*;
 use nibble::common::ErrorCode;
