@@ -565,13 +565,13 @@ impl Iterator for SegmentIter {
         unsafe {
             entry = ptr::read(addr as *const EntryHeader);
         }
-        let obj_len = entry.object_length() as usize;
+        let entry_len = entry.len_with_header();
 
         // determine which blocks belong
         let mut nblks = 1;
         let blk_tail = BLOCK_SIZE - (self.seg_offset % BLOCK_SIZE);
-        if obj_len > blk_tail {
-            nblks += (obj_len - blk_tail) / BLOCK_SIZE + 1;
+        if entry_len > blk_tail {
+            nblks += ((entry_len - blk_tail) / BLOCK_SIZE) + 1;
         }
 
         self.next_obj += 1;
@@ -581,7 +581,7 @@ impl Iterator for SegmentIter {
             blocks: self.blocks.clone().into_iter()
                 .skip(self.cur_blk).take(nblks).collect(),
             offset: self.blk_offset,
-            len: obj_len + size_of::<EntryHeader>(),
+            len: entry_len,
             keylen: entry.getkeylen(),
             datalen: entry.getdatalen(),
         } )
