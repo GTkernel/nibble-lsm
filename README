@@ -3,6 +3,12 @@ crates to consider
 mempool by Andrew Gallant
 
 
+Note: with a fixed array of Segments (slots) we will need to compact
+such that multiple candidates are compressed to maximize a segment's
+typical size, else we run out of segment slots and still have many
+blocks available!
+
+
 
 Compile with MIR support using
 RUSTFLAGS="-Z orbit"
