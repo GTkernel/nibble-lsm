@@ -4,13 +4,13 @@ extern crate nibble;
 extern crate log;
 
 use log::LogLevel;
-use nibble::compaction::Compactor;
+//use nibble::compaction::Compactor;
 use nibble::nib::Nibble;
-use nibble::index::Index;
+//use nibble::index::Index;
 use nibble::logger::SimpleLogger;
-use nibble::segment;
-use nibble::segment::SegmentManager;
-use std::sync::{Arc,Mutex};
+//use nibble::segment;
+//use nibble::segment::SegmentManager;
+//use std::sync::{Arc,Mutex};
 use std::thread;
 use std::time::Duration;
 
