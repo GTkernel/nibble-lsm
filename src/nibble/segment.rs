@@ -822,8 +822,10 @@ impl SegmentManager {
     pub fn new(id: usize, segsz: usize, len: usize) -> Self {
         let b = BlockAllocator::new(len);
         let num = len / segsz;
+        // allocate more slots to accomodate some segments having
+        // fewer blocks (not all are =SEGMENT_SIZE)
         let mut segments: Vec<Option<SegmentRef>>
-            = Vec::with_capacity(num);
+            = Vec::with_capacity(num<<2);
         for _ in 0..num {
             segments.push(None);
         }
