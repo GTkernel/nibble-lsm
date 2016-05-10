@@ -54,6 +54,7 @@
 use common::*;
 use segment::*;
 use index::*;
+use epoch::*;
 
 use std::collections::{VecDeque};
 use std::sync::{Arc,Mutex,MutexGuard,RwLock};

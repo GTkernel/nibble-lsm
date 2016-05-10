@@ -1,5 +1,6 @@
 use common::*;
 use segment::*;
+use epoch::*;
 
 use std::mem::{size_of,transmute};
 use std::sync::{Arc,Mutex};

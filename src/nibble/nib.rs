@@ -4,6 +4,7 @@ use memory::*;
 use segment::*;
 use index::*;
 use compaction::*;
+use epoch::*;
 
 use std::ptr;
 use std::sync::{Arc,Mutex};

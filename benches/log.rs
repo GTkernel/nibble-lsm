@@ -5,7 +5,7 @@ extern crate nibble;
 
 use test::Bencher;
 
-use nibble::store::Nibble;
+use nibble::nib::Nibble;
 use nibble::segment::ObjDesc;
 
 // TODO test objects larger than block, and segment

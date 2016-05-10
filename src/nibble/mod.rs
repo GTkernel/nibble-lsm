@@ -8,5 +8,6 @@ pub mod nib;
 pub mod index;
 pub mod memory;
 pub mod thelog;
+pub mod epoch;
 
 pub mod logger;

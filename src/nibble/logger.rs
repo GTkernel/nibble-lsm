@@ -1,7 +1,6 @@
 use log;
 use log::{LogRecord, LogLevel, LogMetadata};
 use log::{SetLoggerError, LogLevelFilter};
-use std::time;
 use std::thread;
 
 use libc;
