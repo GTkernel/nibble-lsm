@@ -39,7 +39,7 @@ pub struct Block {
 impl Block {
 
     pub fn new(addr: usize, slot: usize, len: usize) -> Self {
-        debug!("new Block 0x{:x} slot {} len {}", addr, slot, len);
+        trace!("new Block 0x{:x} slot {} len {}", addr, slot, len);
         Block { addr: addr, len: len, slot: slot, seg: None }
     }
 
@@ -98,6 +98,10 @@ impl BlockAllocator {
                     Some(self.freepool.split_off(len-count))
                 } else { None },
         }
+    }
+
+    pub fn free(&mut self, pool: &mut BlockRefPool) {
+        self.freepool.append(pool);
     }
 
     pub fn len(&self) -> usize { self.pool.len() }
@@ -231,6 +235,7 @@ impl Segment {
 
     // TODO make blocks a ref
     pub fn new(id: usize, slot: usize, blocks: BlockRefPool) -> Self {
+        debug!("new segment: slot {} #blks {}", slot, blocks.len());
         let mut len: usize = 0;
         assert!(blocks.len() > 0);
         for b in blocks.iter() {
@@ -320,12 +325,15 @@ impl Segment {
         // append by-block since entry may not be virtually contiguous
         let mut va = entry.blocks[0].addr + entry.offset;
         let mut amt = cmp::min(BLOCK_SIZE - entry.offset, entry.len);
+        trace!("append_entry len {} #blks {} amt {}",
+               entry.len, entry.blocks.len(), amt);
         self.append_safe(va as *const u8, amt);
 
         // go for the rest
         let mut remaining = entry.len - amt;
         let mut bidx = 1;
         while remaining > 0 {
+            assert!(bidx < entry.blocks.len());
             va = entry.blocks[bidx].addr;
             amt = cmp::min(BLOCK_SIZE, remaining);
             self.append_safe(va as *const u8, amt);
@@ -345,6 +353,10 @@ impl Segment {
 
     pub fn nobjects(&self) -> usize {
         self.nobj
+    }
+
+    pub fn nblocks(&self) -> usize {
+        self.blocks.len()
     }
 
     pub fn slot(&self) -> usize {
@@ -488,11 +500,7 @@ impl Segment {
 impl Drop for Segment {
 
     fn drop(&mut self) {
-        //for b in self.blocks.iter() {
-            // TODO push .clone() to BlockAllocator
-            // release slot
-            // add to freeslots list
-        //}
+        debug!("segment slot {} dropped", self.slot);
     }
 }
 
@@ -573,6 +581,10 @@ impl Iterator for SegmentIter {
         if entry_len > blk_tail {
             nblks += ((entry_len - blk_tail) / BLOCK_SIZE) + 1;
         }
+
+        trace!("segiter: objlen {} blktail {} segoff {} blkoff {}",
+               entry_len, blk_tail, self.seg_offset,
+               self.seg_offset % BLOCK_SIZE);
 
         self.next_obj += 1;
 
@@ -712,6 +724,12 @@ pub struct EpochTable {
     ordering: atomic::Ordering,
 }
 
+/// Maintain information about live state of each segment. The value
+/// here reflects the "live bytes" and matches what you would find
+/// iterating the segment and corroborating against the index.  The
+/// live bytes here may be reduced as you iterate, so be sure to first
+/// read a value here before iterating; then the live bytes will only
+/// be greater than or equal to the live bytes found from iterating.
 impl EpochTable {
 
     pub fn new(slots: usize) -> Self {
@@ -742,7 +760,9 @@ impl EpochTable {
     }
 
     pub fn incr_live(&self, index: usize, amt: usize) -> usize {
-        self.table[index].live.fetch_add(amt, self.ordering)
+        let v = self.table[index].live.fetch_add(amt, self.ordering);
+        debug_assert!(v <= SEGMENT_SIZE);
+        v
     }
 
     pub fn incr_epoch(&self, index: usize, amt: usize) -> usize {
@@ -750,11 +770,20 @@ impl EpochTable {
     }
 
     pub fn decr_live(&self, index: usize, amt: usize) -> usize {
+        debug_assert!(self.get_live(index) >= amt);
         self.table[index].live.fetch_sub(amt, self.ordering)
     }
 
     pub fn decr_epoch(&self, index: usize, amt: usize) -> usize {
         self.table[index].epoch.fetch_sub(amt, self.ordering)
+    }
+
+    pub fn swap_live(&self, index: usize, amt: usize) -> usize {
+        self.table[index].live.swap(amt, self.ordering)
+    }
+
+    pub fn swap_epoch(&self, index: usize, amt: usize) -> usize {
+        self.table[index].epoch.swap(amt, self.ordering)
     }
 
     //
@@ -844,11 +873,34 @@ impl SegmentManager {
         self.alloc_size(nblks)
     }
 
-    // TODO implement
-    #[cfg(IGNORE)]
-    pub fn free(&self, segment: SegmentRef) {
-        // release blocks (reset their segment ID)
-        unimplemented!();
+    // Consume the reference and release its blocks
+    pub fn free(&mut self, segref: SegmentRef) {
+
+        // drop only other known ref to segment
+        // and extract slot#
+        let slot = {
+            let seg = segref.read().unwrap(); // FIXME don't lock
+            self.segments[seg.slot] = None;
+            seg.slot
+        };
+
+        // extract the segment (should only be one ref remaining)
+        let mut seg = match Arc::try_unwrap(segref) {
+            Err(_) => panic!("another ref to seg exists"),
+            Ok(seglock) => { match seglock.into_inner() {
+                Err(_) => panic!("lock held without arc??"),
+                Ok(seg) => seg,
+            }},
+        };
+
+        // TODO memset the segment? or the header?
+
+        // release the blocks
+        self.allocator.free(&mut seg.blocks);
+
+        // this seg should have zero references at this point
+        // do this last because it opens the slot above for use
+        self.free_slots.push(slot as u32);
     }
 
     pub fn segment_of(&self, va: usize) -> Option<usize> {
@@ -1059,6 +1111,7 @@ mod tests {
         let segref = mgr.alloc().unwrap();
         let mut seg = segref.write().unwrap();
 
+        // TODO use crate rand::gen_ascii_chars
         // use this to generate random strings
         // split string literal into something we can index with O(1)
         // do we need a grapheme cluster iterator instead?

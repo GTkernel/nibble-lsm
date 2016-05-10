@@ -36,6 +36,7 @@ fn alloc_free(pct_to_free: f32) {
     let _ = SimpleLogger::init(LogLevel::Debug);
 
     let mut nib = Nibble::new(1<<23);
+
     nib.enable_compaction();
     thread::yield_now();
 
@@ -44,7 +45,7 @@ fn alloc_free(pct_to_free: f32) {
     // allocate until full
     let mut counter: usize = 0;
     let mut rng = rand::thread_rng();
-    let value = rng.gen_ascii_chars().take(100).collect();
+    let value = rng.gen_ascii_chars().take(1000).collect();
     info!("inserting objects until full");
     loop {
         let key = counter.to_string();
@@ -68,15 +69,15 @@ fn alloc_free(pct_to_free: f32) {
         assert!(nib.del_object(key).is_ok());
     }
 
-    let dur = Duration::from_secs(3);
+    let dur = Duration::from_secs(15);
     thread::sleep(dur);
 }
 
-#[test]
 fn alloc_free_all() {
     alloc_free(1.0f32);
 }
 
+#[test]
 fn alloc_free_half() {
     alloc_free(0.5f32);
 }

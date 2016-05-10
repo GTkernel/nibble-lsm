@@ -38,7 +38,8 @@ impl Nibble {
 
     pub fn enable_compaction(&mut self) {
         let mut comp = self.compactor.lock().unwrap();
-        comp.spawn();
+        comp.spawn(WorkerRole::Reclaim);
+        comp.spawn(WorkerRole::Compact);
     }
 
     pub fn disable_compaction(&mut self) {

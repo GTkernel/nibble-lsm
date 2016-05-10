@@ -127,14 +127,13 @@ impl LogHead {
             roll = !seg.can_hold(buf);
         }
         if roll {
-            debug!("trying to roll head");
+            debug!("rolling head");
             if let Err(code) = self.roll() {
                 return Err(code);
             }
             // debug stuff only
             let segref = self.segment.clone().unwrap();
             let seg = segref.read().unwrap();
-            debug!("new head: segment slot {}", seg.slot());
         }
 
         let segref = self.segment.clone().unwrap();
@@ -229,6 +228,7 @@ impl Log {
                         let idx = guard.segment_of(va);
                         assert_eq!(idx.is_some(), true);
                         let len = buf.len_with_header();
+                        assert!(len < SEGMENT_SIZE);
                         self.epochs.incr_live(idx.unwrap(), len);
                     },
                 } // manager lock

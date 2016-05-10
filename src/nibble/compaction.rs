@@ -58,25 +58,30 @@ use index::*;
 use std::collections::{VecDeque};
 use std::sync::{Arc,Mutex,MutexGuard,RwLock};
 use std::sync::atomic;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool,AtomicUsize};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration,Instant};
 
 use crossbeam::sync::SegQueue;
+use itertools;
 
 //==----------------------------------------------------==//
-//      Compactor types
+//      Compactor types, macros
 //==----------------------------------------------------==//
 
 pub type CompactorRef = Arc<Mutex< Compactor >>;
-
 pub type LiveFn = Box<Fn(&EntryReference, &MutexGuard<Index>) -> bool>;
+type EpochSegment = (Instant, SegmentRef);
+type ReclaimQueue = SegQueue<EpochSegment>;
+type ReclaimQueueRef = Arc<ReclaimQueue>;
 
 //==----------------------------------------------------==//
 //      Compactor
 //==----------------------------------------------------==//
 
 // TODO Keep segments ordered by their usefulness for compaction.
+
+static EPOCH: AtomicUsize = AtomicUsize::new(0);
 
 type Handle = thread::JoinHandle<()>;
 
@@ -87,6 +92,8 @@ pub struct Compactor {
     epochs: EpochTableRef,
     /// The set of worker threads doing compaction.
     workers: SegQueue<(Arc<RwLock<Worker>>,Handle)>,
+    /// Global reclamation queue
+    reclaim: ReclaimQueueRef,
 }
 
 // TODO metrics for when compaction should begin
@@ -105,6 +112,7 @@ impl Compactor {
             index: index.clone(),
             epochs: epochs,
             workers: SegQueue::new(),
+            reclaim: Arc::new(SegQueue::new()),
         }
     }
 
@@ -115,14 +123,14 @@ impl Compactor {
     // release unused blocks back to the block allocator, and the
     // segment then added back to the log.
 
-    pub fn spawn(&mut self) {
-        let state = Arc::new(RwLock::new(Worker::new(self)));
+    pub fn spawn(&mut self, role: WorkerRole) {
+        let state = Arc::new(RwLock::new(Worker::new(&role, self)));
         let give = state.clone();
-        let name = String::from("compaction::worker");
+        let name = format!("compaction::worker::{:?}", role);
         let handle = match thread::Builder::new()
                 .name(name).spawn( move || worker(give) ) {
             Ok(handle) => handle,
-            Err(e) => panic!("spawning thread: {:?}", e),
+            Err(e) => panic!("spawning thread: {:?}: {:?}",role,e),
         };
         self.workers.push( (state, handle) );
     }
@@ -140,7 +148,7 @@ impl Drop for Compactor {
 }
 
 //==----------------------------------------------------==//
-//      Worker thread (all private)
+//      Worker thread functions
 //==----------------------------------------------------==//
 
 macro_rules! park {
@@ -156,63 +164,84 @@ macro_rules! park_or_sleep {
     }
 }
 
+fn reclaim(state: &Arc<RwLock<Worker>>) {
+    let mut s = state.write().unwrap();
+    s.do_reclaim();
+}
+
+fn compact(state: &Arc<RwLock<Worker>>) {
+    let dur = Duration::from_secs(1);
+    let mut s = state.write().unwrap();
+    let new = s.check_new();
+    debug!("{} new candidates", new);
+    s.do_compact();
+    let ncand = {
+        match s.candidates.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(guard) => guard.len(),
+        }
+    };
+    drop(s); // unlock WorkerState
+    // TODO know better when to park
+    if ncand == 0 {
+        // FIXME crashes if we comment this out
+        thread::sleep(dur);
+    }
+}
 
 fn worker(state: Arc<RwLock<Worker>>) {
     info!("thread awake");
-    let dur = Duration::from_secs(1);
+    let role = { state.read().unwrap().role };
     loop {
-        let mut s = state.write().unwrap();
-
-        // check segments to reclaim TODO
-
-        // acquire newly closed segments
-        let new = s.check_new();
-        debug!("{} new candidates", new);
-
-        s.try_compact();
-
-        let ncand = {
-            match s.candidates.lock() {
-                Err(_) => panic!("lock poison"),
-                Ok(guard) => guard.len(),
-            }
-        };
-
-        drop(s);
-
-        // TODO know better when to park
-        if ncand == 0 {
-            // FIXME crashes if we comment this out
-            thread::sleep(dur);
+        match role {
+            WorkerRole::Reclaim => reclaim(&state),
+            WorkerRole::Compact => compact(&state),
         }
     }
 }
 
+//==----------------------------------------------------==//
+//      Worker structure
+//==----------------------------------------------------==//
+
+#[derive(Debug,Copy,Clone)]
+pub enum WorkerRole {
+    Reclaim,
+    Compact,
+}
+
 struct Worker {
+    role: WorkerRole,
     candidates: Arc<Mutex<VecDeque<SegmentRef>>>,
     manager: SegmentManagerRef,
     index: IndexRef,
     epochs: EpochTableRef,
     park: AtomicBool,
     /// This thread's private set of to-be-reclaimed segments
-    /// When this thread stops, it will unload them to the Compactor
-    reclaim: SegQueue<SegmentRef>,
-//    /// Reference to the global list of to-be-reclaimed segments
-//    /// held by the compactor. We load/unload from/to this
-//    reclaim_glob: Arc<SegQueue<SegmentRef>>,
+    /// Used only if thread role is Reclaim
+    reclaim: Option<VecDeque<EpochSegment>>,
+    /// Reference to the global list of to-be-reclaimed segments
+    /// Compaction threads push to this, Reclaim threads move SegRefs
+    /// from this to their private set to manipulate
+    reclaim_glob: ReclaimQueueRef,
 }
 
 impl Worker {
 
-    pub fn new(compactor: &Compactor) -> Self {
+    pub fn new(role: &WorkerRole, compactor: &Compactor) -> Self {
+        let reclaim = match *role {
+            WorkerRole::Reclaim => Some(VecDeque::new()),
+            _ => None,
+        };
         Worker {
+            role: *role,
             candidates: compactor.candidates.clone(),
             manager: compactor.manager.clone(),
             index: compactor.index.clone(),
             epochs: compactor.epochs.clone(),
-            reclaim: SegQueue::new(),
             park: AtomicBool::new(false),
-            //reclaim_glob: compactor.reclaim.clone(),
+            reclaim: reclaim,
+            reclaim_glob: compactor.reclaim.clone(),
         }
     }
 
@@ -241,6 +270,7 @@ impl Worker {
         segref
     }
 
+    // TODO need to compact multiple segments into one
     pub fn compact(&mut self, dirty: &SegmentRef,
                new: &SegmentRef, isLive: &LiveFn) -> Status
     {
@@ -248,6 +278,9 @@ impl Worker {
         let mut new = new.write().unwrap();
         // XXX need write to iterate?
         let mut dirty = dirty.write().unwrap();
+
+        debug!("performing compaction slot {} -> slot {} #blks {}",
+               dirty.slot(), new.slot(), new.nblocks());
 
         // get_object doesn't lock a Segment to retrieve the value
         // since the virtual address is directly used
@@ -265,15 +298,50 @@ impl Worker {
             },
             Err(_) => panic!("lock poison"),
         }
+
+        // carry over the epoch state
+        let from = dirty.slot();
+        let to   = new.slot();
+        self.epochs.set_live(to, self.epochs.swap_live(from, 0usize));
+
         status
     }
 
+    /// Iterate through the segment to ensure the epoch table reports
+    /// a live size that matches what the we corroborate with the
+    /// index.
+    #[cfg(IGNORE)]
+    fn verify(&mut self, segref: &SegmentRef,
+              slot: usize, isLive: &LiveFn) {
+        let guard = self.index.lock().unwrap();
+        let mut seg = segref.write().unwrap();
+        let mut size: usize = 0;
+        // read first then iterate and measure
+        let live = self.epochs.get_live(slot);
+        for entry in &*seg {
+            if isLive(&entry, &guard) {
+                size += entry.len;
+            }
+        }
+        info!("verify: slot {} measured {} epoch live {}",
+               slot, size, live);
+        assert!(size <= live);
+        assert!(live <= SEGMENT_SIZE);
+    }
+
+    /// Don't use this except when debugging epoch table
+    #[inline]
+    fn verify(&mut self, segref: &SegmentRef,
+              slot: usize, isLive: &LiveFn) { ; }
+
+    /// Called by WorkerRole::Compact
     /// Select a segment, grab a clean one, compact. Remove cleaned
     /// segment from candidates and notify segment manager it must be
     /// reclaimed. 
-    pub fn try_compact(&mut self) {
-        debug!("attempting compaction");
-
+    /// TODO FIXME we should only compact if the ratio of live bytes
+    /// to used bytes in a segment exceeds some threshold, otherwise
+    /// compaction will run in endless loops, moving data :)
+    pub fn do_compact(&mut self) {
         // liveness checking function
         // entry: EntryReference
         // iguard: MutexGuard<Index>
@@ -294,44 +362,101 @@ impl Worker {
         // determine live amount for new segment
         let slot = segref.read().unwrap().slot();
         let newlen = self.epochs.get_live(slot);
-        debug!("new segment: slot {} len {}", slot, newlen);
+        debug!("candidate: slot {} len {}", slot, newlen);
+
+        self.verify(&segref, slot, &is_live);
 
         // newlen may be stale by the time we start cleaning (it's ok)
         // if significant, we may TODO free more blocks after
         // compaction
 
         if newlen > 0  {
-            debug!("need to allocate new segment");
             // allocate new segment
-            let opt: Option<SegmentRef> = 
-                match self.manager.lock() {
+            let mut opt: Option<SegmentRef>;
+            let nblks = ((newlen-1)/BLOCK_SIZE)+1;
+            debug!("allocating new segment #blks {}",nblks);
+            let mut retries = 0;
+            let start = Instant::now();
+            loop {
+                opt = match self.manager.lock() {
                     Err(_) => panic!("lock poison"),
-                    Ok(mut manager) => {
-                        let nblks = (newlen - 1) / BLOCK_SIZE + 1;
-                        debug!("need {} blocks", nblks);
-                        manager.alloc_size(nblks)
-                    },
+                    Ok(mut manager) =>
+                        manager.alloc_size(nblks),
                 };
+                if opt.is_some() {
+                    break;
+                }
+                thread::yield_now();
+                retries += 1;
+                if start.elapsed().as_secs() > 4 {
+                    panic!("waiting too long {}",
+                           "for new segment: deadlock?");
+                }
+            }
+            if retries > 0 {
+                let dur = start.elapsed();
+                warn!("waited {} us for seg allocation",
+                      (dur.as_secs() as u32) * 1000000u32 +
+                      dur.subsec_nanos() / 1000u32);
+            }
 
-            // FIXME we should spin here?
-            if let None = opt { panic!("OOM: no segments"); }
             let newseg: SegmentRef = opt.unwrap();
 
             let ret = self.compact(&segref, &newseg, &is_live);
             if ret.is_err() { panic!("compact failed"); }
 
+            let newslot = newseg.read().unwrap().slot();
+            debug!("adding slot {} to candidates", newslot);
+
             // monitor the new segment, too
             self.add_candidate(&newseg);
         }
 
-        self.reclaim.push(segref.clone());
+        // FIXME use real epochs, not walltime
+        //let epoch = EPOCH.fetch_add(1, atomic::Ordering::Relaxed);
+        let epoch = Instant::now();
+        //let epoch = unsafe { rdtsc(); }
+        debug!("adding slot {} to reclamation", slot);
+        self.reclaim_glob.push( (epoch, segref.clone()) );
+    }
+
+    // FIXME update this to use real epoch
+    // TODO The reclaim list should be in order of epoch, so we can
+    // just iterate until some condition (e.g. epoch still used) maybe
+    // a wrapper around SegQueue that has some atomic state so we can
+    // void peeking at the head
+    // TODO return true if there are still segments to reclaim to
+    // throttle worker thread
+
+    /// Called by WorkerRole::Reclaim
+    pub fn do_reclaim(&mut self) {
+        let mut reclaim = self.reclaim.as_mut().unwrap();
+        // pull any new items off reclaim_glob
+        while let Some(segref) = self.reclaim_glob.try_pop() {
+            reclaim.push_back(segref);
+        }
+        // release segments after 500ms
+        let pred = | e: &EpochSegment | {
+            let dur = e.0.elapsed();
+            let milli = (dur.as_secs() as f32) * 1e3
+                + (dur.subsec_nanos() as f32) / 1e6;
+            milli < 500f32
+        };
+        let split = itertools::partition(
+                        &mut reclaim.into_iter(), pred);
+        let release = reclaim.split_off(split);
+        match self.manager.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(mut manager) =>
+                for seg in release {
+                    manager.free(seg.1);
+                },
+        }
     }
 
     /// Look in segment manager for newly closed segments. If any,
     /// move to our candidates list. Returns number of segments moved.
     pub fn check_new(&mut self) -> usize {
-        // TODO if only one thread accesses this list, no need for
-        // lock
         match self.candidates.lock() {
             Err(_) => panic!("lock poison"),
             Ok(ref mut cand) => {
@@ -342,7 +467,7 @@ impl Worker {
                     },
                 }
             },
-        } // candidates lock
+        }
     }
 
     pub fn must_park(&self) -> bool {
@@ -582,7 +707,7 @@ mod tests {
         // manually engage compaction
         let ncompact = nseg/4;
         for _ in 0..ncompact {
-            c.try_compact();
+            c.do_compact();
         }
 
         match segmgr.lock() {
@@ -594,6 +719,6 @@ mod tests {
 
         // TODO verify we moved segments to reclaim list
 
-    } // try_compact
+    } // do_compact
 
 }
