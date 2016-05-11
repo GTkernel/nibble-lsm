@@ -2,6 +2,9 @@
 //      General types
 //==----------------------------------------------------==//
 
+/// Size of a cache line in bytes.
+pub const CACHE_LINE: usize = 64;
+
 pub type Pointer = Option<*const u8>;
 pub type PointerMut = Option<*mut u8>;
 
