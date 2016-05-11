@@ -17,7 +17,7 @@ pub struct Nibble {
     index: IndexRef,
     manager: SegmentManagerRef,
     log: Log,
-    epochs: EpochTableRef,
+    seginfo: SegmentInfoTableRef,
     compactor: CompactorRef,
 }
 
@@ -25,14 +25,14 @@ impl Nibble {
 
     pub fn new(capacity: usize) -> Self {
         let manager = SegmentManager::new(0, SEGMENT_SIZE, capacity);
-        let epochs = manager.epochs();
+        let seginfo = manager.seginfo();
         let mref = Arc::new(Mutex::new(manager));
         let index = index_ref!();
         Nibble {
             index: index.clone(),
             manager: mref.clone(),
             log: Log::new(mref.clone()),
-            epochs: epochs,
+            seginfo: seginfo,
             compactor: comp_ref!(&mref, &index),
         }
     }
@@ -73,7 +73,7 @@ impl Nibble {
                     opt.unwrap()
                 },
             };
-            self.epochs.decr_live(idx, obj.len_with_header());
+            self.seginfo.decr_live(idx, obj.len_with_header());
         }
         Ok(1)
     }
@@ -141,7 +141,7 @@ impl Nibble {
         };
 
         // update epoch table
-        self.epochs.decr_live(idx, header.len_with_header());
+        self.seginfo.decr_live(idx, header.len_with_header());
         Ok(1)
     }
 
@@ -279,9 +279,9 @@ mod tests {
         let mem = 1 << 23;
         let nib = Nibble::new(mem);
 
-        for idx in 0..nib.epochs.len() {
-            assert_eq!(nib.epochs.get_live(idx), 0usize);
-            assert_eq!(nib.epochs.get_epoch(idx), 0usize);
+        for idx in 0..nib.seginfo.len() {
+            assert_eq!(nib.seginfo.get_live(idx), 0usize);
+            assert_eq!(nib.seginfo.get_epoch(idx), 0usize);
         }
     }
 
@@ -307,7 +307,7 @@ mod tests {
             panic!("{:?}", code)
         }
         let head = segment_of(&nib, &key);
-        assert_eq!(nib.epochs.get_live(head), size);
+        assert_eq!(nib.seginfo.get_live(head), size);
 
         // insert until the head rolls
         loop {
@@ -315,10 +315,10 @@ mod tests {
                 panic!("{:?}", code)
             }
             let segidx = segment_of(&nib, &key);
-            assert_eq!(nib.epochs.get_live(segidx), size);
+            assert_eq!(nib.seginfo.get_live(segidx), size);
             if head != segidx {
                 // head rolled. let's check prior segment live size
-                assert_eq!(nib.epochs.get_live(head), 0usize);
+                assert_eq!(nib.seginfo.get_live(head), 0usize);
                 break;
             }
         }
@@ -340,7 +340,7 @@ mod tests {
             panic!("{:?}", code)
         }
         let head = segment_of(&nib, &key);
-        assert_eq!(nib.epochs.get_live(head), len);
+        assert_eq!(nib.seginfo.get_live(head), len);
         keyv += 1;
 
         let mut total = len; // accumulator excluding current obj
@@ -355,11 +355,11 @@ mod tests {
             }
             let segidx = segment_of(&nib, &key);
             if head == segidx {
-                assert_eq!(nib.epochs.get_live(segidx), total+len);
+                assert_eq!(nib.seginfo.get_live(segidx), total+len);
             } else {
                 // head rolled. check old and new live sizes
-                assert_eq!(nib.epochs.get_live(head), total);
-                assert_eq!(nib.epochs.get_live(segidx), len);
+                assert_eq!(nib.seginfo.get_live(head), total);
+                assert_eq!(nib.seginfo.get_live(segidx), len);
                 break;
             }
             keyv += 1;
@@ -384,11 +384,11 @@ mod tests {
 
         let idx = segment_of(&nib, &key);
         let len = obj.len_with_header();
-        assert_eq!(nib.epochs.get_live(idx), len);
+        assert_eq!(nib.seginfo.get_live(idx), len);
 
         if let Err(code) = nib.del_object(&key) {
             panic!("{:?}", code)
         }
-        assert_eq!(nib.epochs.get_live(idx), 0usize);
+        assert_eq!(nib.seginfo.get_live(idx), 0usize);
     }
 }

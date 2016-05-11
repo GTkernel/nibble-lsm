@@ -90,7 +90,7 @@ pub struct Compactor {
     candidates: Arc<Mutex<VecDeque<SegmentRef>>>,
     manager: SegmentManagerRef,
     index: IndexRef,
-    epochs: EpochTableRef,
+    seginfo: SegmentInfoTableRef,
     /// The set of worker threads doing compaction.
     workers: SegQueue<(Arc<RwLock<Worker>>,Handle)>,
     /// Global reclamation queue
@@ -103,15 +103,15 @@ impl Compactor {
 
     pub fn new(manager: &SegmentManagerRef,
                index: &IndexRef) -> Self {
-        let epochs = match manager.lock() {
+        let seginfo = match manager.lock() {
             Err(_) => panic!("lock poison"),
-            Ok(guard) => guard.epochs(),
+            Ok(guard) => guard.seginfo(),
         };
         Compactor {
             candidates: Arc::new(Mutex::new(VecDeque::new())),
             manager: manager.clone(),
             index: index.clone(),
-            epochs: epochs,
+            seginfo: seginfo,
             workers: SegQueue::new(),
             reclaim: Arc::new(SegQueue::new()),
         }
@@ -216,7 +216,7 @@ struct Worker {
     candidates: Arc<Mutex<VecDeque<SegmentRef>>>,
     manager: SegmentManagerRef,
     index: IndexRef,
-    epochs: EpochTableRef,
+    seginfo: SegmentInfoTableRef,
     park: AtomicBool,
     /// This thread's private set of to-be-reclaimed segments
     /// Used only if thread role is Reclaim
@@ -239,7 +239,7 @@ impl Worker {
             candidates: compactor.candidates.clone(),
             manager: compactor.manager.clone(),
             index: compactor.index.clone(),
-            epochs: compactor.epochs.clone(),
+            seginfo: compactor.seginfo.clone(),
             park: AtomicBool::new(false),
             reclaim: reclaim,
             reclaim_glob: compactor.reclaim.clone(),
@@ -303,7 +303,7 @@ impl Worker {
         // carry over the epoch state
         let from = dirty.slot();
         let to   = new.slot();
-        self.epochs.set_live(to, self.epochs.swap_live(from, 0usize));
+        self.seginfo.set_live(to, self.seginfo.swap_live(from, 0usize));
 
         status
     }
@@ -318,7 +318,7 @@ impl Worker {
         let mut seg = segref.write().unwrap();
         let mut size: usize = 0;
         // read first then iterate and measure
-        let live = self.epochs.get_live(slot);
+        let live = self.seginfo.get_live(slot);
         for entry in &*seg {
             if isLive(&entry, &guard) {
                 size += entry.len;
@@ -362,7 +362,7 @@ impl Worker {
 
         // determine live amount for new segment
         let slot = segref.read().unwrap().slot();
-        let newlen = self.epochs.get_live(slot);
+        let newlen = self.seginfo.get_live(slot);
         debug!("candidate: slot {} len {}", slot, newlen);
 
         self.verify(&segref, slot, &is_live);

@@ -196,20 +196,20 @@ impl LogHead {
 pub struct Log {
     head: LogHeadRef, // TODO make multiple
     manager: SegmentManagerRef,
-    epochs: EpochTableRef,
+    seginfo: SegmentInfoTableRef,
 }
 
 impl Log {
 
     pub fn new(manager: SegmentManagerRef) -> Self {
-        let epochs = match manager.lock() {
+        let seginfo = match manager.lock() {
             Err(_) => panic!("lock poison"),
-            Ok(guard) => guard.epochs(),
+            Ok(guard) => guard.seginfo(),
         };
         Log {
             head: Arc::new(Mutex::new(LogHead::new(manager.clone()))),
             manager: manager.clone(),
-            epochs: epochs,
+            seginfo: seginfo,
         }
     }
 
@@ -230,7 +230,7 @@ impl Log {
                         assert_eq!(idx.is_some(), true);
                         let len = buf.len_with_header();
                         assert!(len < SEGMENT_SIZE);
-                        self.epochs.incr_live(idx.unwrap(), len);
+                        self.seginfo.incr_live(idx.unwrap(), len);
                     },
                 } // manager lock
                 Ok(va)
@@ -243,7 +243,7 @@ impl Log {
     //
 
     #[cfg(test)]
-    pub fn epochs(&self) -> EpochTableRef { self.epochs.clone() }
+    pub fn seginfo(&self) -> SegmentInfoTableRef { self.seginfo.clone() }
 }
 
 //==----------------------------------------------------==//

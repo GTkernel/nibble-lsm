@@ -700,7 +700,7 @@ pub struct SegmentManager {
     next_seg_id: usize, // FIXME atomic
     allocator: BlockAllocator,
     segments: Vec<Option<SegmentRef>>,
-    epochs: EpochTableRef,
+    seginfo: SegmentInfoTableRef,
     free_slots: Arc<SegQueue<u32>>,
     // TODO lock these
     closed: VecDeque<SegmentRef>,
@@ -729,7 +729,7 @@ impl SegmentManager {
             next_seg_id: 0,
             allocator: b,
             segments: segments,
-            epochs: Arc::new(EpochTable::new(num)),
+            seginfo: Arc::new(SegmentInfoTable::new(num)),
             free_slots: Arc::new(free_slots),
             closed: VecDeque::new(),
         }
@@ -822,8 +822,8 @@ impl SegmentManager {
         n
     }
 
-    pub fn epochs(&self) -> EpochTableRef {
-        self.epochs.clone()
+    pub fn seginfo(&self) -> SegmentInfoTableRef {
+        self.seginfo.clone()
     }
 
     //

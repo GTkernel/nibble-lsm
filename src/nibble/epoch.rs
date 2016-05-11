@@ -1,40 +1,46 @@
-use std::sync::atomic;
-use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
-
-use segment::*;
-
 //==----------------------------------------------------==//
 //      Cleaning and reclamation support
 //==----------------------------------------------------==//
 
-// TODO static AtomicUsize as global epoch
+use segment::*;
+
+use std::sync::atomic;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
+use std::mem::transmute;
+use std::ptr;
+
+use crossbeam::sync::SegQueue;
+
+//==----------------------------------------------------==//
+//      Segment usage table
+//==----------------------------------------------------==//
 
 /// Structure to track information about Segments.
 /// Compactor uses 'live' to allocate new segments. Manager uses the
 /// epoch to release cleaned segments.
-pub struct SegmentUsage {
+pub struct SegmentInfo {
     /// segment timestamp
     epoch: AtomicUsize,
     /// live bytes in segment
     live:  AtomicUsize,
 }
 
-impl SegmentUsage {
+impl SegmentInfo {
 
     pub fn new() -> Self {
-        SegmentUsage {
+        SegmentInfo {
             epoch: AtomicUsize::new(0),
             live: AtomicUsize::new(0),
         }
     }
 }
 
-pub type EpochTableRef = Arc<EpochTable>;
+pub type SegmentInfoTableRef = Arc<SegmentInfoTable>;
 
-pub struct EpochTable {
+pub struct SegmentInfoTable {
     /// shares index with SegmentManager::segments
-    table: Vec<SegmentUsage>,
+    table: Vec<SegmentInfo>,
     ordering: atomic::Ordering,
 }
 
@@ -44,14 +50,14 @@ pub struct EpochTable {
 /// live bytes here may be reduced as you iterate, so be sure to first
 /// read a value here before iterating; then the live bytes will only
 /// be greater than or equal to the live bytes found from iterating.
-impl EpochTable {
+impl SegmentInfoTable {
 
     pub fn new(slots: usize) -> Self {
-        let mut v: Vec<SegmentUsage> = Vec::with_capacity(slots);
+        let mut v: Vec<SegmentInfo> = Vec::with_capacity(slots);
         for _ in 0..slots {
-            v.push(SegmentUsage::new());
+            v.push(SegmentInfo::new());
         }
-        EpochTable {
+        SegmentInfoTable {
             table: v,
             ordering: atomic::Ordering::Relaxed,
         }
