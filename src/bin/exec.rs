@@ -24,6 +24,8 @@ fn main() {
     let mut nib = Nibble::new(1<<23);
     nib.enable_compaction();
 
+    //println!("tsc {}",nibble::epoch::read());
+
     //let manager = segmgr_ref!(0, segment::SEGMENT_SIZE, 1<<23);
     //let index = index_ref!();
     //let mut compactor = Compactor::new(&manager, &index);

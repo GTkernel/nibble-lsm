@@ -33,7 +33,7 @@ fn alloc_free(pct_to_free: f32) {
     assert!(pct_to_free <= 1.0);
     assert!(pct_to_free >= 0.0);
 
-    let _ = SimpleLogger::init(LogLevel::Debug);
+    //let _ = SimpleLogger::init(LogLevel::Debug);
 
     let mut nib = Nibble::new(1<<23);
 
@@ -69,7 +69,7 @@ fn alloc_free(pct_to_free: f32) {
         assert!(nib.del_object(key).is_ok());
     }
 
-    let dur = Duration::from_secs(15);
+    let dur = Duration::from_secs(5);
     thread::sleep(dur);
 }
 
