@@ -2,6 +2,8 @@ use log;
 use log::{LogRecord, LogLevel, LogMetadata};
 use log::{SetLoggerError, LogLevelFilter};
 use std::thread;
+use std::env;
+use std::sync::{Once, ONCE_INIT};
 
 use libc;
 
@@ -68,8 +70,31 @@ impl SimpleLogger {
     }
 }
 
-/// Invoked by unit tests to enable logging.
-#[cfg(test)]
+/// Use to toggle debug messages without recompiling.
+/// 1: Error 2: Warn 3: Info 4: Debug 5: Trace
+const LOGGER_ENV: &'static str = "NIBDEBUG";
+
+/// Ensure we init logger only once.
+static START: Once = ONCE_INIT;
+
+/// Call this to enable logging.
 pub fn enable() {
-    let _ = SimpleLogger::init(LogLevel::Debug);
+    START.call_once( || {
+        if let Some(osstr) = env::var_os(LOGGER_ENV) {
+            let s = osstr.to_str().unwrap();
+            let v = match u64::from_str_radix(s, 10) {
+                Err(e) => panic!("{}: {:?}", LOGGER_ENV, e),
+                Ok(x) => x,
+            };
+            let level = match v {
+                1 => LogLevel::Error,
+                2 => LogLevel::Warn,
+                3 => LogLevel::Info,
+                4 => LogLevel::Debug,
+                5 => LogLevel::Trace,
+                _ => panic!("{}: must be in range [1,5]", LOGGER_ENV),
+            };
+            let _ = SimpleLogger::init(level);
+        }
+    });
 }
