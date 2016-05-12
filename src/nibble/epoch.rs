@@ -5,12 +5,13 @@
 use segment::*;
 use common::*;
 
+use std::cell::UnsafeCell;
 use std::sync::atomic;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::mem::transmute;
-use std::ptr;
 use std::mem;
+use std::u64;
 
 use crossbeam::sync::SegQueue;
 
@@ -143,7 +144,7 @@ unsafe fn rdtsc() -> u64 {
 /// Read the current value of the epoch.
 #[inline(always)]
 #[cfg(feature="epoch-tsc")]
-pub fn read() -> EpochRaw {
+fn read() -> EpochRaw {
     unsafe { rdtsc() }
 }
 
@@ -159,8 +160,13 @@ lazy_static! {
     // can add others here
 }
 
-/// Thread-local epoch state
-thread_local!(static EPOCH_SLOT: *mut EpochSlot = register());
+type EpochSlotRef = UnsafeCell<*mut EpochSlot>;
+
+/// Thread-local epoch state. Just a pointer to a slot's entry.
+/// UnsafeCell gives us fast mutable access when we update (pin).
+thread_local!(
+    static EPOCH_SLOT: EpochSlotRef = UnsafeCell::new(register())
+);
 
 /// Register a new thread in the epoch table.
 fn register() -> *mut EpochSlot {
@@ -169,10 +175,41 @@ fn register() -> *mut EpochSlot {
     p
 }
 
-/// A slot in the global table a unique thread is assigned.
+/// Store the current epoch to the thread slot.
+pub fn pin() {
+    EPOCH_SLOT.with( |slotptr| {
+        let mut slot = unsafe { &mut**(slotptr.get()) };
+        slot.epoch = read();
+    });
+}
+
+pub fn slot_addr() -> usize {
+    EPOCH_SLOT.with( |slotptr| {
+        unsafe {
+            transmute::<*mut EpochSlot,usize>(*slotptr.get())
+        }
+    })
+}
+
+pub fn min() -> EpochRaw {
+    let mut m: EpochRaw = u64::MAX;
+    for slot in &EPOCH_TABLE.table {
+        if slot.epoch == 0 {
+            continue;
+        }
+        if slot.epoch < m {
+            m = slot.epoch;
+        }
+    }
+    m
+}
+
+/// A slot in the global table a unique thread is assigned.  Holds an
+/// epoch, used to coordinate memory reclamation with Segment
+/// compaction.
 #[repr(packed)]
-struct EpochSlot {
-    epoch: u64,
+pub struct EpochSlot {
+    epoch: EpochRaw,
     slot: u16,
     _padding: [u8; (CACHE_LINE-10)]
 }
@@ -190,7 +227,7 @@ impl EpochSlot {
 
     pub fn new(slot: u16) -> Self {
         let t = EpochSlot {
-            epoch: 0u64,
+            epoch: 0 as EpochRaw,
             slot: slot,
             _padding: [0xdB; (CACHE_LINE-10)],
         };
@@ -198,6 +235,7 @@ impl EpochSlot {
     }
 }
 
+/// Table of epoch state per-thread.
 pub struct EpochTable {
     table: Vec<EpochSlot>,
     // FIXME release a slot when thread dies
@@ -222,14 +260,97 @@ impl EpochTable {
         }
     }
 
+    /// Scan entire array for lowest epoch.
+    pub fn scan_min(&self) -> EpochRaw {
+        unimplemented!();
+    }
+
+    /// Register new thread, allocating one slot to it.
     fn register(&self) -> *mut EpochSlot {
         let slot = self.freeslots.try_pop().unwrap() as usize;
         let p: *mut EpochSlot = unsafe {
             mem::transmute(&self.table[slot])
         };
         let sl = &self.table[slot];
-        debug!("new slot: epoch 0x{:x} slot {}", sl.epoch, sl.slot);
+        debug!("new slot: epoch {} slot {}", sl.epoch, sl.slot);
         p
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::read;
+    use std::thread::{self,JoinHandle};
+    use std::sync::{Arc};
+    use std::mem;
+    use crossbeam::sync::SegQueue;
+
+    #[test]
+    fn compare_slot_addr() {
+        let N = 4;
+        let mut threads: Vec<JoinHandle<()>> = Vec::with_capacity(N);
+        let queue: SegQueue<usize> = SegQueue::new();
+        let arcq = Arc::new(queue);
+        for _ in 0..N {
+            let queue = arcq.clone();
+            threads.push(
+                thread::spawn( move || {
+                    let addr = slot_addr();
+                    queue.push(addr as usize);
+                })
+            );
+        }
+        for thread in threads {
+            let _ = thread.join();
+        }
+        let mut v: Vec<usize> = Vec::with_capacity(N);
+        while let Some(u) = arcq.try_pop() {
+            v.push(u);
+        }
+        v.sort();
+        v.dedup();
+        assert_eq!(v.len(), N);
+        assert_eq!( (v[1] - v[0]) % mem::size_of::<EpochSlot>(), 0);
+    }
+
+    #[test]
+    fn min_scan() {
+        let N = 8;
+        let iter = 100000;
+        let mut threads: Vec<JoinHandle<()>> = Vec::with_capacity(N);
+        for _ in 0..N {
+            threads.push(
+                thread::spawn( move || {
+                    for _ in 0..iter { pin(); }
+                })
+                );
+        }
+        for thread in threads {
+            let _ = thread.join();
+        }
+        let first = read();
+        assert!(min() < first);
+
+        let mut threads: Vec<JoinHandle<()>> = Vec::with_capacity(N);
+        for _ in 0..N {
+            threads.push(
+                thread::spawn( move || {
+                    for _ in 0..iter { pin(); }
+                })
+                );
+        }
+        for thread in threads {
+            let _ = thread.join();
+        }
+        let m = min();
+        assert!(m < read());
+
+        // FIXME
+        // This (ideally) should be assert!(m > first); but because
+        // threads don't 'unregister' their epoch from the table
+        // (release the slot, and set epoch to zero), min values are
+        // forever kept in the table when they pause, or terminate.
+        assert!(m < first);
+    }
+}
