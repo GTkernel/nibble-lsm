@@ -7,6 +7,11 @@ Note: with a fixed array of Segments (slots) we will need to compact
 such that multiple candidates are compressed to maximize a segment's
 typical size, else we run out of segment slots and still have many
 blocks available!
+So, either we fix the compactor to fill in new segments of the
+expected size, and the segment table has a fixed number of slots, or
+we allocate many slots and ensure the segment allocator checks the
+block allocator to ensure there are sufficient blocks (handle the case
+that segment slots can be allocated but not blocks)
 
 
 

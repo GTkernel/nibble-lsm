@@ -741,6 +741,10 @@ impl SegmentManager {
     pub fn alloc_size(&mut self, nblks: usize) -> Option<SegmentRef> {
         // TODO lock, unlock
         let mut ret: Option<SegmentRef> = None;
+        // XXX check allocator has enough blocks
+        // maybe we should assume there are sufficient segment slots?
+        // or we only use a fixed amount of segment slots and
+        // compactor always tries to fill exactly to SEGMENT_SIZE?
         if let Some(s) = self.free_slots.try_pop() {
             let slot = s as usize;
             assert!(self.segments[slot].is_none());
