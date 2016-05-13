@@ -132,6 +132,10 @@ impl SegmentInfoTable {
 
 pub type EpochRaw = u64;
 
+/// Special-case value of EpochRaw meaning the value is non-existent.
+#[cfg(not(debug_assertions))] const EPOCH_QUIESCE: u64 = 0;
+#[cfg(debug_assertions)]  pub const EPOCH_QUIESCE: u64 = 0;
+
 #[inline(always)]
 #[allow(unused_mut)]
 unsafe fn rdtsc() -> u64 {
@@ -148,11 +152,15 @@ fn read() -> EpochRaw {
     unsafe { rdtsc() }
 }
 
+/// This represents option 1. above
+#[cfg(IGNORE)]
+static EPOCH: AtomicUsize = AtomicUsize::new(0);
+
 //==----------------------------------------------------==//
 //      Per-thread epoch tracker
 //==----------------------------------------------------==//
 
-const EPOCHTBL_MAX_THREADS: u16 = 1024;
+const EPOCHTBL_MAX_THREADS: u16 = 128;
 
 /// Global epoch tracker for each thread.
 lazy_static! {
@@ -175,6 +183,21 @@ fn register() -> *mut EpochSlot {
     p
 }
 
+#[inline(always)]
+pub fn next() -> EpochRaw {
+    read()
+}
+
+/// Signal that a thread is entering a quiescent phase, either by
+/// terminating, parking, or sleeping.
+#[inline(always)]
+pub fn quiesce() {
+    EPOCH_SLOT.with( |slotptr| {
+        let mut slot = unsafe { &mut**(slotptr.get()) };
+        slot.epoch = EPOCH_QUIESCE;
+    });
+}
+
 /// Store the current epoch to the thread slot.
 pub fn pin() {
     EPOCH_SLOT.with( |slotptr| {
@@ -191,17 +214,50 @@ pub fn slot_addr() -> usize {
     })
 }
 
-pub fn min() -> EpochRaw {
+pub fn current() -> Option<EpochRaw> {
+    EPOCH_SLOT.with( |slotptr| {
+        let slot = unsafe { &mut**(slotptr.get()) };
+        match slot.epoch {
+            EPOCH_QUIESCE => None,
+            e => Some(e),
+        }
+    })
+}
+
+pub fn min() -> Option<EpochRaw> {
     let mut m: EpochRaw = u64::MAX;
     for slot in &EPOCH_TABLE.table {
-        if slot.epoch == 0 {
+        // avoid races by only reading once into stack
+        let e = slot.epoch;
+        if e == EPOCH_QUIESCE {
             continue;
         }
-        if slot.epoch < m {
-            m = slot.epoch;
+        debug_assert!(e != EPOCH_QUIESCE); // check race
+        if e < m {
+            m = e;
         }
     }
-    m
+    assert!(m != EPOCH_QUIESCE); // check race
+    match m {
+        u64::MAX => None,
+        _ => Some(m),
+    }
+}
+
+pub fn __dump() {
+    let mut c = 1;
+    let mut out = String::new();
+    for slot in &EPOCH_TABLE.table {
+        out.push_str(
+            format!("[{:<4}] {:<16x}",
+                    slot.slot, slot.epoch).as_str()
+            );
+        if (c % 9) == 0 {
+            out.push_str("\n");
+        }
+        c += 1;
+    }
+    print!("{}", out);
 }
 
 /// A slot in the global table a unique thread is assigned.  Holds an
@@ -227,7 +283,7 @@ impl EpochSlot {
 
     pub fn new(slot: u16) -> Self {
         let t = EpochSlot {
-            epoch: 0 as EpochRaw,
+            epoch: EPOCH_QUIESCE,
             slot: slot,
             _padding: [0xdB; (CACHE_LINE-10)],
         };
@@ -287,6 +343,34 @@ mod tests {
     use crossbeam::sync::SegQueue;
 
     #[test]
+    fn do_read() {
+        let f = read();
+        assert!(f > 0);
+        assert!(f < read());
+    }
+
+    #[test]
+    fn do_next() {
+        let f = next();
+        assert!(f > 0);
+        assert!(f < next());
+    }
+
+    #[test]
+    fn do_pin() {
+        assert_eq!(current(), None);
+
+        pin();
+        let cur = current();
+        assert_eq!(cur.is_some(), true);
+        assert_eq!(min(), cur);
+
+        quiesce();
+        assert_eq!(current(), None);
+        assert_eq!(min(), None);
+    }
+
+    #[test]
     fn compare_slot_addr() {
         let N = 4;
         let mut threads: Vec<JoinHandle<()>> = Vec::with_capacity(N);
@@ -330,7 +414,10 @@ mod tests {
             let _ = thread.join();
         }
         let first = read();
-        assert!(min() < first);
+        let m = min();
+        assert!(m.is_some());
+        let m = m.unwrap();
+        assert!(m < first);
 
         let mut threads: Vec<JoinHandle<()>> = Vec::with_capacity(N);
         for _ in 0..N {
@@ -344,13 +431,14 @@ mod tests {
             let _ = thread.join();
         }
         let m = min();
-        assert!(m < read());
+        assert!(m.is_some()); // FIXME really we want it to be None
+        assert!(m.unwrap() < read());
 
         // FIXME
         // This (ideally) should be assert!(m > first); but because
         // threads don't 'unregister' their epoch from the table
         // (release the slot, and set epoch to zero), min values are
         // forever kept in the table when they pause, or terminate.
-        assert!(m < first);
+        assert!(m.unwrap() < first);
     }
 }

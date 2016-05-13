@@ -18,8 +18,9 @@ use log::LogLevel;
 
 use nibble::nib::Nibble;
 use nibble::segment::ObjDesc;
-use nibble::logger::*;
+use nibble::logger;
 use nibble::common::ErrorCode;
+use nibble::epoch;
 
 // TODO test objects larger than block, and segment
 // TODO put_object which must traverse chunks
@@ -33,7 +34,7 @@ fn alloc_free(pct_to_free: f32) {
     assert!(pct_to_free <= 1.0);
     assert!(pct_to_free >= 0.0);
 
-    //let _ = SimpleLogger::init(LogLevel::Debug);
+    logger::enable();
 
     let mut nib = Nibble::new(1<<23);
 

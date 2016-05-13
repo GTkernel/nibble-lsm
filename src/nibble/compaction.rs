@@ -54,12 +54,13 @@
 use common::*;
 use segment::*;
 use index::*;
-use epoch::*;
+use epoch;
 
 use std::collections::{VecDeque};
+use std::mem;
 use std::sync::{Arc,Mutex,MutexGuard,RwLock};
 use std::sync::atomic;
-use std::sync::atomic::{AtomicBool,AtomicUsize};
+use std::sync::atomic::{AtomicBool};
 use std::thread;
 use std::time::{Duration,Instant};
 
@@ -72,7 +73,7 @@ use itertools;
 
 pub type CompactorRef = Arc<Mutex< Compactor >>;
 pub type LiveFn = Box<Fn(&EntryReference, &MutexGuard<Index>) -> bool>;
-type EpochSegment = (Instant, SegmentRef);
+type EpochSegment = (epoch::EpochRaw, SegmentRef);
 type ReclaimQueue = SegQueue<EpochSegment>;
 type ReclaimQueueRef = Arc<ReclaimQueue>;
 
@@ -82,15 +83,13 @@ type ReclaimQueueRef = Arc<ReclaimQueue>;
 
 // TODO Keep segments ordered by their usefulness for compaction.
 
-static EPOCH: AtomicUsize = AtomicUsize::new(0);
-
 type Handle = thread::JoinHandle<()>;
 
 pub struct Compactor {
     candidates: Arc<Mutex<VecDeque<SegmentRef>>>,
     manager: SegmentManagerRef,
     index: IndexRef,
-    seginfo: SegmentInfoTableRef,
+    seginfo: epoch::SegmentInfoTableRef,
     /// The set of worker threads doing compaction.
     workers: SegQueue<(Arc<RwLock<Worker>>,Handle)>,
     /// Global reclamation queue
@@ -165,12 +164,20 @@ macro_rules! park_or_sleep {
     }
 }
 
-fn reclaim(state: &Arc<RwLock<Worker>>) {
+fn __reclaim(state: &Arc<RwLock<Worker>>) {
     let mut s = state.write().unwrap();
     s.do_reclaim();
+    let park = s.reclaim.as_ref().map_or(false, |r| r.len() == 0 );
+    drop(s); // release lock
+//    if park {
+//        thread::park();
+//    } else {
+//        // sleep for 10ms
+//        thread::sleep(Duration::new(0, 10000000u32))
+//    }
 }
 
-fn compact(state: &Arc<RwLock<Worker>>) {
+fn __compact(state: &Arc<RwLock<Worker>>) {
     let dur = Duration::from_secs(1);
     let mut s = state.write().unwrap();
     let new = s.check_new();
@@ -195,8 +202,8 @@ fn worker(state: Arc<RwLock<Worker>>) {
     let role = { state.read().unwrap().role };
     loop {
         match role {
-            WorkerRole::Reclaim => reclaim(&state),
-            WorkerRole::Compact => compact(&state),
+            WorkerRole::Reclaim => __reclaim(&state),
+            WorkerRole::Compact => __compact(&state),
         }
     }
 }
@@ -216,7 +223,7 @@ struct Worker {
     candidates: Arc<Mutex<VecDeque<SegmentRef>>>,
     manager: SegmentManagerRef,
     index: IndexRef,
-    seginfo: SegmentInfoTableRef,
+    seginfo: epoch::SegmentInfoTableRef,
     park: AtomicBool,
     /// This thread's private set of to-be-reclaimed segments
     /// Used only if thread role is Reclaim
@@ -390,6 +397,7 @@ impl Worker {
                 thread::yield_now();
                 retries += 1;
                 if start.elapsed().as_secs() > 4 {
+                    epoch::__dump();
                     panic!("waiting too long {}",
                            "for new segment: deadlock?");
                 }
@@ -413,45 +421,57 @@ impl Worker {
             self.add_candidate(&newseg);
         }
 
-        // FIXME use real epochs, not walltime
         //let epoch = EPOCH.fetch_add(1, atomic::Ordering::Relaxed);
-        let epoch = Instant::now();
-        //let epoch = unsafe { rdtsc(); }
         debug!("adding slot {} to reclamation", slot);
-        self.reclaim_glob.push( (epoch, segref.clone()) );
+        self.reclaim_glob.push( (epoch::next(), segref.clone()) );
     }
 
-    // FIXME update this to use real epoch
-    // TODO The reclaim list should be in order of epoch, so we can
-    // just iterate until some condition (e.g. epoch still used) maybe
-    // a wrapper around SegQueue that has some atomic state so we can
-    // void peeking at the head
     // TODO return true if there are still segments to reclaim to
     // throttle worker thread
 
     /// Called by WorkerRole::Reclaim
     pub fn do_reclaim(&mut self) {
         let mut reclaim = self.reclaim.as_mut().unwrap();
-        // pull any new items off reclaim_glob
+
+        // pull any new items off the global list
         while let Some(segref) = self.reclaim_glob.try_pop() {
+            // TODO stop after x pops?
             reclaim.push_back(segref);
         }
-        // release segments after 500ms
-        let pred = | e: &EpochSegment | {
-            let dur = e.0.elapsed();
-            let milli = (dur.as_secs() as f32) * 1e3
-                + (dur.subsec_nanos() as f32) / 1e6;
-            milli < 500f32
-        };
-        let split = itertools::partition(
-                        &mut reclaim.into_iter(), pred);
-        let release = reclaim.split_off(split);
-        match self.manager.lock() {
-            Err(_) => panic!("lock poison"),
-            Ok(mut manager) =>
-                for seg in release {
-                    manager.free(seg.1);
-                },
+
+        // find relevant segments locally
+        let min = epoch::min();
+        debug_assert!(min != Some(epoch::EPOCH_QUIESCE));
+        let mut release: VecDeque<EpochSegment> = VecDeque::new();
+        if min.is_none() {
+            // we take all waiting segments
+            mem::swap(reclaim, &mut release);
+        } else {
+            // otherwise, check epoch
+            let m = min.unwrap();
+            let pred = | t: &EpochSegment | {
+                let epoch = t.0;
+                epoch >= m // true: NOT reclaim this segment
+            };
+            //   epoch >= m      epoch < m
+            // [true,true,true,false,false]
+            //                 ^split
+            let split = itertools::partition(
+                &mut reclaim.into_iter(), pred);
+            // [true,true,true] [false,false]
+            //  reclaim          release
+            release = reclaim.split_off(split);
+        }
+
+        if release.len() > 0 {
+            debug!("releasing {} segments", release.len());
+            match self.manager.lock() {
+                Err(_) => panic!("lock poison"),
+                Ok(mut manager) =>
+                    for seg in release {
+                        manager.free(seg.1);
+                    },
+            }
         }
     }
 

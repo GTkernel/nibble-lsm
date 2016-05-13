@@ -4,7 +4,7 @@ use memory::*;
 use segment::*;
 use index::*;
 use compaction::*;
-use epoch::*;
+use epoch;
 
 use std::ptr;
 use std::sync::{Arc,Mutex};
@@ -17,7 +17,7 @@ pub struct Nibble {
     index: IndexRef,
     manager: SegmentManagerRef,
     log: Log,
-    seginfo: SegmentInfoTableRef,
+    seginfo: epoch::SegmentInfoTableRef,
     compactor: CompactorRef,
 }
 
@@ -49,6 +49,7 @@ impl Nibble {
 
     // TODO add some locking
     pub fn put_object(&mut self, obj: &ObjDesc) -> Status {
+        epoch::pin();
         let va: usize;
         // 1. add object to log
         match self.log.append(obj) {
@@ -75,10 +76,12 @@ impl Nibble {
             };
             self.seginfo.decr_live(idx, obj.len_with_header());
         }
+        epoch::quiesce();
         Ok(1)
     }
 
     pub fn get_object(&self, key: &String) -> (Status,Option<Buffer>) {
+        epoch::pin();
         let va: usize;
         match self.index.lock() {
             Ok(index) => {
@@ -101,10 +104,12 @@ impl Nibble {
             let src = header.data_address(va);
             ptr::copy(src, buf.getaddr() as *mut u8, buf.getlen());
         }
+        epoch::quiesce();
         (Ok(1),Some(buf))
     }
 
     pub fn del_object(&mut self, key: &String) -> Status {
+        epoch::pin();
         let va: usize;
         match self.index.lock() {
             Err(_) => panic!("lock poison"),
@@ -142,6 +147,8 @@ impl Nibble {
 
         // update epoch table
         self.seginfo.decr_live(idx, header.len_with_header());
+
+        epoch::quiesce();
         Ok(1)
     }
 
