@@ -59,7 +59,6 @@ use epoch;
 use std::collections::{VecDeque};
 use std::mem;
 use std::sync::{Arc,Mutex,MutexGuard,RwLock};
-use std::sync::atomic;
 use std::sync::atomic::{AtomicBool};
 use std::thread;
 use std::time::{Duration,Instant};
@@ -215,6 +214,7 @@ pub enum WorkerRole {
     Compact,
 }
 
+#[allow(dead_code)]
 struct Worker {
     role: WorkerRole,
     candidates: Arc<Mutex<VecDeque<SegmentRef>>>,
@@ -281,8 +281,7 @@ impl Worker {
     {
         let status: Status = Ok(1);
         let mut new = new.write().unwrap();
-        // XXX need write to iterate?
-        let mut dirty = dirty.write().unwrap();
+        let dirty = dirty.read().unwrap();
 
         debug!("performing compaction slot {} -> slot {} #blks {}",
                dirty.slot(), new.slot(), new.nblocks());
@@ -336,6 +335,7 @@ impl Worker {
 
     /// Don't use this except when debugging epoch table
     #[inline]
+    #[allow(unused_variables)]
     fn verify(&mut self, segref: &SegmentRef,
               slot: usize, isLive: &LiveFn) { ; }
 
@@ -488,6 +488,7 @@ impl Worker {
         }
     }
 
+    #[cfg(IGNORE)]
     pub fn must_park(&self) -> bool {
         let order = atomic::Ordering::Relaxed;
         self.park.compare_and_swap(true, false, order)

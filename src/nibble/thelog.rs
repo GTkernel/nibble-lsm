@@ -115,7 +115,7 @@ impl LogHead {
         assert!(buf.len_with_header() <
                 (SEGMENT_SIZE-size_of::<SegmentHeader>()));
 
-        let mut roll = false;
+        let roll: bool;
 
         // check if head exists
         if let None = self.segment {
@@ -132,9 +132,6 @@ impl LogHead {
             if let Err(code) = self.roll() {
                 return Err(code);
             }
-            // debug stuff only
-            let segref = self.segment.clone().unwrap();
-            let seg = segref.read().unwrap();
         }
 
         let segref = self.segment.clone().unwrap();
