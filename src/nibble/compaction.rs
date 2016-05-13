@@ -169,12 +169,9 @@ fn __reclaim(state: &Arc<RwLock<Worker>>) {
     s.do_reclaim();
     let park = s.reclaim.as_ref().map_or(false, |r| r.len() == 0 );
     drop(s); // release lock
-//    if park {
-//        thread::park();
-//    } else {
-//        // sleep for 10ms
-//        thread::sleep(Duration::new(0, 10000000u32))
-//    }
+    if park {
+        thread::sleep(Duration::new(0, 10000000u32))
+    }
 }
 
 fn __compact(state: &Arc<RwLock<Worker>>) {
