@@ -3,4 +3,7 @@ build:	FORCE
 	./with-mir cargo build
 
 clean:	FORCE
-	cargo clean
+	./with-mir cargo clean
+
+test: FORCE
+	./with-mir cargo test

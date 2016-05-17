@@ -67,3 +67,11 @@ adding/removing blocks from segments we must edit this information.
 
 command-line parsing crate
 http://kbknapp.github.io/clap-rs/clap/index.html
+
+
+
+
+for the new compiler error output:
+    RUST_NEW_ERROR_FORMAT=true
+
+
