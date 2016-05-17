@@ -5,6 +5,8 @@ use epoch::*;
 use std::mem::{size_of,transmute};
 use std::sync::{Arc,Mutex};
 
+use rand::{self,Rng};
+
 /// Acquire read lock on SegmentRef
 macro_rules! rlock {
     ( $segref:expr ) => {
@@ -93,6 +95,14 @@ impl EntryHeader {
 //==----------------------------------------------------==//
 
 pub type LogHeadRef = Arc<Mutex<LogHead>>;
+
+macro_rules! loghead_ref {
+    ( $manager:expr ) => {
+        Arc::new( Mutex::new(
+                LogHead::new($manager)
+                ))
+    }
+}
 
 pub struct LogHead {
     segment: Option<SegmentRef>,
@@ -190,8 +200,11 @@ impl LogHead {
 //      The log
 //==----------------------------------------------------==//
 
+// TODO refer to a config object
+const NUM_LOG_HEADS: u32 = 8;
+
 pub struct Log {
-    head: LogHeadRef, // TODO make multiple
+    heads: Vec<LogHeadRef>,
     manager: SegmentManagerRef,
     seginfo: SegmentInfoTableRef,
 }
@@ -203,8 +216,13 @@ impl Log {
             Err(_) => panic!("lock poison"),
             Ok(guard) => guard.seginfo(),
         };
+        let mut heads: Vec<LogHeadRef>;
+        heads = Vec::with_capacity(NUM_LOG_HEADS as usize);
+        for _ in 0..NUM_LOG_HEADS {
+            heads.push(loghead_ref!(manager.clone()));
+        }
         Log {
-            head: Arc::new(Mutex::new(LogHead::new(manager.clone()))),
+            heads: heads,
             manager: manager.clone(),
             seginfo: seginfo,
         }
@@ -213,9 +231,10 @@ impl Log {
     /// Append an object to the log. If successful, returns the
     /// virtual address within the log inside Ok().
     /// FIXME check key is valid UTF-8
-    pub fn append(&mut self, buf: &ObjDesc) -> Status {
-        // 1. determine log head to use
-        let head = &self.head;
+    pub fn append(&self, buf: &ObjDesc) -> Status {
+        // 1. pick a log head
+        let x = rand::thread_rng().next_u32() % NUM_LOG_HEADS;
+        let head = &self.heads[x as usize];
         // 2. call append on the log head
         match head.lock().unwrap().append(buf) {
             e @ Err(_) => return e,
