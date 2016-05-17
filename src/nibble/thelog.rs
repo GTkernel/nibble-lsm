@@ -236,22 +236,25 @@ impl Log {
         let x = rand::thread_rng().next_u32() % NUM_LOG_HEADS;
         let head = &self.heads[x as usize];
         // 2. call append on the log head
-        match head.lock().unwrap().append(buf) {
-            e @ Err(_) => return e,
-            Ok(va) => {
-                match self.manager.lock() {
-                    Err(_) => panic!("lock poison"),
-                    Ok(guard) => {
-                        let idx = guard.segment_of(va);
-                        assert_eq!(idx.is_some(), true);
-                        let len = buf.len_with_header();
-                        assert!(len < SEGMENT_SIZE);
-                        self.seginfo.incr_live(idx.unwrap(), len);
-                    },
-                } // manager lock
-                Ok(va)
-            },
-        } // head append
+        let va: usize = {
+            let mut guard = head.lock().unwrap();
+            match guard.append(buf) {
+                e @ Err(_) => return e,
+                Ok(va) => va,
+            }
+        };
+        // 3. update segment info table
+        // FIXME shouldn't have to lock for this
+        let idx = {
+            let guard = self.manager.lock().unwrap();
+            guard.segment_of(va)
+        };
+        debug_assert_eq!(idx.is_some(), true);
+        let len = buf.len_with_header();
+        debug_assert!(len < SEGMENT_SIZE);
+        self.seginfo.incr_live(idx.unwrap(), len);
+        // 4. return virtual address of new object
+        Ok(va)
     }
 
     //
