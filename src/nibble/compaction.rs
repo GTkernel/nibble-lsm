@@ -58,7 +58,7 @@ use epoch;
 
 use std::collections::{VecDeque};
 use std::mem;
-use std::sync::{Arc,Mutex,MutexGuard,RwLock};
+use std::sync::{Arc,Mutex,RwLockWriteGuard,RwLock};
 use std::sync::atomic::{AtomicBool};
 use std::thread;
 use std::time::{Duration,Instant};
@@ -71,7 +71,7 @@ use itertools;
 //==----------------------------------------------------==//
 
 pub type CompactorRef = Arc<Mutex< Compactor >>;
-pub type LiveFn = Box<Fn(&EntryReference, &MutexGuard<Index>) -> bool>;
+pub type LiveFn = Box<Fn(&EntryReference, &RwLockWriteGuard<IndexInner>) -> bool>;
 type EpochSegment = (epoch::EpochRaw, SegmentRef);
 type ReclaimQueue = SegQueue<EpochSegment>;
 type ReclaimQueueRef = Arc<ReclaimQueue>;
@@ -289,18 +289,16 @@ impl Worker {
         // get_object doesn't lock a Segment to retrieve the value
         // since the virtual address is directly used
 
-        match self.index.lock() {
-            Ok(mut guard) => {
-                for entry in dirty.into_iter() {
-                    if isLive(&entry, &guard) {
-                        let key: String;
-                        let va = new.append_entry(&entry);
-                        unsafe { key = entry.get_key(); }
-                        guard.update(&key, va);
-                    }
+        { // hold index lock during iteration
+            let mut guard = self.index.wlock();
+            for entry in dirty.into_iter() {
+                if isLive(&entry, &guard) {
+                    let key: String;
+                    let va = new.append_entry(&entry);
+                    unsafe { key = entry.get_key(); }
+                    Index::update_locked(&mut guard, &key, va);
                 }
-            },
-            Err(_) => panic!("lock poison"),
+            }
         }
 
         // carry over the epoch state
@@ -350,10 +348,10 @@ impl Worker {
         // liveness checking function
         // entry: EntryReference
         // iguard: MutexGuard<Index>
-        let is_live: LiveFn = Box::new( move | entry, iguard | {
+        let is_live: LiveFn = Box::new( move | entry, wguard | {
             let key = unsafe { entry.get_key() };
-            match iguard.get(key.as_str()) {
-                Some(loc) => (loc == entry.get_loc()),
+            match wguard.get(key.as_str()) {
+                Some(loc) => (*loc == entry.get_loc()),
                 None => false,
             }
         });

@@ -56,9 +56,7 @@ macro_rules! segmgr_ref {
 #[macro_export]
 macro_rules! index_ref {
     ( ) => {
-        Arc::new( Mutex::new(
-                Index::new()
-                ))
+        Arc::new( Index::new() )
     }
 }
 

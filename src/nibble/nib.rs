@@ -57,11 +57,7 @@ impl Nibble {
             Ok(v) => va = v,
         }
         // 2. update reference to object
-        let opt = match self.index.lock() {
-            Err(_) => panic!("lock poison"),
-            Ok(mut index) => 
-                index.update(&String::from(obj.getkey()), va),
-        };
+        let opt = self.index.update(&String::from(obj.getkey()), va);
         // 3. decrement live size of segment if we overwrite object
         if let Some(old) = opt {
             // FIXME this shouldn't need a lock..
@@ -83,14 +79,9 @@ impl Nibble {
     pub fn get_object(&self, key: &String) -> (Status,Option<Buffer>) {
         epoch::pin();
         let va: usize;
-        match self.index.lock() {
-            Ok(index) => {
-                match index.get(key) {
-                    None => return (Err(ErrorCode::KeyNotExist),None),
-                    Some(v) => va = v,
-                }
-            },
-            Err(_) => panic!("lock poison"),
+        match self.index.get(key) {
+            None => return (Err(ErrorCode::KeyNotExist),None),
+            Some(v) => va = v,
         }
         //
         // XXX XXX use EntryReference to copy out data!! XXX XXX
@@ -111,15 +102,10 @@ impl Nibble {
     pub fn del_object(&mut self, key: &String) -> Status {
         epoch::pin();
         let va: usize;
-        match self.index.lock() {
-            Err(_) => panic!("lock poison"),
-            Ok(mut guard) => {
-                match guard.remove(key) {
-                    None => return Err(ErrorCode::KeyNotExist),
-                    Some(v) => va = v,
-                }
-            },
-        } // index lock
+        match self.index.remove(key) {
+            None => return Err(ErrorCode::KeyNotExist),
+            Some(v) => va = v,
+        }
 
         //
         // XXX XXX use EntryReference to copy out data!! XXX XXX
@@ -154,10 +140,7 @@ impl Nibble {
 
     #[cfg(test)]
     pub fn nlive(&self) -> usize {
-        match self.index.lock() {
-            Ok(index) => index.len(),
-            Err(_) => panic!("index lock poisoned"),
-        }
+        self.index.len()
     }
 }
 
@@ -261,12 +244,9 @@ mod tests {
         logger::enable();
 
         // look up virtual address
-        let va: usize = match nib.index.lock() {
-            Err(_) => panic!("lock poison"),
-            Ok(guard) => match guard.get(key.as_str()) {
-                None => panic!("key should exist"),
-                Some(va_) => va_,
-            },
+        let va: usize = match nib.index.get(key.as_str()) {
+            None => panic!("key should exist"),
+            Some(va_) => va_,
         };
 
         // associate with segment and return
