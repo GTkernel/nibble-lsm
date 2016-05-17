@@ -15,7 +15,8 @@ lazy_static = "0.2.1"
 
 [features]
 default = ["epoch-tsc"]
+
+# Epoch Options
 epoch-tsc = []
-# atomic and combiner not implemented
-epoch-atomic = []
-epoch-combiner = []
+epoch-atomic = []   # not implemented
+epoch-combiner = [] # not implemented
