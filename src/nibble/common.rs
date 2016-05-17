@@ -1,3 +1,5 @@
+use libc;
+
 //==----------------------------------------------------==//
 //      General types
 //==----------------------------------------------------==//
@@ -39,4 +41,25 @@ pub fn err2str(code: ErrorCode) -> &'static str {
 }
 
 pub type Status = Result<(usize), ErrorCode>;
+
+//==----------------------------------------------------==//
+//      System info
+//==----------------------------------------------------==//
+
+#[cfg(target_os="linux")]
+pub fn get_tid() -> i32 {
+    unsafe {
+        let id = libc::SYS_gettid;
+        libc::syscall(id) as i32
+    }
+}
+
+#[cfg(target_os="macos")]
+pub fn get_tid() -> i32 {
+    unsafe {
+        // let id = libc::SYS_thread_selfid;
+        let id = 372; // XXX
+        libc::syscall(id) as i32
+    }
+}
 

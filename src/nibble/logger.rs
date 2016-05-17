@@ -5,27 +5,10 @@ use std::thread;
 use std::env;
 use std::sync::{Once, ONCE_INIT};
 
-use libc;
+use common::*;
 
 pub struct SimpleLogger {
     level: LogLevel,
-}
-
-#[cfg(target_os="linux")]
-fn get_tid() -> i32 {
-    unsafe {
-        let id = libc::SYS_gettid;
-        libc::syscall(id) as i32
-    }
-}
-
-#[cfg(target_os="macos")]
-fn get_tid() -> i32 {
-    unsafe {
-        // let id = libc::SYS_thread_selfid;
-        let id = 372; // XXX
-        libc::syscall(id) as i32
-    }
 }
 
 /// A simple logger. Functions invoked by log crate
