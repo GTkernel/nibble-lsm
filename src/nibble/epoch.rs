@@ -133,8 +133,7 @@ impl SegmentInfoTable {
 pub type EpochRaw = u64;
 
 /// Special-case value of EpochRaw meaning the value is non-existent.
-#[cfg(not(debug_assertions))] const EPOCH_QUIESCE: u64 = 0;
-#[cfg(debug_assertions)]  pub const EPOCH_QUIESCE: u64 = 0;
+pub const EPOCH_QUIESCE: u64 = 0;
 
 #[inline(always)]
 #[allow(unused_mut)]
