@@ -2,6 +2,7 @@ use libc;
 
 use std::mem;
 use std::ptr;
+use std::time::Instant;
 
 use numa::{self,NodeId};
 use sched;
@@ -105,6 +106,7 @@ impl MemMap {
         // bind it TODO mbind not available in Rust
 
         // allocate by faulting
+        let now = Instant::now();
         let cpu = numa::NODE_MAP.cpus_of(node).start;
         unsafe {
             sched::pin_map(cpu, || {
@@ -114,6 +116,7 @@ impl MemMap {
                 }
             });
         }
+        info!("alloc node {}: {} sec", node, now.elapsed().as_secs());
         MemMap { addr: addr, len: len }
     }
 
