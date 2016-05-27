@@ -73,8 +73,7 @@ pub struct BlockAllocator {
 
 impl BlockAllocator {
 
-    pub fn new(bytes: usize) -> Self {
-        let mmap = MemMap::new(bytes);
+    fn __new(bytes: usize, mmap: MemMap) -> Self {
         let count = bytes / BLOCK_SIZE;
         let mut pool: Vec<Arc<Block>> = Vec::with_capacity(count);
         let mut freepool: Vec<Arc<Block>> = Vec::with_capacity(count);
@@ -85,6 +84,16 @@ impl BlockAllocator {
             freepool.push(b.clone());
         }
         BlockAllocator { pool: pool, freepool: freepool, mmap: mmap, }
+    }
+
+    pub fn numa(bytes: usize, node: usize) -> Self {
+        let mmap = MemMap::numa(bytes, node);
+        Self::__new(bytes, mmap)
+    }
+
+    pub fn new(bytes: usize) -> Self {
+        let mmap = MemMap::new(bytes);
+        Self::__new(bytes, mmap)
     }
 
     pub fn alloc(&mut self, count: usize) -> Option<BlockRefPool> {
@@ -708,10 +717,9 @@ pub struct SegmentManager {
 
 // TODO reclaim segments function and thread
 impl SegmentManager {
-    // TODO write an iterator; update unit test below
 
-    pub fn new(id: usize, segsz: usize, len: usize) -> Self {
-        let b = BlockAllocator::new(len);
+    fn __new(id: usize, segsz: usize, len: usize,
+             b: BlockAllocator) -> Self {
         let num = len / segsz;
         let mut segments: Vec<Option<SegmentRef>>
             = Vec::with_capacity(num);
@@ -731,6 +739,17 @@ impl SegmentManager {
             free_slots: Arc::new(free_slots),
             closed: VecDeque::new(),
         }
+    }
+
+    pub fn numa(id: usize, segsz: usize, len: usize,
+                node: usize) -> Self {
+        let b = BlockAllocator::numa(len, node);
+        Self::__new(id,segsz,len,b)
+    }
+
+    pub fn new(id: usize, segsz: usize, len: usize) -> Self {
+        let b = BlockAllocator::new(len);
+        Self::__new(id,segsz,len,b)
     }
 
     /// Allocate a segment with a specific number of blocks. Used by

@@ -3,6 +3,9 @@ use libc;
 use std::mem;
 use std::ptr;
 
+use numa;
+use sched;
+
 //==----------------------------------------------------==//
 //      Heap allocation
 //==----------------------------------------------------==//
@@ -83,6 +86,37 @@ impl MemMap {
         MemMap { addr: addr, len: len }
     }
 
+    // map and allocate anon memory, bound to a socket
+    // shm segments + hugepg + numa on Linux asinine to get working
+    // FIXME until mbind is available, we change the cpu mask before
+    // faulting in all pages, then restore mask
+    pub fn numa(len: usize, node: usize) -> Self {
+        let prot: libc::c_int = libc::PROT_READ | libc::PROT_WRITE;
+        let flags: libc::c_int = libc::MAP_ANON |
+            libc::MAP_PRIVATE | libc::MAP_NORESERVE;
+        let addr: usize = unsafe {
+            let p = 0 as *mut libc::c_void;
+            libc::mmap(p, len, prot, flags, 0, 0) as usize
+        };
+        info!("mmap 0x{:x}-0x{:x} {} MiB",
+              addr, (addr+len), len>>20);
+        assert!(addr != libc::MAP_FAILED as usize);
+
+        // bind it TODO mbind not available in Rust
+
+        // allocate by faulting
+        let cpu = numa::NODE_MAP.cpus_of(node).start;
+        unsafe {
+            sched::pin_map(cpu, || {
+                for pg in 0..(len>>12) {
+                    let pos: usize = addr + (pg<<12);
+                    ptr::write(pos as *mut usize, 42usize);
+                }
+            });
+        }
+        MemMap { addr: addr, len: len }
+    }
+
     pub fn addr(&self) -> usize { self.addr }
     pub fn len(&self) -> usize { self.len }
 
@@ -109,7 +143,6 @@ impl Drop for MemMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use super::super::logger;
 
     #[test]
@@ -123,4 +156,14 @@ mod tests {
         // TODO verify mmap region is unmapped
     }
 
+    #[test]
+    fn numa() {
+        logger::enable();
+        let len = 1<<30;
+        let node = 0;
+        let mm = MemMap::numa(len,node);
+        assert_eq!(mm.len, len);
+        assert!(mm.addr != 0 as usize);
+        // TODO verify pages were allocated on the node
+    }
 }
