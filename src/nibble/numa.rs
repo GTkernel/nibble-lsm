@@ -105,6 +105,46 @@ fn read_node_cpus(node: usize) -> CpuRange {
     file_as_range(fname.as_str())
 }
 
+/// Read from /proc/self/numa_maps and report how many pages are
+/// allocated to each socket (index is socket ID)
+///
+/// FIXME differentiate page sizes, e.g.:
+/// anon=2048 dirty=2048 N1=2048 kernelpagesize_kB=2048
+///                              ^^^^^^^^^^^^^^^^^^^^^^
+/// mapped=329 mapmax=39 N0=6 N1=323 kernelpagesize_kB=4
+///                                  ^^^^^^^^^^^^^^^^^^^
+pub fn numa_allocated() -> Vec<usize> {
+    let nnodes = nodes();
+    let mut counts: Vec<usize> = Vec::with_capacity(nnodes);
+    for _ in 0..nnodes {
+        counts.push(0);
+    }
+    let fname = "/proc/self/numa_maps";
+    let mut file = match File::open(fname) {
+        Err(e) => panic!("{}: {}", fname, e),
+        Ok(f) => f,
+    };
+    let mut content = String::new();
+    if let Err(e) = file.read_to_string(&mut content) {
+        panic!("file {}: {}", fname, e);
+    };
+    for line in content.lines() {
+        for field in line.split(' ') {
+            if field.starts_with("N") {
+                let (_,f) = field.split_at(1);
+                // n is 'X' where X is [0-9]+
+                // p is '=X'
+                let (n,p) = f.split_at(field.find('=').unwrap()-1);
+                let pp = &p[1..]; // remove =
+                let node: usize = n.parse::<usize>().unwrap();
+                let pages: usize = pp.parse::<usize>().unwrap();
+                counts[node] += pages;
+            }
+        }
+    }
+    counts
+}
+
 /// Number of nodes in the system.
 /// FIXME we assume all nodes are online
 pub fn nodes() -> usize {
@@ -170,5 +210,17 @@ mod tests {
         assert!(n > 0);
         // TODO update if there are larger machines
         assert!(n < 32);
+    }
+
+    #[test]
+    fn check_numa_pages() {
+        let v: Vec<usize> = super::numa_allocated();
+        assert_eq!(v.len(), nodes());
+
+        let mut total: usize = 0;
+        for x in v {
+            total += x;
+        }
+        assert!(total > 0);
     }
 }
