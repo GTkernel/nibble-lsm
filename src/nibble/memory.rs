@@ -94,7 +94,8 @@ impl MemMap {
     pub fn numa(len: usize, node: NodeId) -> Self {
         let prot: libc::c_int = libc::PROT_READ | libc::PROT_WRITE;
         let flags: libc::c_int = libc::MAP_ANON |
-            libc::MAP_PRIVATE | libc::MAP_NORESERVE;
+            libc::MAP_PRIVATE | libc::MAP_NORESERVE |
+            libc::MAP_HUGETLB;
         let addr: usize = unsafe {
             let p = 0 as *mut libc::c_void;
             libc::mmap(p, len, prot, flags, 0, 0) as usize
