@@ -34,11 +34,16 @@ impl Nibble {
         let nnodes = numa::NODE_MAP.sockets();
         let mut nodes: Vec<NibblePerNode>;
         nodes = Vec::with_capacity(nnodes);
+        info!("sockets:  {}", nnodes);
+        let cap = capacity>>30;
+        let persock = cap/nnodes;
+        info!("capacity: {} GiB", cap);
+        info!("socket:   {} GiB", persock);
         let index = index_ref!();
         for node in 0..nnodes {
             let n = NodeId(node);
             let manager =
-                SegmentManager::numa(SEGMENT_SIZE, capacity, n);
+                SegmentManager::numa(SEGMENT_SIZE, persock<<30, n);
             let seginfo = manager.seginfo();
             let mref = Arc::new(Mutex::new(manager));
             nodes.push( NibblePerNode {
