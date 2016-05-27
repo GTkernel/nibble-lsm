@@ -147,7 +147,8 @@ impl Drop for MemMap {
 mod tests {
     use super::*;
     use super::super::logger;
-    use super::super::numa::NodeId;
+    use super::super::numa::{self,NodeId};
+    use std::cmp;
 
     #[test]
     fn memory_map_init() {
@@ -163,11 +164,23 @@ mod tests {
     #[test]
     fn numa() {
         logger::enable();
+        let nnodes = numa::nodes();
         let len = 1<<30;
-        let node = NodeId(0);
-        let mm = MemMap::numa(len,node);
-        assert_eq!(mm.len, len);
-        assert!(mm.addr != 0 as usize);
-        // TODO verify pages were allocated on the node
+
+        for i in 0..cmp::min(1,nnodes) {
+            // allocate on socket and verify
+            let node = NodeId(i);
+            let mm = MemMap::numa(len,node);
+            assert_eq!(mm.len, len);
+            assert!(mm.addr != 0 as usize);
+            let v = numa::numa_allocated();
+            let n = v[0];
+            assert!(n > (len>>12));
+
+            // release the memory and verify
+            drop(mm);
+            let v = numa::numa_allocated();
+            assert!(v[0] < n);
+        }
     }
 }
