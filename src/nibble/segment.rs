@@ -988,7 +988,7 @@ mod tests {
         logger::enable();
         let memlen = 1<<23;
         let manager = segmgr_ref!(SEGMENT_SIZE, memlen);
-        let mut log = Log::new(manager.clone());
+        let log = Log::new(manager.clone());
 
         let key = String::from("onlyone");
         let val = String::from("valuevaluevalue");

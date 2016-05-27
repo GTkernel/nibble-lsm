@@ -75,6 +75,7 @@ fn alloc_free(pct_to_free: f32) {
     thread::sleep(dur);
 }
 
+#[allow(dead_code)]
 fn alloc_free_all() {
     alloc_free(1.0f32);
 }

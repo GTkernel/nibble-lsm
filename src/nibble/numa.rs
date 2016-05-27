@@ -24,6 +24,7 @@ pub struct CpuRange {
 }
 
 /// Info about the socket
+#[allow(dead_code)]
 pub struct SocketInfo {
     ncpus: usize,
     cpus: CpuRange,
@@ -42,6 +43,7 @@ impl SocketInfo {
 }
 
 /// Info about the system
+#[allow(dead_code)]
 pub struct NodeMap {
     sockets: Vec<SocketInfo>,
     cpu2sock: HashMap<usize, usize>,

@@ -6,6 +6,7 @@ use std::thread;
 // can set and then unset the cpu mask within the function itself...
 
 /// Pins calling thread to cpu.
+#[allow(dead_code)]
 unsafe fn pin_cpu(cpu: usize) {
     let mut mask:     libc::cpu_set_t = mem::zeroed();
     let tid: libc::pid_t = 0;

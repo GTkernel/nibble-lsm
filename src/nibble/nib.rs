@@ -58,6 +58,7 @@ impl Nibble {
         comp.spawn(WorkerRole::Compact);
     }
 
+    #[allow(unused_variables)]
     pub fn disable_compaction(&mut self, node: NodeId) {
         unimplemented!();
     }
