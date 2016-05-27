@@ -4,6 +4,7 @@ use memory::*;
 use segment::*;
 use index::*;
 use compaction::*;
+use numa::{self,NodeId};
 use epoch;
 
 use std::ptr;
@@ -13,37 +14,51 @@ use std::sync::{Arc,Mutex};
 //      Nibble interface
 //==----------------------------------------------------==//
 
-pub struct Nibble {
+pub struct NibblePerNode {
     index: IndexRef,
     manager: SegmentManagerRef,
     log: Log,
     seginfo: epoch::SegmentInfoTableRef,
-    compactor: CompactorRef,
+    compactor: CompactorRef, // TODO move to segmgr instead?
+}
+
+pub struct Nibble {
+    /// Indexed per socket
+    nodes: Vec<NibblePerNode>,
 }
 
 impl Nibble {
 
+    // TODO allocate pages for this code to that node
     pub fn new(capacity: usize) -> Self {
-        let manager = SegmentManager::new(0, SEGMENT_SIZE, capacity);
-        let seginfo = manager.seginfo();
-        let mref = Arc::new(Mutex::new(manager));
+        let nnodes = numa::NODE_MAP.sockets();
+        let mut nodes: Vec<NibblePerNode>;
+        nodes = Vec::with_capacity(nnodes);
         let index = index_ref!();
-        Nibble {
-            index: index.clone(),
-            manager: mref.clone(),
-            log: Log::new(mref.clone()),
-            seginfo: seginfo,
-            compactor: comp_ref!(&mref, &index),
+        for node in 0..nnodes {
+            let n = NodeId(node);
+            let manager =
+                SegmentManager::numa(SEGMENT_SIZE, capacity, n);
+            let seginfo = manager.seginfo();
+            let mref = Arc::new(Mutex::new(manager));
+            nodes.push( NibblePerNode {
+                index: index.clone(),
+                manager: mref.clone(),
+                log: Log::new(mref.clone()),
+                seginfo: seginfo,
+                compactor: comp_ref!(&mref, &index),
+            } );
         }
+        Nibble { nodes: nodes, }
     }
 
-    pub fn enable_compaction(&mut self) {
-        let mut comp = self.compactor.lock().unwrap();
+    pub fn enable_compaction(&mut self, node: NodeId) {
+        let mut comp = self.nodes[node.0].compactor.lock().unwrap();
         comp.spawn(WorkerRole::Reclaim);
         comp.spawn(WorkerRole::Compact);
     }
 
-    pub fn disable_compaction(&mut self) {
+    pub fn disable_compaction(&mut self, node: NodeId) {
         unimplemented!();
     }
 
@@ -51,17 +66,18 @@ impl Nibble {
     pub fn put_object(&mut self, obj: &ObjDesc) -> Status {
         epoch::pin();
         let va: usize;
+        // XXX pick the node to append to
         // 1. add object to log
-        match self.log.append(obj) {
+        match self.nodes[0].log.append(obj) {
             Err(code) => return Err(code),
             Ok(v) => va = v,
         }
         // 2. update reference to object
-        let opt = self.index.update(&String::from(obj.getkey()), va);
+        let opt = self.nodes[0].index.update(&String::from(obj.getkey()), va);
         // 3. decrement live size of segment if we overwrite object
         if let Some(old) = opt {
             // FIXME this shouldn't need a lock..
-            let idx: usize = match self.manager.lock() {
+            let idx: usize = match self.nodes[0].manager.lock() {
                 Err(_) => panic!("lock poison"),
                 Ok(manager) =>  {
                     // should not fail
@@ -70,7 +86,7 @@ impl Nibble {
                     opt.unwrap()
                 },
             };
-            self.seginfo.decr_live(idx, obj.len_with_header());
+            self.nodes[0].seginfo.decr_live(idx, obj.len_with_header());
         }
         epoch::quiesce();
         Ok(1)
@@ -79,7 +95,7 @@ impl Nibble {
     pub fn get_object(&self, key: &String) -> (Status,Option<Buffer>) {
         epoch::pin();
         let va: usize;
-        match self.index.get(key) {
+        match self.nodes[0].index.get(key) {
             None => return (Err(ErrorCode::KeyNotExist),None),
             Some(v) => va = v,
         }
@@ -102,7 +118,7 @@ impl Nibble {
     pub fn del_object(&mut self, key: &String) -> Status {
         epoch::pin();
         let va: usize;
-        match self.index.remove(key) {
+        match self.nodes[0].index.remove(key) {
             None => return Err(ErrorCode::KeyNotExist),
             Some(v) => va = v,
         }
@@ -121,7 +137,7 @@ impl Nibble {
         // get segment this object belongs to
         // XXX need to make sure delete and object cleaning don't
         // result in decrementing twice!
-        let idx: usize = match self.manager.lock() {
+        let idx: usize = match self.nodes[0].manager.lock() {
             Err(_) => panic!("lock poison"),
             Ok(guard) =>  {
                 // should not fail
@@ -132,7 +148,7 @@ impl Nibble {
         };
 
         // update epoch table
-        self.seginfo.decr_live(idx, header.len_with_header());
+        self.nodes[0].seginfo.decr_live(idx, header.len_with_header());
 
         epoch::quiesce();
         Ok(1)
@@ -140,7 +156,7 @@ impl Nibble {
 
     #[cfg(test)]
     pub fn nlive(&self) -> usize {
-        self.index.len()
+        self.nodes[0].index.len()
     }
 }
 
@@ -244,13 +260,13 @@ mod tests {
         logger::enable();
 
         // look up virtual address
-        let va: usize = match nib.index.get(key.as_str()) {
+        let va: usize = match nib.nodes[0].index.get(key.as_str()) {
             None => panic!("key should exist"),
             Some(va_) => va_,
         };
 
         // associate with segment and return
-        match nib.manager.lock() {
+        match nib.nodes[0].manager.lock() {
             Err(_) => panic!("lock poison"),
             Ok(guard) => match guard.segment_of(va) {
                 None => panic!("segment should exist"),
@@ -266,9 +282,9 @@ mod tests {
         let mem = 1 << 23;
         let nib = Nibble::new(mem);
 
-        for idx in 0..nib.seginfo.len() {
-            assert_eq!(nib.seginfo.get_live(idx), 0usize);
-            assert_eq!(nib.seginfo.get_epoch(idx), 0usize);
+        for idx in 0..nib.nodes[0].seginfo.len() {
+            assert_eq!(nib.nodes[0].seginfo.get_live(idx), 0usize);
+            assert_eq!(nib.nodes[0].seginfo.get_epoch(idx), 0usize);
         }
     }
 
@@ -294,7 +310,7 @@ mod tests {
             panic!("{:?}", code)
         }
         let head = segment_of(&nib, &key);
-        assert_eq!(nib.seginfo.get_live(head), size);
+        assert_eq!(nib.nodes[0].seginfo.get_live(head), size);
 
         // insert until the head rolls
         loop {
@@ -302,10 +318,10 @@ mod tests {
                 panic!("{:?}", code)
             }
             let segidx = segment_of(&nib, &key);
-            assert_eq!(nib.seginfo.get_live(segidx), size);
+            assert_eq!(nib.nodes[0].seginfo.get_live(segidx), size);
             if head != segidx {
                 // head rolled. let's check prior segment live size
-                assert_eq!(nib.seginfo.get_live(head), 0usize);
+                assert_eq!(nib.nodes[0].seginfo.get_live(head), 0usize);
                 break;
             }
         }
@@ -327,7 +343,7 @@ mod tests {
             panic!("{:?}", code)
         }
         let head = segment_of(&nib, &key);
-        assert_eq!(nib.seginfo.get_live(head), len);
+        assert_eq!(nib.nodes[0].seginfo.get_live(head), len);
         keyv += 1;
 
         let mut total = len; // accumulator excluding current obj
@@ -342,11 +358,11 @@ mod tests {
             }
             let segidx = segment_of(&nib, &key);
             if head == segidx {
-                assert_eq!(nib.seginfo.get_live(segidx), total+len);
+                assert_eq!(nib.nodes[0].seginfo.get_live(segidx), total+len);
             } else {
                 // head rolled. check old and new live sizes
-                assert_eq!(nib.seginfo.get_live(head), total);
-                assert_eq!(nib.seginfo.get_live(segidx), len);
+                assert_eq!(nib.nodes[0].seginfo.get_live(head), total);
+                assert_eq!(nib.nodes[0].seginfo.get_live(segidx), len);
                 break;
             }
             keyv += 1;
@@ -371,11 +387,11 @@ mod tests {
 
         let idx = segment_of(&nib, &key);
         let len = obj.len_with_header();
-        assert_eq!(nib.seginfo.get_live(idx), len);
+        assert_eq!(nib.nodes[0].seginfo.get_live(idx), len);
 
         if let Err(code) = nib.del_object(&key) {
             panic!("{:?}", code)
         }
-        assert_eq!(nib.seginfo.get_live(idx), 0usize);
+        assert_eq!(nib.nodes[0].seginfo.get_live(idx), 0usize);
     }
 }

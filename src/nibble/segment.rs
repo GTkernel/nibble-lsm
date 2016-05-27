@@ -4,6 +4,7 @@ use common::*;
 use thelog::*;
 use memory::*;
 use epoch::*;
+use numa::{NodeId};
 
 use std::cmp;
 use std::mem;
@@ -86,7 +87,7 @@ impl BlockAllocator {
         BlockAllocator { pool: pool, freepool: freepool, mmap: mmap, }
     }
 
-    pub fn numa(bytes: usize, node: usize) -> Self {
+    pub fn numa(bytes: usize, node: NodeId) -> Self {
         let mmap = MemMap::numa(bytes, node);
         Self::__new(bytes, mmap)
     }
@@ -703,7 +704,8 @@ impl EntryReference {
 
 #[allow(dead_code)]
 pub struct SegmentManager {
-    id: usize,
+    /// Socket we are bound to.
+    socket: Option<NodeId>,
     /// Total memory
     size: usize,
     next_seg_id: usize, // FIXME atomic
@@ -718,7 +720,7 @@ pub struct SegmentManager {
 // TODO reclaim segments function and thread
 impl SegmentManager {
 
-    fn __new(id: usize, segsz: usize, len: usize,
+    fn __new(sock: Option<NodeId>, segsz: usize, len: usize,
              b: BlockAllocator) -> Self {
         let num = len / segsz;
         let mut segments: Vec<Option<SegmentRef>>
@@ -731,7 +733,8 @@ impl SegmentManager {
             free_slots.push(i as u32);
         }
         SegmentManager {
-            id: id, size: len,
+            socket: sock,
+            size: len,
             next_seg_id: 0,
             allocator: b,
             segments: segments,
@@ -741,15 +744,14 @@ impl SegmentManager {
         }
     }
 
-    pub fn numa(id: usize, segsz: usize, len: usize,
-                node: usize) -> Self {
+    pub fn numa(segsz: usize, len: usize, node: NodeId) -> Self {
         let b = BlockAllocator::numa(len, node);
-        Self::__new(id,segsz,len,b)
+        Self::__new(Some(node),segsz,len,b)
     }
 
-    pub fn new(id: usize, segsz: usize, len: usize) -> Self {
+    pub fn new(segsz: usize, len: usize) -> Self {
         let b = BlockAllocator::new(len);
-        Self::__new(id,segsz,len,b)
+        Self::__new(None,segsz,len,b)
     }
 
     /// Allocate a segment with a specific number of blocks. Used by
@@ -966,7 +968,7 @@ mod tests {
         logger::enable();
         let memlen = 1<<23;
         let numseg = memlen / SEGMENT_SIZE;
-        let mut mgr = SegmentManager::new(0, SEGMENT_SIZE, memlen);
+        let mut mgr = SegmentManager::new(SEGMENT_SIZE, memlen);
         for _ in 0..numseg {
             match mgr.alloc() {
                 None => panic!("segment alloc failed"),
@@ -985,7 +987,7 @@ mod tests {
     fn segment_manager_one_obj_overwrite() {
         logger::enable();
         let memlen = 1<<23;
-        let manager = segmgr_ref!(0, SEGMENT_SIZE, memlen);
+        let manager = segmgr_ref!(SEGMENT_SIZE, memlen);
         let mut log = Log::new(manager.clone());
 
         let key = String::from("onlyone");
@@ -1020,7 +1022,7 @@ mod tests {
 
         // TODO make a macro out of these lines
         let memlen = 1<<23;
-        let mut mgr = SegmentManager::new(0, SEGMENT_SIZE, memlen);
+        let mut mgr = SegmentManager::new(SEGMENT_SIZE, memlen);
 
         let segref = mgr.alloc().unwrap();
         let mut seg = segref.write().unwrap();

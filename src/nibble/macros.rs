@@ -41,9 +41,9 @@ macro_rules! seg_ref_empty {
 /// Make a new segment manager and package into a shareable reference
 #[macro_export]
 macro_rules! segmgr_ref {
-    ( $id:expr, $segsz:expr, $bytes:expr ) => {
+    ( $segsz:expr, $bytes:expr ) => {
         Arc::new( Mutex::new(
-                SegmentManager::new( $id, $segsz, $bytes)
+                SegmentManager::new( $segsz, $bytes)
                 ))
     }
 }

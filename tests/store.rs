@@ -21,6 +21,7 @@ use nibble::segment::ObjDesc;
 use nibble::logger;
 use nibble::common::ErrorCode;
 use nibble::epoch;
+use nibble::numa::NodeId;
 
 // TODO test objects larger than block, and segment
 // TODO put_object which must traverse chunks
@@ -38,7 +39,7 @@ fn alloc_free(pct_to_free: f32) {
 
     let mut nib = Nibble::new(1<<23);
 
-    nib.enable_compaction();
+    nib.enable_compaction(NodeId(0));
     thread::yield_now();
 
     let mut allkeys: Vec<String> = Vec::new();

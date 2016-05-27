@@ -522,7 +522,7 @@ mod tests {
         logger::enable();
         let nseg = 8;
         let index = index_ref!();
-        let segmgr = segmgr_ref!(0, SEGMENT_SIZE, SEGMENT_SIZE*nseg);
+        let segmgr = segmgr_ref!(SEGMENT_SIZE, SEGMENT_SIZE*nseg);
         let mut c = Compactor::new(&segmgr, &index);
         assert_eq!(c.candidates.lock().unwrap().len(), 0);
         if let Ok(mut manager) = segmgr.lock() {
@@ -542,7 +542,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         let index = index_ref!();
-        let segmgr = segmgr_ref!(0, SEGMENT_SIZE, SEGMENT_SIZE<<3);
+        let segmgr = segmgr_ref!(SEGMENT_SIZE, SEGMENT_SIZE<<3);
         let mut c = Compactor::new(&segmgr, &index);
 
         let seg_obj_ref;
@@ -672,7 +672,7 @@ mod tests {
         logger::enable();
         let index = index_ref!();
         let nseg = 32; // multiple of 4 (for this test)
-        let segmgr = segmgr_ref!(0, SEGMENT_SIZE,
+        let segmgr = segmgr_ref!(SEGMENT_SIZE,
                                      nseg*SEGMENT_SIZE);
         let mut c = Compactor::new(&segmgr, &index);
         let mut log = Log::new(segmgr.clone());

@@ -3,7 +3,7 @@ use libc;
 use std::mem;
 use std::ptr;
 
-use numa;
+use numa::{self,NodeId};
 use sched;
 
 //==----------------------------------------------------==//
@@ -90,7 +90,7 @@ impl MemMap {
     // shm segments + hugepg + numa on Linux asinine to get working
     // FIXME until mbind is available, we change the cpu mask before
     // faulting in all pages, then restore mask
-    pub fn numa(len: usize, node: usize) -> Self {
+    pub fn numa(len: usize, node: NodeId) -> Self {
         let prot: libc::c_int = libc::PROT_READ | libc::PROT_WRITE;
         let flags: libc::c_int = libc::MAP_ANON |
             libc::MAP_PRIVATE | libc::MAP_NORESERVE;
@@ -144,6 +144,7 @@ impl Drop for MemMap {
 mod tests {
     use super::*;
     use super::super::logger;
+    use super::super::numa::NodeId;
 
     #[test]
     fn memory_map_init() {
@@ -160,7 +161,7 @@ mod tests {
     fn numa() {
         logger::enable();
         let len = 1<<30;
-        let node = 0;
+        let node = NodeId(0);
         let mm = MemMap::numa(len,node);
         assert_eq!(mm.len, len);
         assert!(mm.addr != 0 as usize);

@@ -13,6 +13,7 @@ use nibble::logger::SimpleLogger;
 //use std::sync::{Arc,Mutex};
 use std::thread;
 use std::time::Duration;
+use nibble::numa::NodeId;
 
 fn enable_logging() {
     let _ = SimpleLogger::init(LogLevel::Debug);
@@ -22,7 +23,7 @@ fn main() {
     enable_logging();
 
     let mut nib = Nibble::new(1<<23);
-    nib.enable_compaction();
+    nib.enable_compaction(NodeId(0));
 
     //println!("tsc {}",nibble::epoch::read());
 

@@ -1,6 +1,17 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
+use std::fmt;
+
+/// Special type to represent a NUMA socket.
+#[derive(Copy,Clone)]
+pub struct NodeId(pub usize);
+
+impl fmt::Display for NodeId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 lazy_static! {
     pub static ref NODE_MAP: NodeMap = { NodeMap::new() };
@@ -56,8 +67,13 @@ impl NodeMap {
         }
     }
 
-    pub fn cpus_of(&self, sock: usize) -> CpuRange {
-        self.sockets[sock].cpus
+    pub fn cpus_of(&self, sock: NodeId) -> CpuRange {
+        assert!(sock.0<self.sockets.len(),"sock is too big: {}",sock);
+        self.sockets[sock.0].cpus
+    }
+
+    pub fn sockets(&self) -> usize {
+        self.sockets.len()
     }
 }
 

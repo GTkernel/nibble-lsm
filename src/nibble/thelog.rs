@@ -285,7 +285,7 @@ mod tests {
     fn log_alloc_until_full() {
         logger::enable();
         let memlen = 1<<23;
-        let manager = segmgr_ref!(0, SEGMENT_SIZE, memlen);
+        let manager = segmgr_ref!(SEGMENT_SIZE, memlen);
         let mut log = Log::new(manager);
         let key: &'static str = "keykeykeykey";
         let val: &'static str = "valuevaluevalue";
