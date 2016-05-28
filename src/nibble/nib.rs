@@ -178,6 +178,8 @@ mod tests {
     use segment::*;
 
     use super::super::logger;
+    use super::super::memory;
+    use super::super::segment;
 
     #[test]
     fn nibble_single_small_object() {
@@ -400,5 +402,42 @@ mod tests {
             panic!("{:?}", code)
         }
         assert_eq!(nib.nodes[0].seginfo.get_live(idx), 0usize);
+    }
+
+    #[test]
+    #[should_panic(expected = "larger than segment")]
+    fn obj_too_large() {
+        logger::enable();
+        let mut nib = Nibble::new(1<<30);
+
+        let key = String::from("lsfkjlksdjflks");
+        let len = segment::SEGMENT_SIZE;
+        let value = memory::allocate::<u8>(len);
+
+        let v = Some(value as *const u8);
+        let obj = ObjDesc::new(key.as_str(), v, len as u32);
+        if let Err(code) = nib.put_object(&obj) {
+            panic!("{:?}", code)
+        }
+        unsafe { memory::deallocate(value, len); }
+    }
+
+    #[test]
+    fn large_objs() {
+        logger::enable();
+        let mut nib = Nibble::new(1<<30);
+
+        let key = String::from("lsfkjlksdjflks");
+        let len = segment::SEGMENT_SIZE - segment::BLOCK_SIZE;
+        let value = memory::allocate::<u8>(len);
+
+        let v = Some(value as *const u8);
+        let obj = ObjDesc::new(key.as_str(), v, len as u32);
+        for _ in 0..4 {
+            if let Err(code) = nib.put_object(&obj) {
+                panic!("{:?}", code)
+            }
+        }
+        unsafe { memory::deallocate(value, len); }
     }
 }

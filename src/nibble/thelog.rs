@@ -123,7 +123,9 @@ impl LogHead {
 
     pub fn append(&mut self, buf: &ObjDesc) -> Status {
         assert!(buf.len_with_header() <
-                (SEGMENT_SIZE-size_of::<SegmentHeader>()));
+                (SEGMENT_SIZE-size_of::<SegmentHeader>()),
+                "object {} larger than segment {}",
+                buf.len_with_header(), SEGMENT_SIZE);
 
         let roll: bool;
 
