@@ -1,4 +1,5 @@
 use libc;
+use std::ptr;
 
 //==----------------------------------------------------==//
 //      General types
@@ -13,6 +14,18 @@ pub type PointerMut = Option<*mut u8>;
 //==----------------------------------------------------==//
 //      Error handling
 //==----------------------------------------------------==//
+
+#[allow(dead_code)]
+pub unsafe fn errno() -> i32 {
+    let loc = libc::__errno_location();
+    ptr::read(loc)
+}
+
+#[allow(dead_code)]
+pub unsafe fn set_errno(val: i32) {
+    let loc = libc::__errno_location();
+    ptr::write(loc, val);
+}
 
 #[derive(Debug)]
 pub enum ErrorCode {

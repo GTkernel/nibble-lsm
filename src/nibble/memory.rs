@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use numa::{self,NodeId};
 use sched;
+use common::errno;
 
 //==----------------------------------------------------==//
 //      Heap allocation
@@ -92,17 +93,20 @@ impl MemMap {
     // FIXME until mbind is available, we change the cpu mask before
     // faulting in all pages, then restore mask
     pub fn numa(len: usize, node: NodeId) -> Self {
+        debug!("len {} node {}", len, node.0);
         let prot: libc::c_int = libc::PROT_READ | libc::PROT_WRITE;
         let flags: libc::c_int = libc::MAP_ANON |
             libc::MAP_PRIVATE | libc::MAP_NORESERVE |
             libc::MAP_HUGETLB;
         let addr: usize = unsafe {
             let p = 0 as *mut libc::c_void;
-            libc::mmap(p, len, prot, flags, 0, 0) as usize
+            libc::mmap(p, len, prot, flags, -1, 0) as usize
         };
+        if addr == libc::MAP_FAILED as usize {
+            panic!("mmap: {}", unsafe{errno()});
+        }
         info!("mmap 0x{:x}-0x{:x} {} MiB",
               addr, (addr+len), len>>20);
-        assert!(addr != libc::MAP_FAILED as usize);
 
         // bind it TODO mbind not available in Rust
 
@@ -176,7 +180,8 @@ mod tests {
             assert!(mm.addr != 0 as usize);
             let v = numa::numa_allocated();
             let n = v[0];
-            assert!(n > (len>>12));
+            println!("allocated: {:?}", v);
+            assert!(n >= (len>>21), "n {} len {}", n, len);
 
             // release the memory and verify
             drop(mm);

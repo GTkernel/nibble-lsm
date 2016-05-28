@@ -966,7 +966,7 @@ mod tests {
     #[test]
     fn segment_manager_alloc_all() {
         logger::enable();
-        let memlen = 1<<23;
+        let memlen = 1<<30;
         let numseg = memlen / SEGMENT_SIZE;
         let mut mgr = SegmentManager::new(SEGMENT_SIZE, memlen);
         for _ in 0..numseg {
@@ -986,7 +986,7 @@ mod tests {
     #[test]
     fn segment_manager_one_obj_overwrite() {
         logger::enable();
-        let memlen = 1<<23;
+        let memlen = 1<<27;
         let manager = segmgr_ref!(SEGMENT_SIZE, memlen);
         let log = Log::new(manager.clone());
 
@@ -1021,7 +1021,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // TODO make a macro out of these lines
-        let memlen = 1<<23;
+        let memlen = 1<<30;
         let mut mgr = SegmentManager::new(SEGMENT_SIZE, memlen);
 
         let segref = mgr.alloc().unwrap();

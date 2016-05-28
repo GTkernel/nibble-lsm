@@ -79,7 +79,11 @@ impl NodeMap {
     }
 }
 
+/// Read file and interpret as an integer range, e.g.
+/// X-Y returns CpuRange { start: X, end: Y }
+/// FIXME we don't handle all corner cases
 fn file_as_range(fname: &str) -> CpuRange {
+    debug!("reading {}", fname);
     let mut file = match File::open(fname) {
         Err(e) => panic!("{}: {}", fname, e),
         Ok(f) => f,
@@ -87,6 +91,13 @@ fn file_as_range(fname: &str) -> CpuRange {
     let mut line = String::new();
     if let Err(e) = file.read_to_string(&mut line) {
         panic!("file {}: {}", fname, e);
+    }
+    // a-b,x-y  hyperthreading? take first range
+    if let Some(idx) = line.find(',') {
+        line = {
+            let (ab,_) = line.split_at(idx);
+            ab.to_owned()
+        };
     }
     if let None = line.find('-') {
         panic!("no range in file");
@@ -174,7 +185,11 @@ mod tests {
         for socket in map.sockets {
             cpus += socket.ncpus;
         }
-        assert_eq!(cpus, ncpus());
+        let online = ncpus();
+        // FIXME account for hyperthreading... either equal or 2x
+        if cpus != online {
+            assert!(2*cpus == online,"cpus {} ncpus {}",cpus,online);
+        }
         assert_eq!(map.cpu2sock.get(&2), Some(&0));
         assert_eq!(map.cpu2sock.get(&2048), None);
     }

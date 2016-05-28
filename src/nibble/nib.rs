@@ -35,15 +35,16 @@ impl Nibble {
         let mut nodes: Vec<NibblePerNode>;
         nodes = Vec::with_capacity(nnodes);
         info!("sockets:  {}", nnodes);
-        let cap = capacity>>30;
-        let persock = cap/nnodes;
-        info!("capacity: {} GiB", cap);
-        info!("socket:   {} GiB", persock);
+        let persock = capacity/nnodes;
+        info!("capacity: {:.2} GiB",
+              (capacity as f64)/(2f64.powi(30)));
+        info!("socket:   {:.2} GiB",
+              (persock as f64)/(2f64.powi(30)));
         let index = index_ref!();
         for node in 0..nnodes {
             let n = NodeId(node);
             let manager =
-                SegmentManager::numa(SEGMENT_SIZE, persock<<30, n);
+                SegmentManager::numa(SEGMENT_SIZE, persock, n);
             let seginfo = manager.seginfo();
             let mref = Arc::new(Mutex::new(manager));
             nodes.push( NibblePerNode {
@@ -181,7 +182,7 @@ mod tests {
     #[test]
     fn nibble_single_small_object() {
         logger::enable();
-        let mem = 1 << 23;
+        let mem = 1 << 30;
         let mut nib = Nibble::new(mem);
 
         // insert initial object
@@ -285,7 +286,7 @@ mod tests {
     #[test]
     fn epoch_0() {
         logger::enable();
-        let mem = 1 << 23;
+        let mem = 1 << 30;
         let nib = Nibble::new(mem);
 
         for idx in 0..nib.nodes[0].seginfo.len() {
@@ -300,7 +301,7 @@ mod tests {
     #[test]
     fn epoch_1() {
         logger::enable();
-        let mut nib = Nibble::new(1<<23);
+        let mut nib = Nibble::new(1<<30);
 
         let key = String::from("keykeykeykey");
         let val = String::from("valuevaluevalue");
@@ -337,7 +338,7 @@ mod tests {
     #[test]
     fn epoch_2() {
         logger::enable();
-        let mut nib = Nibble::new(1<<23);
+        let mut nib = Nibble::new(1<<30);
         let mut keyv = 0usize;
         let value = String::from("sldkfslkfjlsdjflksdjfksjddfdfdf");
 
@@ -380,7 +381,7 @@ mod tests {
     #[test]
     fn epoch_3() {
         logger::enable();
-        let mut nib = Nibble::new(1<<23);
+        let mut nib = Nibble::new(1<<30);
 
         let key = String::from("lsfkjlksdjflks");
         let value = String::from("sldkfslkfjlsdjflksdjfksjddfdfdf");
