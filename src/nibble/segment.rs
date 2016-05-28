@@ -17,7 +17,7 @@ use crossbeam::sync::SegQueue;
 
 pub const BLOCK_SHIFT:   usize = 16;
 pub const BLOCK_SIZE:    usize = 1 << BLOCK_SHIFT;
-pub const SEGMENT_SHIFT: usize = 20;
+pub const SEGMENT_SHIFT: usize = 24;
 pub const SEGMENT_SIZE:  usize = 1 << SEGMENT_SHIFT;
 
 //==----------------------------------------------------==//
