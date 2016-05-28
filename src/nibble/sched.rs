@@ -7,7 +7,7 @@ use std::thread;
 
 /// Pins calling thread to cpu.
 #[allow(dead_code)]
-unsafe fn pin_cpu(cpu: usize) {
+pub unsafe fn pin_cpu(cpu: usize) {
     let mut mask:     libc::cpu_set_t = mem::zeroed();
     let tid: libc::pid_t = 0;
     libc::CPU_ZERO(&mut mask);

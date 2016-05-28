@@ -7,6 +7,7 @@ use test::Bencher;
 
 use nibble::nib::Nibble;
 use nibble::segment::ObjDesc;
+use nibble::sched::pin_cpu;
 
 // TODO test objects larger than block, and segment
 // TODO put_object which must traverse chunks
@@ -20,7 +21,8 @@ use nibble::segment::ObjDesc;
 
 #[bench]
 fn insert_64(b: &mut Bencher) {
-    let mut nib = Nibble::new( 1<<26 );
+    unsafe { pin_cpu(0); }
+    let mut nib = Nibble::new( 1<<27 );
     let key: &'static str = "abcdefghij123456";
     const LEN: u32 = 64;
     let val = [42 as u8; LEN as usize];
@@ -29,7 +31,8 @@ fn insert_64(b: &mut Bencher) {
 }
 #[bench]
 fn insert_128(b: &mut Bencher) {
-    let mut nib = Nibble::new( 1<<26 );
+    unsafe { pin_cpu(0); }
+    let mut nib = Nibble::new( 1<<27 );
     let key: &'static str = "abcdefghij123456";
     const LEN: u32 = 128;
     let val = [42 as u8; LEN as usize];
@@ -38,7 +41,8 @@ fn insert_128(b: &mut Bencher) {
 }
 #[bench]
 fn insert_256(b: &mut Bencher) {
-    let mut nib = Nibble::new( 1<<26 );
+    unsafe { pin_cpu(0); }
+    let mut nib = Nibble::new( 1<<27 );
     let key: &'static str = "abcdefghij123456";
     const LEN: u32 = 256;
     let val = [42 as u8; LEN as usize];
@@ -47,7 +51,8 @@ fn insert_256(b: &mut Bencher) {
 }
 #[bench]
 fn insert_384(b: &mut Bencher) {
-    let mut nib = Nibble::new( 1<<26 );
+    unsafe { pin_cpu(0); }
+    let mut nib = Nibble::new( 1<<27 );
     let key: &'static str = "abcdefghij123456";
     const LEN: u32 = 384;
     let val = [42 as u8; LEN as usize];
@@ -56,7 +61,8 @@ fn insert_384(b: &mut Bencher) {
 }
 #[bench]
 fn insert_512(b: &mut Bencher) {
-    let mut nib = Nibble::new( 1<<26 );
+    unsafe { pin_cpu(0); }
+    let mut nib = Nibble::new( 1<<27 );
     let key: &'static str = "abcdefghij123456";
     const LEN: u32 = 512;
     let val = [42 as u8; LEN as usize];
@@ -65,7 +71,8 @@ fn insert_512(b: &mut Bencher) {
 }
 #[bench]
 fn insert_768(b: &mut Bencher) {
-    let mut nib = Nibble::new( 1<<26 );
+    unsafe { pin_cpu(0); }
+    let mut nib = Nibble::new( 1<<27 );
     let key: &'static str = "abcdefghij123456";
     const LEN: u32 = 768;
     let val = [42 as u8; LEN as usize];
@@ -74,7 +81,8 @@ fn insert_768(b: &mut Bencher) {
 }
 #[bench]
 fn insert_1024(b: &mut Bencher) {
-    let mut nib = Nibble::new( 1<<26 );
+    unsafe { pin_cpu(0); }
+    let mut nib = Nibble::new( 1<<27 );
     let key: &'static str = "abcdefghij123456";
     const LEN: u32 = 1024;
     let val = [42 as u8; LEN as usize];
@@ -83,7 +91,8 @@ fn insert_1024(b: &mut Bencher) {
 }
 #[bench]
 fn insert_1536(b: &mut Bencher) {
-    let mut nib = Nibble::new( 1<<26 );
+    unsafe { pin_cpu(0); }
+    let mut nib = Nibble::new( 1<<27 );
     let key: &'static str = "abcdefghij123456";
     const LEN: u32 = 1536;
     let val = [42 as u8; LEN as usize];
@@ -92,7 +101,8 @@ fn insert_1536(b: &mut Bencher) {
 }
 #[bench]
 fn insert_2048(b: &mut Bencher) {
-    let mut nib = Nibble::new( 1<<26 );
+    unsafe { pin_cpu(0); }
+    let mut nib = Nibble::new( 1<<27 );
     let key: &'static str = "abcdefghij123456";
     const LEN: u32 = 1024;
     let val = [42 as u8; LEN as usize];
@@ -101,7 +111,8 @@ fn insert_2048(b: &mut Bencher) {
 }
 #[bench]
 fn insert_2560(b: &mut Bencher) {
-    let mut nib = Nibble::new( 1<<26 );
+    unsafe { pin_cpu(0); }
+    let mut nib = Nibble::new( 1<<27 );
     let key: &'static str = "abcdefghij123456";
     const LEN: u32 = 2560;
     let val = [42 as u8; LEN as usize];
@@ -110,7 +121,8 @@ fn insert_2560(b: &mut Bencher) {
 }
 #[bench]
 fn insert_3072(b: &mut Bencher) {
-    let mut nib = Nibble::new( 1<<26 );
+    unsafe { pin_cpu(0); }
+    let mut nib = Nibble::new( 1<<27 );
     let key: &'static str = "abcdefghij123456";
     const LEN: u32 = 3072;
     let val = [42 as u8; LEN as usize];
@@ -119,7 +131,8 @@ fn insert_3072(b: &mut Bencher) {
 }
 #[bench]
 fn insert_4096(b: &mut Bencher) {
-    let mut nib = Nibble::new( 1<<26 );
+    unsafe { pin_cpu(0); }
+    let mut nib = Nibble::new( 1<<27 );
     let key: &'static str = "abcdefghij123456";
     const LEN: u32 = 1024;
     let val = [42 as u8; LEN as usize];
