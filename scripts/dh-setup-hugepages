@@ -1,0 +1,13 @@
+#! /usr/bin/env bash
+# Initialize system (HP DragonHawks) for using huge pages.
+set -e
+set -u
+
+# Reserve 4TiB of 2MiB pages for PRIVATE ANONYMOUS memory
+echo Clearing 2MiB pages
+sudo su -c 'echo 0 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
+echo Allocating 2MiB pages
+sudo su -c 'numactl -a -i 0-15 echo $((1<<21)) > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
+
+# Verify
+# cat /sys/devices/system/node/node*/meminfo | fgrep Huge
