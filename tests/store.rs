@@ -37,7 +37,7 @@ fn alloc_free(pct_to_free: f32) {
 
     logger::enable();
 
-    let mut nib = Nibble::new(1<<23);
+    let mut nib = Nibble::default();
 
     nib.enable_compaction(NodeId(0));
     thread::yield_now();

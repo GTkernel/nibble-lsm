@@ -29,11 +29,17 @@ pub struct Nibble {
     index: IndexRef,
 }
 
+const MIN_SEG_PER_SOCKET: usize = 4;
+
 impl Nibble {
 
-    // TODO allocate pages for this code to that node
+    /// Create new instance of Nibble. It partitions itself across the
+    /// sockets. You must create an instance with at least enough
+    /// memory per-socket to hold some minimum of segments.
     pub fn new(capacity: usize) -> Self {
         let nnodes = numa::NODE_MAP.sockets();
+        assert!(capacity >= (MIN_SEG_PER_SOCKET*nnodes*SEGMENT_SIZE),
+                "nibble requires more memory");
         info!("sockets:  {}", nnodes);
         let persock = capacity/nnodes;
         info!("capacity: {:.2} GiB",
@@ -83,6 +89,13 @@ impl Nibble {
             a.socket.cmp(&b.socket)
         });
         Nibble { nodes: nodes, index: index }
+    }
+
+    /// Allocate Nibble with a default (small) amount of memory.
+    pub fn default() -> Self {
+        let nnodes = numa::NODE_MAP.sockets();
+        let cap: usize = MIN_SEG_PER_SOCKET*SEGMENT_SIZE*nnodes;
+        Nibble::new(cap)
     }
 
     pub fn enable_compaction(&mut self, node: NodeId) {
@@ -207,12 +220,12 @@ mod tests {
     use super::super::logger;
     use super::super::memory;
     use super::super::segment;
+    use super::super::common;
 
     #[test]
     fn nibble_single_small_object() {
         logger::enable();
-        let mem = 1 << 30;
-        let mut nib = Nibble::new(mem);
+        let mut nib = Nibble::default();
 
         // insert initial object
         let key = String::from("keykeykeykey");
@@ -257,7 +270,10 @@ mod tests {
                             Some(val2.as_ptr()), val2.len() as u32);
         for _ in 0..100000 {
             if let Err(code) = nib.put_object(&obj2) {
-                panic!("{:?}", code);
+                match code {
+                    common::ErrorCode::OutOfMemory => break,
+                    _ => panic!("{:?}", code),
+                }
             }
         }
 
@@ -315,8 +331,7 @@ mod tests {
     #[test]
     fn epoch_0() {
         logger::enable();
-        let mem = 1 << 30;
-        let nib = Nibble::new(mem);
+        let nib = Nibble::default();
 
         for idx in 0..nib.nodes[0].seginfo.len() {
             assert_eq!(nib.nodes[0].seginfo.get_live(idx), 0usize);
@@ -330,7 +345,7 @@ mod tests {
     #[test]
     fn epoch_1() {
         logger::enable();
-        let mut nib = Nibble::new(1<<30);
+        let mut nib = Nibble::default();
 
         let key = String::from("keykeykeykey");
         let val = String::from("valuevaluevalue");
@@ -367,7 +382,7 @@ mod tests {
     #[test]
     fn epoch_2() {
         logger::enable();
-        let mut nib = Nibble::new(1<<30);
+        let mut nib = Nibble::default();
         let mut keyv = 0usize;
         let value = String::from("sldkfslkfjlsdjflksdjfksjddfdfdf");
 
@@ -410,7 +425,7 @@ mod tests {
     #[test]
     fn epoch_3() {
         logger::enable();
-        let mut nib = Nibble::new(1<<30);
+        let mut nib = Nibble::default();
 
         let key = String::from("lsfkjlksdjflks");
         let value = String::from("sldkfslkfjlsdjflksdjfksjddfdfdf");
@@ -435,7 +450,7 @@ mod tests {
     #[should_panic(expected = "larger than segment")]
     fn obj_too_large() {
         logger::enable();
-        let mut nib = Nibble::new(1<<30);
+        let mut nib = Nibble::default();
 
         let key = String::from("lsfkjlksdjflks");
         let len = segment::SEGMENT_SIZE;
@@ -452,7 +467,7 @@ mod tests {
     #[test]
     fn large_objs() {
         logger::enable();
-        let mut nib = Nibble::new(1<<30);
+        let mut nib = Nibble::default();
 
         let key = String::from("lsfkjlksdjflks");
         let len = segment::SEGMENT_SIZE - segment::BLOCK_SIZE;

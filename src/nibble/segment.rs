@@ -1041,7 +1041,7 @@ mod tests {
         let value_sizes: Vec<u32> = vec!(433, 884, 511); // arbitrary
         let total: u32 = key_sizes.iter().fold(0, ops::Add::add)
             + value_sizes.iter().fold(0, ops::Add::add);
-        let nbatches = (SEGMENT_SIZE - BLOCK_SIZE) / (total as usize);
+        let nbatches = (SEGMENT_SIZE/2) / (total as usize);
 
         // Buffer to receive items into
         let buf: *mut u8 = allocate::<u8>(total as usize);
