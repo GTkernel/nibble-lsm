@@ -11,7 +11,6 @@ use std::mem;
 use std::mem::size_of;
 use std::ptr;
 use std::sync::{Arc, Mutex, RwLock};
-use std::collections::VecDeque;
 
 use crossbeam::sync::SegQueue;
 
@@ -714,7 +713,7 @@ pub struct SegmentManager {
     seginfo: SegmentInfoTableRef,
     free_slots: Arc<SegQueue<u32>>,
     // TODO lock these
-    closed: VecDeque<SegmentRef>,
+    closed: Vec<SegmentRef>,
 }
 
 // TODO reclaim segments function and thread
@@ -740,7 +739,7 @@ impl SegmentManager {
             segments: segments,
             seginfo: Arc::new(SegmentInfoTable::new(num)),
             free_slots: Arc::new(free_slots),
-            closed: VecDeque::new(),
+            closed: Vec::new(),
         }
     }
 
@@ -834,12 +833,12 @@ impl SegmentManager {
     /// threads will periodically query this queue for new segments to
     /// add to its candidate list.
     pub fn add_closed(&mut self, seg: &SegmentRef) {
-        self.closed.push_back(seg.clone());
+        self.closed.push(seg.clone());
     }
 
     // TODO if using SegQueue, perhaps add max to pop off
     pub fn grab_closed(&mut self,
-                       to: &mut VecDeque<SegmentRef>) -> usize {
+                       to: &mut Vec<SegmentRef>) -> usize {
         let n: usize = self.closed.len();
         to.append(&mut self.closed);
         n

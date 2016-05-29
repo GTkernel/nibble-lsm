@@ -56,7 +56,6 @@ use segment::*;
 use index::*;
 use epoch;
 
-use std::collections::{VecDeque};
 use std::mem;
 use std::sync::{Arc,Mutex,RwLockWriteGuard,RwLock};
 use std::sync::atomic::{AtomicBool};
@@ -65,6 +64,7 @@ use std::time::{Duration,Instant};
 
 use crossbeam::sync::SegQueue;
 use itertools;
+use quicksort;
 
 //==----------------------------------------------------==//
 //      Compactor types, macros
@@ -85,7 +85,7 @@ type ReclaimQueueRef = Arc<ReclaimQueue>;
 type Handle = thread::JoinHandle<()>;
 
 pub struct Compactor {
-    candidates: Arc<Mutex<VecDeque<SegmentRef>>>,
+    candidates: Arc<Mutex<Vec<SegmentRef>>>,
     manager: SegmentManagerRef,
     index: IndexRef,
     seginfo: epoch::SegmentInfoTableRef,
@@ -106,7 +106,7 @@ impl Compactor {
             Ok(guard) => guard.seginfo(),
         };
         Compactor {
-            candidates: Arc::new(Mutex::new(VecDeque::new())),
+            candidates: Arc::new(Mutex::new(Vec::new())),
             manager: manager.clone(),
             index: index.clone(),
             seginfo: seginfo,
@@ -217,14 +217,14 @@ pub enum WorkerRole {
 #[allow(dead_code)]
 struct Worker {
     role: WorkerRole,
-    candidates: Arc<Mutex<VecDeque<SegmentRef>>>,
+    candidates: Arc<Mutex<Vec<SegmentRef>>>,
     manager: SegmentManagerRef,
     index: IndexRef,
     seginfo: epoch::SegmentInfoTableRef,
     park: AtomicBool,
     /// This thread's private set of to-be-reclaimed segments
     /// Used only if thread role is Reclaim
-    reclaim: Option<VecDeque<EpochSegment>>,
+    reclaim: Option<Vec<EpochSegment>>,
     /// Reference to the global list of to-be-reclaimed segments
     /// Compaction threads push to this, Reclaim threads move SegRefs
     /// from this to their private set to manipulate
@@ -235,7 +235,7 @@ impl Worker {
 
     pub fn new(role: &WorkerRole, compactor: &Compactor) -> Self {
         let reclaim = match *role {
-            WorkerRole::Reclaim => Some(VecDeque::new()),
+            WorkerRole::Reclaim => Some(Vec::new()),
             _ => None,
         };
         Worker {
@@ -252,46 +252,82 @@ impl Worker {
 
     pub fn add_candidate(&mut self, seg: &SegmentRef) {
         match self.candidates.lock() {
-            Ok(ref mut cand) => cand.push_back(seg.clone()),
+            Ok(ref mut cand) => cand.push(seg.clone()),
             Err(_) => panic!("lock poison"),
         }
     }
 
-    /// Pick a next candidate segment and remove from set.
+    /// Pick a set of candidate segments and remove them from the set.
+    /// Return that set of candidates with their tally of live bytes.
     /// TODO use a lazy, batch iterator to get best-N segments, like
     /// https://github.com/benashford/rust-lazysort
     /// TODO create a candidates object instead?
-    pub fn next_candidate(&mut self) -> Option<SegmentRef> {
-        let mut segref: Option<SegmentRef> = None;
-        match self.candidates.lock() {
-            Err(_) => panic!("lock poison"),
-            Ok(mut cand) => {
-                match cand.pop_front() {
-                    None => {},
-                    Some(seg) => segref = Some(seg.clone()),
-                }
-            },
+    pub fn next_candidates(&mut self) -> Option<(Vec<SegmentRef>,usize)> {
+        let mut segs: Vec<SegmentRef> = Vec::new();
+        let mut guard = self.candidates.lock().unwrap();
+        // this if-stmt shouldn't actually execute if compaction
+        // thread only runs when we have lots of dirty segments
+        if guard.len() == 0 {
+            return None;
         }
-        segref
+        // optimization. if all candidates fit in a seg, return all
+        let total = guard.iter()
+            .fold(0usize, |acc,segref| {
+                  let guard = segref.read().unwrap();
+                  acc + self.seginfo.get_live(guard.slot())
+            });
+        if total < SEGMENT_SIZE {
+            mem::swap(&mut segs, &mut *guard);
+            return Some( (segs,total) );
+        }
+        // slow path (common?)
+        let pred = | a: &SegmentRef, b: &SegmentRef | {
+            let (sa,sb) = {
+                let guarda = a.read().unwrap();
+                let guardb = b.read().unwrap();
+                (guarda.slot(),guardb.slot())
+            };
+            self.seginfo.get_live(sa)
+                .cmp(&self.seginfo.get_live(sb))
+        };
+        quicksort::quicksort_by(guard.as_mut_slice(), pred);
+        // grab enough candidates to fill one segment
+        segs = Vec::new();
+        let mut tally: usize = 0;
+        while tally < SEGMENT_SIZE {
+            match guard.pop() {
+                None => break,
+                Some(seg) => {
+                    let slot = {
+                        let guard = seg.read().unwrap();
+                        guard.slot()
+                    };
+                    tally += self.seginfo.get_live(slot);
+                    segs.push(seg);
+                },
+            }
+        }
+        assert!(segs.len() > 0, "next candidate list is empty");
+        Some( (segs,tally) )
     }
 
-    // TODO need to compact multiple segments into one
-    pub fn compact(&mut self, dirty: &SegmentRef,
+    pub fn compact(&mut self, dirty: &Vec<SegmentRef>,
                new: &SegmentRef, isLive: &LiveFn) -> Status
     {
         let status: Status = Ok(1);
         let mut new = new.write().unwrap();
-        let dirty = dirty.read().unwrap();
 
-        debug!("performing compaction slot {} -> slot {} #blks {}",
-               dirty.slot(), new.slot(), new.nblocks());
+        self.seginfo.set_live(new.slot(), 0usize);
+        for segref in dirty {
+            let dirt = segref.read().unwrap();
+            debug!("performing compaction slot {} -> slot {}",
+                   dirt.slot(), new.slot());
 
-        // get_object doesn't lock a Segment to retrieve the value
-        // since the virtual address is directly used
+            // get_object doesn't lock a Segment to retrieve the value
+            // since the virtual address is directly used
 
-        { // hold index lock during iteration
             let mut guard = self.index.wlock();
-            for entry in dirty.into_iter() {
+            for entry in dirt.into_iter() {
                 if isLive(&entry, &guard) {
                     let key: String;
                     let va = new.append_entry(&entry);
@@ -299,12 +335,11 @@ impl Worker {
                     Index::update_locked(&mut guard, &key, va);
                 }
             }
+            // carry over the epoch state
+            self.seginfo.incr_live(new.slot(),
+                self.seginfo.swap_live(dirt.slot(), 0usize));
         }
 
-        // carry over the epoch state
-        let from = dirty.slot();
-        let to   = new.slot();
-        self.seginfo.set_live(to, self.seginfo.swap_live(from, 0usize));
 
         status
     }
@@ -334,6 +369,7 @@ impl Worker {
     /// Don't use this except when debugging epoch table
     #[inline]
     #[allow(unused_variables)]
+    #[cfg(IGNORE)]
     fn verify(&mut self, segref: &SegmentRef,
               slot: usize, isLive: &LiveFn) { ; }
 
@@ -356,27 +392,22 @@ impl Worker {
             }
         });
 
-        // pick a segment
-        let segref = match self.next_candidate() {
-            Some(seg) => seg,
+        let (segs,livebytes) = match self.next_candidates() {
             None => { debug!("no candidates"); return; },
+            Some(x) => x,
         };
+        debug!("candidates: # {} livebytes {}", segs.len(), livebytes);
 
-        // determine live amount for new segment
-        let slot = segref.read().unwrap().slot();
-        let newlen = self.seginfo.get_live(slot);
-        debug!("candidate: slot {} len {}", slot, newlen);
+        //self.verify(&segref, slot, &is_live);
 
-        self.verify(&segref, slot, &is_live);
-
-        // newlen may be stale by the time we start cleaning (it's ok)
+        // livebytes may be stale by the time we start cleaning (it's ok)
         // if significant, we may TODO free more blocks after
         // compaction
 
-        if newlen > 0  {
+        if livebytes > 0  {
             // allocate new segment
             let mut opt: Option<SegmentRef>;
-            let nblks = ((newlen-1)/BLOCK_SIZE)+1;
+            let nblks = ((livebytes-1)/BLOCK_SIZE)+1;
             debug!("allocating new segment #blks {}",nblks);
             let mut retries = 0;
             let start = Instant::now();
@@ -406,7 +437,7 @@ impl Worker {
 
             let newseg: SegmentRef = opt.unwrap();
 
-            let ret = self.compact(&segref, &newseg, &is_live);
+            let ret = self.compact(&segs, &newseg, &is_live);
             if ret.is_err() { panic!("compact failed"); }
 
             let newslot = newseg.read().unwrap().slot();
@@ -417,8 +448,15 @@ impl Worker {
         }
 
         //let epoch = EPOCH.fetch_add(1, atomic::Ordering::Relaxed);
-        debug!("adding slot {} to reclamation", slot);
-        self.reclaim_glob.push( (epoch::next(), segref.clone()) );
+        let ep = epoch::next();
+        for segref in segs {
+            let slot = {
+                let guard = segref.read().unwrap();
+                guard.slot()
+            };
+            debug!("adding slot {} to reclamation", slot);
+            self.reclaim_glob.push( (ep, segref) );
+        }
     }
 
     // TODO return true if there are still segments to reclaim to
@@ -431,13 +469,13 @@ impl Worker {
         // pull any new items off the global list
         while let Some(segref) = self.reclaim_glob.try_pop() {
             // TODO stop after x pops?
-            reclaim.push_back(segref);
+            reclaim.push(segref);
         }
 
         // find relevant segments locally
         let min = epoch::min();
         debug_assert!(min != Some(epoch::EPOCH_QUIESCE));
-        let mut release: VecDeque<EpochSegment> = VecDeque::new();
+        let mut release: Vec<EpochSegment> = Vec::new();
         if min.is_none() {
             // we take all waiting segments
             mem::swap(reclaim, &mut release);

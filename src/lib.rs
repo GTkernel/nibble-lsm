@@ -17,6 +17,7 @@ extern crate test;
 extern crate time;
 extern crate crossbeam;
 extern crate itertools;
+extern crate quicksort;
 
 pub mod nibble;
 pub use nibble::*;
