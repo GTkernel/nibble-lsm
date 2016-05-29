@@ -26,6 +26,7 @@ pub struct NibblePerNode {
 pub struct Nibble {
     /// Indexed per socket
     nodes: Vec<NibblePerNode>,
+    index: IndexRef,
 }
 
 impl Nibble {
