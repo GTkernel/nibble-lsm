@@ -17,7 +17,7 @@ use rand::Rng;
 use log::LogLevel;
 
 use nibble::nib::Nibble;
-use nibble::segment::ObjDesc;
+use nibble::segment::{ObjDesc,SEGMENT_SIZE};
 use nibble::logger;
 use nibble::common::ErrorCode;
 use nibble::epoch;
@@ -46,13 +46,15 @@ fn alloc_free(pct_to_free: f32) {
 
     // allocate until full
     let mut counter: usize = 0;
+    let mut size: usize = 0;
     let mut rng = rand::thread_rng();
     let value = rng.gen_ascii_chars().take(1000).collect();
-    info!("inserting objects until full");
-    loop {
+    info!("inserting objects to fill two segments");
+    while size < (1*SEGMENT_SIZE) {
         let key = counter.to_string();
         {
             let obj = ObjDesc::new2(&key, &value);
+            size += obj.len_with_header();
             if let Err(code) = nib.put_object(&obj) {
                 match code {
                     ErrorCode::OutOfMemory => break,
@@ -63,7 +65,7 @@ fn alloc_free(pct_to_free: f32) {
         allkeys.push(key);
         counter += 1;
     }
-    info!("inserted {} objects", counter);
+    info!("inserted {} objects {} bytes", counter, size);
 
     // free some (TODO random picking)
     let many: usize = ((counter as f32) * pct_to_free) as usize;
@@ -71,7 +73,7 @@ fn alloc_free(pct_to_free: f32) {
         assert!(nib.del_object(key).is_ok());
     }
 
-    let dur = Duration::from_secs(5);
+    let dur = Duration::from_secs(10);
     thread::sleep(dur);
 }
 

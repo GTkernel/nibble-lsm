@@ -57,7 +57,7 @@ use index::*;
 use epoch;
 
 use std::mem;
-use std::sync::{Arc,Mutex,RwLockWriteGuard,RwLock};
+use std::sync::{Arc,Mutex,MutexGuard,RwLockWriteGuard,RwLock};
 use std::sync::atomic::{AtomicBool};
 use std::thread;
 use std::time::{Duration,Instant};
@@ -65,6 +65,12 @@ use std::time::{Duration,Instant};
 use crossbeam::sync::SegQueue;
 use itertools;
 use quicksort;
+
+//==----------------------------------------------------==//
+//      Constants
+//==----------------------------------------------------==//
+
+pub const COMPACTION_RESERVE_SEGMENTS: usize = 0;
 
 //==----------------------------------------------------==//
 //      Compactor types, macros
@@ -93,6 +99,8 @@ pub struct Compactor {
     workers: SegQueue<(Arc<RwLock<Worker>>,Handle)>,
     /// Global reclamation queue
     reclaim: ReclaimQueueRef,
+    /// Reserve segments
+    reserve: Arc<SegQueue<SegmentRef>>,
 }
 
 // TODO metrics for when compaction should begin
@@ -105,6 +113,23 @@ impl Compactor {
             Err(_) => panic!("lock poison"),
             Ok(guard) => guard.seginfo(),
         };
+        let reserve: SegQueue<SegmentRef>;
+        reserve = SegQueue::new();
+        {
+            let mut guard = manager.lock().unwrap();
+            for _ in 0..COMPACTION_RESERVE_SEGMENTS {
+                let opt = guard.alloc();
+                assert!(opt.is_some(),
+                    "cannot allocate reserve segment");
+                let segref = opt.unwrap();
+                let slot = {
+                    let guard = segref.read().unwrap();
+                    guard.slot()
+                };
+                debug!("have reserve seg {}", slot);
+                reserve.push(segref);
+            }
+        }
         Compactor {
             candidates: Arc::new(Mutex::new(Vec::new())),
             manager: manager.clone(),
@@ -112,6 +137,7 @@ impl Compactor {
             seginfo: seginfo,
             workers: SegQueue::new(),
             reclaim: Arc::new(SegQueue::new()),
+            reserve: Arc::new(reserve),
         }
     }
 
@@ -217,6 +243,8 @@ pub enum WorkerRole {
 #[allow(dead_code)]
 struct Worker {
     role: WorkerRole,
+    // FIXME Vec is not efficient as a candidates list
+    // popping first element is slow; shifts N-1 left
     candidates: Arc<Mutex<Vec<SegmentRef>>>,
     manager: SegmentManagerRef,
     index: IndexRef,
@@ -229,6 +257,8 @@ struct Worker {
     /// Compaction threads push to this, Reclaim threads move SegRefs
     /// from this to their private set to manipulate
     reclaim_glob: ReclaimQueueRef,
+    /// Shared access to the reserve segments.
+    reserve: Arc<SegQueue<SegmentRef>>,
 }
 
 impl Worker {
@@ -247,6 +277,7 @@ impl Worker {
             park: AtomicBool::new(false),
             reclaim: reclaim,
             reclaim_glob: compactor.reclaim.clone(),
+            reserve: compactor.reserve.clone(),
         }
     }
 
@@ -256,6 +287,21 @@ impl Worker {
             Err(_) => panic!("lock poison"),
         }
     }
+
+    #[cfg(IGNORE)]
+    fn __dump_candidates(&self, guard: &MutexGuard<Vec<SegmentRef>>) {
+        debug!("sorted candidates:");
+        let mut i: usize = 0;
+        for entry in &**guard {
+            let g = entry.read().unwrap();
+            let slot = g.slot();
+            let live = self.seginfo.get_live(slot);
+            debug!("[{}] slot {} live {}", i, slot, live);
+            i += 1;
+        }
+    }
+    //#[cfg(IGNORE)]
+    fn __dump_candidates(guard: &MutexGuard<Vec<SegmentRef>>) { ; }
 
     /// Pick a set of candidate segments and remove them from the set.
     /// Return that set of candidates with their tally of live bytes.
@@ -287,25 +333,28 @@ impl Worker {
                 let guardb = b.read().unwrap();
                 (guarda.slot(),guardb.slot())
             };
-            self.seginfo.get_live(sa)
-                .cmp(&self.seginfo.get_live(sb))
+            // descending sort so we can use pop instead of remove(0)
+            self.seginfo.get_live(sb)
+                .cmp(&self.seginfo.get_live(sa))
         };
         quicksort::quicksort_by(guard.as_mut_slice(), pred);
+        self.__dump_candidates(&guard);
         // grab enough candidates to fill one segment
         segs = Vec::new();
         let mut tally: usize = 0;
         while tally < SEGMENT_SIZE {
-            match guard.pop() {
-                None => break,
-                Some(seg) => {
-                    let slot = {
-                        let guard = seg.read().unwrap();
-                        guard.slot()
-                    };
-                    tally += self.seginfo.get_live(slot);
-                    segs.push(seg);
-                },
+            let seg = guard.pop().unwrap();
+            let slot = {
+                let guard = seg.read().unwrap();
+                guard.slot()
+            };
+            let live = self.seginfo.get_live(slot);
+            if tally + live > SEGMENT_SIZE {
+                guard.push(seg);
+                break;
             }
+            tally += live;
+            segs.push(seg);
         }
         assert!(segs.len() > 0, "next candidate list is empty");
         Some( (segs,tally) )
@@ -404,22 +453,39 @@ impl Worker {
         // if significant, we may TODO free more blocks after
         // compaction
 
+        let mut used_reserve = false;
         if livebytes > 0  {
             // allocate new segment
-            let mut opt: Option<SegmentRef>;
+            let mut newseg: SegmentRef;
             let nblks = ((livebytes-1)/BLOCK_SIZE)+1;
             debug!("allocating new segment #blks {}",nblks);
             let mut retries = 0;
             let start = Instant::now();
             loop {
-                opt = match self.manager.lock() {
-                    Err(_) => panic!("lock poison"),
-                    Ok(mut manager) =>
-                        manager.alloc_size(nblks),
+                let opt = {
+                    let mut guard = self.manager.lock().unwrap();
+                    guard.alloc_size(nblks)
                 };
-                if opt.is_some() {
-                    break;
+                match opt {
+                    Some(s) => {
+                        newseg = s;
+                        break;
+                    },
+                    None => {
+                        panic!("deadlock: log full, {}",
+                               "cannot allocate for compaction");
+                        // used_reserve = true;
+                        // let r = self.reserve.try_pop();
+                        // // FIXME we can spin a little if this fails,
+                        // // but only if there are >1 compaction threads
+                        // // since one may release a reserve soon.
+                        // assert!(r.is_some(),
+                        //     "no reserve segments");
+                        // neweg = r.unwrap();
+                    },
                 }
+                // yielding and retrying only works if there are other
+                // compaction threads running :D FIXME
                 thread::yield_now();
                 retries += 1;
                 if start.elapsed().as_secs() > 4 {
@@ -435,17 +501,16 @@ impl Worker {
                       dur.subsec_nanos() / 1000u32);
             }
 
-            let newseg: SegmentRef = opt.unwrap();
-
             let ret = self.compact(&segs, &newseg, &is_live);
             if ret.is_err() { panic!("compact failed"); }
 
+            // monitor the new segment, too
             let newslot = newseg.read().unwrap().slot();
             debug!("adding slot {} to candidates", newslot);
-
-            // monitor the new segment, too
             self.add_candidate(&newseg);
         }
+
+        // XXX how do we reclaim segments for the reserve?
 
         //let epoch = EPOCH.fetch_add(1, atomic::Ordering::Relaxed);
         let ep = epoch::next();

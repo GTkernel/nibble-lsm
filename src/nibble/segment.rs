@@ -99,7 +99,10 @@ impl BlockAllocator {
     pub fn alloc(&mut self, count: usize) -> Option<BlockRefPool> {
         // TODO lock
         match self.freepool.len() {
-            0 => None,
+            0 => {
+                warn!("freepool is empty");
+                None
+            },
             len =>
                 if count <= len {
                     Some(self.freepool.split_off(len-count))
@@ -846,6 +849,10 @@ impl SegmentManager {
 
     pub fn seginfo(&self) -> SegmentInfoTableRef {
         self.seginfo.clone()
+    }
+
+    pub fn socket(&self) -> Option<NodeId> {
+        self.socket
     }
 
     //

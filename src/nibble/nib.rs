@@ -12,6 +12,20 @@ use std::sync::{Arc,Mutex};
 use std::thread::{self,JoinHandle};
 
 //==----------------------------------------------------==//
+//      Constants
+//==----------------------------------------------------==//
+
+const MIN_SEG_PER_SOCKET: usize = 4;
+
+macro_rules! min_log_size {
+    ( $nsockets:expr ) => {
+        ((NUM_LOG_HEADS as usize) * MIN_SEG_PER_SOCKET)
+            * SEGMENT_SIZE * $nsockets
+            + COMPACTION_RESERVE_SEGMENTS
+    }
+}
+
+//==----------------------------------------------------==//
 //      Nibble interface
 //==----------------------------------------------------==//
 
@@ -29,8 +43,6 @@ pub struct Nibble {
     index: IndexRef,
 }
 
-const MIN_SEG_PER_SOCKET: usize = 4;
-
 impl Nibble {
 
     /// Create new instance of Nibble. It partitions itself across the
@@ -38,8 +50,10 @@ impl Nibble {
     /// memory per-socket to hold some minimum of segments.
     pub fn new(capacity: usize) -> Self {
         let nnodes = numa::NODE_MAP.sockets();
-        assert!(capacity >= (MIN_SEG_PER_SOCKET*nnodes*SEGMENT_SIZE),
-                "nibble requires more memory");
+        let mincap = min_log_size!(nnodes);
+        assert!(capacity >= mincap,
+                "nibble requires more memory: {} but have {}",
+                mincap, capacity);
         info!("sockets:  {}", nnodes);
         let persock = capacity/nnodes;
         info!("capacity: {:.2} GiB",
@@ -94,7 +108,7 @@ impl Nibble {
     /// Allocate Nibble with a default (small) amount of memory.
     pub fn default() -> Self {
         let nnodes = numa::NODE_MAP.sockets();
-        let cap: usize = MIN_SEG_PER_SOCKET*SEGMENT_SIZE*nnodes;
+        let cap: usize = min_log_size!(nnodes);
         Nibble::new(cap)
     }
 
@@ -116,7 +130,11 @@ impl Nibble {
         // XXX pick the node to append to
         // 1. add object to log
         match self.nodes[0].log.append(obj) {
-            Err(code) => return Err(code),
+            Err(code) => {
+                warn!("log full: {} bytes",
+                      self.nodes[0].seginfo.live_bytes());
+                return Err(code);
+            },
             Ok(v) => va = v,
         }
         // 2. update reference to object

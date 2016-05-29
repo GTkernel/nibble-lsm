@@ -109,6 +109,14 @@ impl SegmentInfoTable {
         self.table[index].epoch.swap(amt, self.ordering)
     }
 
+    pub fn live_bytes(&self) -> usize {
+        let mut count: usize = 0;
+        for e in &self.table {
+            count += e.live.load(self.ordering);
+        }
+        count
+    }
+
     //
     // --- Internal methods used for testing only ---
     //

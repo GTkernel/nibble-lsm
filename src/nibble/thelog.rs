@@ -22,6 +22,12 @@ macro_rules! wlock {
 }
 
 //==----------------------------------------------------==//
+//      Constants
+//==----------------------------------------------------==//
+
+pub const NUM_LOG_HEADS: u32 = 1;
+
+//==----------------------------------------------------==//
 //      Entry header
 //==----------------------------------------------------==//
 
@@ -131,16 +137,26 @@ impl LogHead {
 
         // check if head exists
         if let None = self.segment {
+            debug!("head doesn't exist");
             roll = true;
         }
         // check if the object can fit in remaining space
         else {
             let segref = self.segment.clone().unwrap();
-            let seg = segref.read().unwrap();
-            roll = !seg.can_hold(buf);
+            roll = {
+                let seg = segref.read().unwrap();
+                !seg.can_hold(buf)
+            };
+            if roll {
+                debug!("rolling: head cannot hold new object");
+            }
         }
         if roll {
-            debug!("rolling head");
+            let socket: usize = {
+                let guard = self.manager.lock().unwrap();
+                guard.socket().unwrap().0
+            };
+            debug!("rolling head, socket {}", socket);
             if let Err(code) = self.roll() {
                 return Err(code);
             }
@@ -201,9 +217,6 @@ impl LogHead {
 //==----------------------------------------------------==//
 //      The log
 //==----------------------------------------------------==//
-
-// TODO refer to a config object
-const NUM_LOG_HEADS: u32 = 8;
 
 pub struct Log {
     heads: Vec<LogHeadRef>,
