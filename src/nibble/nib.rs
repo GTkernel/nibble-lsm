@@ -17,7 +17,6 @@ use std::thread::{self,JoinHandle};
 
 pub struct NibblePerNode {
     socket: usize,
-    index: IndexRef,
     manager: SegmentManagerRef,
     log: Log,
     seginfo: epoch::SegmentInfoTableRef,
@@ -43,9 +42,9 @@ impl Nibble {
 
         // Create all per-socket elements with threads.
         let nodes: Arc<Mutex<Vec<NibblePerNode>>>;
+        let index = index_ref!();
         nodes = Arc::new(Mutex::new(Vec::with_capacity(nnodes)));
         {
-            let index = index_ref!();
             let mut handles: Vec<JoinHandle<()>> = Vec::new();
             for node in 0..nnodes {
                 let i = index.clone();
@@ -58,7 +57,6 @@ impl Nibble {
                     let mref = Arc::new(Mutex::new(manager));
                     let per = NibblePerNode {
                         socket: node,
-                        index: i.clone(),
                         manager: mref.clone(),
                         log: Log::new(mref.clone()),
                         seginfo: seginfo,
@@ -83,7 +81,7 @@ impl Nibble {
         nodes.sort_by( | a, b | {
             a.socket.cmp(&b.socket)
         });
-        Nibble { nodes: nodes, }
+        Nibble { nodes: nodes, index: index }
     }
 
     pub fn enable_compaction(&mut self, node: NodeId) {
@@ -108,7 +106,7 @@ impl Nibble {
             Ok(v) => va = v,
         }
         // 2. update reference to object
-        let opt = self.nodes[0].index.update(&String::from(obj.getkey()), va);
+        let opt = self.index.update(&String::from(obj.getkey()), va);
         // 3. decrement live size of segment if we overwrite object
         if let Some(old) = opt {
             // FIXME this shouldn't need a lock..
@@ -130,7 +128,7 @@ impl Nibble {
     pub fn get_object(&self, key: &String) -> (Status,Option<Buffer>) {
         epoch::pin();
         let va: usize;
-        match self.nodes[0].index.get(key) {
+        match self.index.get(key) {
             None => return (Err(ErrorCode::KeyNotExist),None),
             Some(v) => va = v,
         }
@@ -153,7 +151,7 @@ impl Nibble {
     pub fn del_object(&mut self, key: &String) -> Status {
         epoch::pin();
         let va: usize;
-        match self.nodes[0].index.remove(key) {
+        match self.index.remove(key) {
             None => return Err(ErrorCode::KeyNotExist),
             Some(v) => va = v,
         }
@@ -191,7 +189,7 @@ impl Nibble {
 
     #[cfg(test)]
     pub fn nlive(&self) -> usize {
-        self.nodes[0].index.len()
+        self.index.len()
     }
 }
 
@@ -297,7 +295,7 @@ mod tests {
         logger::enable();
 
         // look up virtual address
-        let va: usize = match nib.nodes[0].index.get(key.as_str()) {
+        let va: usize = match nib.index.get(key.as_str()) {
             None => panic!("key should exist"),
             Some(va_) => va_,
         };
