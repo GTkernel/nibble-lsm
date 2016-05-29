@@ -9,12 +9,14 @@ use epoch;
 
 use std::ptr;
 use std::sync::{Arc,Mutex};
+use std::thread::{self,JoinHandle};
 
 //==----------------------------------------------------==//
 //      Nibble interface
 //==----------------------------------------------------==//
 
 pub struct NibblePerNode {
+    socket: usize,
     index: IndexRef,
     manager: SegmentManagerRef,
     log: Log,
@@ -32,29 +34,55 @@ impl Nibble {
     // TODO allocate pages for this code to that node
     pub fn new(capacity: usize) -> Self {
         let nnodes = numa::NODE_MAP.sockets();
-        let mut nodes: Vec<NibblePerNode>;
-        nodes = Vec::with_capacity(nnodes);
         info!("sockets:  {}", nnodes);
         let persock = capacity/nnodes;
         info!("capacity: {:.2} GiB",
               (capacity as f64)/(2f64.powi(30)));
         info!("socket:   {:.2} GiB",
               (persock as f64)/(2f64.powi(30)));
-        let index = index_ref!();
-        for node in 0..nnodes {
-            let n = NodeId(node);
-            let manager =
-                SegmentManager::numa(SEGMENT_SIZE, persock, n);
-            let seginfo = manager.seginfo();
-            let mref = Arc::new(Mutex::new(manager));
-            nodes.push( NibblePerNode {
-                index: index.clone(),
-                manager: mref.clone(),
-                log: Log::new(mref.clone()),
-                seginfo: seginfo,
-                compactor: comp_ref!(&mref, &index),
-            } );
+
+        // Create all per-socket elements with threads.
+        let nodes: Arc<Mutex<Vec<NibblePerNode>>>;
+        nodes = Arc::new(Mutex::new(Vec::with_capacity(nnodes)));
+        {
+            let index = index_ref!();
+            let mut handles: Vec<JoinHandle<()>> = Vec::new();
+            for node in 0..nnodes {
+                let i = index.clone();
+                let nodes = nodes.clone();
+                let n = NodeId(node);
+                handles.push( thread::spawn( move || {
+                    let s = SEGMENT_SIZE;
+                    let manager = SegmentManager::numa(s,persock,n);
+                    let seginfo = manager.seginfo();
+                    let mref = Arc::new(Mutex::new(manager));
+                    let per = NibblePerNode {
+                        socket: node,
+                        index: i.clone(),
+                        manager: mref.clone(),
+                        log: Log::new(mref.clone()),
+                        seginfo: seginfo,
+                        compactor: comp_ref!(&mref, &i),
+                    };
+                    let mut guard = nodes.lock().unwrap();
+                    guard.push(per);
+                }));
+            }
+            for handle in handles {
+                let _ = handle.join();
+            }
         }
+        // consume the Arc and Mutex, then put back into order
+        let mut nodes = match Arc::try_unwrap(nodes) {
+            Err(_) => panic!("glug glug glug"),
+            Ok(lock) => match lock.into_inner() {
+                Err(_) => panic!("glug glug glug"),
+                Ok(n) => n,
+            },
+        };
+        nodes.sort_by( | a, b | {
+            a.socket.cmp(&b.socket)
+        });
         Nibble { nodes: nodes, }
     }
 
