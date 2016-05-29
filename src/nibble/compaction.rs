@@ -301,7 +301,7 @@ impl Worker {
         }
     }
     //#[cfg(IGNORE)]
-    fn __dump_candidates(guard: &MutexGuard<Vec<SegmentRef>>) { ; }
+    fn __dump_candidates(&self, guard: &MutexGuard<Vec<SegmentRef>>) { ; }
 
     /// Pick a set of candidate segments and remove them from the set.
     /// Return that set of candidates with their tally of live bytes.

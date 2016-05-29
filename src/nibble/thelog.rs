@@ -152,11 +152,11 @@ impl LogHead {
             }
         }
         if roll {
-            let socket: usize = {
+            let socket = {
                 let guard = self.manager.lock().unwrap();
-                guard.socket().unwrap().0
+                guard.socket()
             };
-            debug!("rolling head, socket {}", socket);
+            debug!("rolling head, socket {:?}", socket);
             if let Err(code) = self.roll() {
                 return Err(code);
             }

@@ -4,7 +4,7 @@ use std::io::Read;
 use std::fmt;
 
 /// Special type to represent a NUMA socket.
-#[derive(Copy,Clone)]
+#[derive(Copy,Clone,Debug)]
 pub struct NodeId(pub usize);
 
 impl fmt::Display for NodeId {
