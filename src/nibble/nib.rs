@@ -41,6 +41,7 @@ pub struct NibblePerNode {
 pub struct Nibble {
     /// Indexed per socket
     nodes: Vec<NibblePerNode>,
+    nnodes: u32,
     index: IndexRef,
     capacity: usize,
 }
@@ -110,7 +111,12 @@ impl Nibble {
         nodes.sort_by( | a, b | {
             a.socket.cmp(&b.socket)
         });
-        Nibble { nodes: nodes, index: index, capacity: capacity }
+        Nibble {
+            nodes: nodes,
+            nnodes: nnodes as u32,
+            index: index,
+            capacity: capacity
+        }
     }
 
     /// Allocate Nibble with a default (small) amount of memory.
@@ -122,6 +128,10 @@ impl Nibble {
 
     pub fn capacity(&self) -> usize {
         self.capacity
+    }
+
+    pub fn nnodes(&self) -> usize {
+        self.nnodes as usize
     }
 
     pub fn enable_compaction(&mut self, node: NodeId) {
@@ -143,8 +153,9 @@ impl Nibble {
             PutPolicy::Specific(id) => id,
             PutPolicy::Interleave =>
                 (rand::thread_rng()
-                    .next_u32() % NUM_LOG_HEADS) as usize,
+                    .next_u32() % self.nnodes) as usize,
         };
+        trace!("put socket {:?}", socket);
 
         // 1. add object to log
         match self.nodes[socket].log.append(obj) {
