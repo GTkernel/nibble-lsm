@@ -251,7 +251,7 @@ pub fn __dump() {
             format!("[{:<4}] {:<16x}",
                     slot.slot, slot.epoch).as_str()
             );
-        if (c % 9) == 0 {
+        if (c % 5) == 0 {
             out.push_str("\n");
         }
         c += 1;
