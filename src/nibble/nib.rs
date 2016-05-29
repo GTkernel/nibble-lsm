@@ -10,6 +10,7 @@ use epoch;
 use std::ptr;
 use std::sync::{Arc,Mutex};
 use std::thread::{self,JoinHandle};
+use rand::{self,Rng};
 
 //==----------------------------------------------------==//
 //      Constants
@@ -41,6 +42,13 @@ pub struct Nibble {
     /// Indexed per socket
     nodes: Vec<NibblePerNode>,
     index: IndexRef,
+    capacity: usize,
+}
+
+#[derive(Copy,Clone,Debug)]
+pub enum PutPolicy {
+    Specific(usize),
+    Interleave,
 }
 
 impl Nibble {
@@ -102,7 +110,7 @@ impl Nibble {
         nodes.sort_by( | a, b | {
             a.socket.cmp(&b.socket)
         });
-        Nibble { nodes: nodes, index: index }
+        Nibble { nodes: nodes, index: index, capacity: capacity }
     }
 
     /// Allocate Nibble with a default (small) amount of memory.
@@ -110,6 +118,10 @@ impl Nibble {
         let nnodes = numa::NODE_MAP.sockets();
         let cap: usize = min_log_size!(nnodes);
         Nibble::new(cap)
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     pub fn enable_compaction(&mut self, node: NodeId) {
@@ -123,13 +135,19 @@ impl Nibble {
         unimplemented!();
     }
 
-    // TODO add some locking
-    pub fn put_object(&mut self, obj: &ObjDesc) -> Status {
+    fn __put(&mut self, obj: &ObjDesc, hint: PutPolicy) -> Status {
         epoch::pin();
         let va: usize;
-        // XXX pick the node to append to
+
+        let socket: usize = match hint {
+            PutPolicy::Specific(id) => id,
+            PutPolicy::Interleave =>
+                (rand::thread_rng()
+                    .next_u32() % NUM_LOG_HEADS) as usize,
+        };
+
         // 1. add object to log
-        match self.nodes[0].log.append(obj) {
+        match self.nodes[socket].log.append(obj) {
             Err(code) => {
                 warn!("log full: {} bytes",
                       self.nodes[0].seginfo.live_bytes());
@@ -142,7 +160,7 @@ impl Nibble {
         // 3. decrement live size of segment if we overwrite object
         if let Some(old) = opt {
             // FIXME this shouldn't need a lock..
-            let idx: usize = match self.nodes[0].manager.lock() {
+            let idx: usize = match self.nodes[socket].manager.lock() {
                 Err(_) => panic!("lock poison"),
                 Ok(manager) =>  {
                     // should not fail
@@ -151,10 +169,20 @@ impl Nibble {
                     opt.unwrap()
                 },
             };
-            self.nodes[0].seginfo.decr_live(idx, obj.len_with_header());
+            self.nodes[socket].seginfo
+                .decr_live(idx, obj.len_with_header());
         }
         epoch::quiesce();
         Ok(1)
+    }
+
+    pub fn put_where(&mut self, obj: &ObjDesc,
+                     hint: PutPolicy) -> Status {
+        self.__put(obj, hint)
+    }
+
+    pub fn put_object(&mut self, obj: &ObjDesc) -> Status {
+        self.__put(obj, PutPolicy::Specific(0))
     }
 
     pub fn get_object(&self, key: &String) -> (Status,Option<Buffer>) {
