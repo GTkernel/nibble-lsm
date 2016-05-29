@@ -855,6 +855,10 @@ impl SegmentManager {
         self.socket
     }
 
+    pub fn len(&self) -> usize {
+        self.size
+    }
+
     //
     // --- Internal methods used for testing only ---
     //

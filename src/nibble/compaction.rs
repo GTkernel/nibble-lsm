@@ -204,17 +204,16 @@ fn __compact(state: &Arc<RwLock<Worker>>) {
     let mut s = state.write().unwrap();
     let new = s.check_new();
     debug!("{} new candidates", new);
-    s.do_compact();
-    let ncand = {
-        match s.candidates.lock() {
-            Err(_) => panic!("lock poison"),
-            Ok(guard) => guard.len(),
-        }
+    let run: bool = {
+        let live: f64 = s.seginfo.live_bytes() as f64;
+        let total: f64 = s.mgrsize as f64;
+        (live/total) > 0.8
     };
-    drop(s); // unlock WorkerState
-    // TODO know better when to park
-    if ncand == 0 {
-        // FIXME crashes if we comment this out
+    if run {
+        debug!("compaction initiated");
+        s.do_compact();
+    } else {
+        trace!("sleeping");
         thread::sleep(dur);
     }
 }
@@ -247,6 +246,8 @@ struct Worker {
     // popping first element is slow; shifts N-1 left
     candidates: Arc<Mutex<Vec<SegmentRef>>>,
     manager: SegmentManagerRef,
+    /// cache of SegmentManager.size
+    mgrsize: usize,
     index: IndexRef,
     seginfo: epoch::SegmentInfoTableRef,
     park: AtomicBool,
@@ -268,10 +269,15 @@ impl Worker {
             WorkerRole::Reclaim => Some(Vec::new()),
             _ => None,
         };
+        let size: usize = {
+            let g = compactor.manager.lock().unwrap();
+            g.len()
+        };
         Worker {
             role: *role,
             candidates: compactor.candidates.clone(),
             manager: compactor.manager.clone(),
+            mgrsize: size,
             index: compactor.index.clone(),
             seginfo: compactor.seginfo.clone(),
             park: AtomicBool::new(false),

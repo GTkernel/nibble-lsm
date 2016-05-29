@@ -1,3 +1,6 @@
+// XXX this test doesn't do what it originally intended.
+// it should test the compaction by sustaining a level of capacity
+// and measuring the performance
 #![feature(test)]
 #![allow(unused_imports)]
 #![allow(unused_variables)]
@@ -50,7 +53,7 @@ fn alloc_free(pct_to_free: f32) {
     let mut rng = rand::thread_rng();
     let value = rng.gen_ascii_chars().take(1000).collect();
     info!("inserting objects to fill two segments");
-    while size < (1*SEGMENT_SIZE) {
+    while size < (2*SEGMENT_SIZE) {
         let key = counter.to_string();
         {
             let obj = ObjDesc::new2(&key, &value);
