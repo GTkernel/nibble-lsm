@@ -14,6 +14,7 @@ itertools = "0.4.13"
 lazy_static = "0.2.1"
 quicksort = "1.0.0"
 #lazysort = "0.1.1"
+clap = "2.5.1"
 
 [features]
 default = ["epoch-tsc"]
