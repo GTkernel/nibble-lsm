@@ -165,7 +165,7 @@ impl LogHead {
         let segref = self.segment.clone().unwrap();
         let mut seg = segref.write().unwrap();
         match seg.append(buf) {
-            Err(_) => panic!("has space but append failed"),
+            Err(s) => panic!("has space but append failed: {:?}",s),
             va @ Ok(_) => va,
         }
     }
