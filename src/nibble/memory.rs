@@ -9,6 +9,17 @@ use sched;
 use common::errno;
 
 //==----------------------------------------------------==//
+//      Alignment
+//==----------------------------------------------------==//
+
+/// 64-byte type used for aligning data structures.
+/// Put a zero-sized array into your structure to align it and have
+/// auto-padding.
+#[repr(simd)]
+#[derive(Debug,Copy,Clone)]
+pub struct align64(u64, u64, u64, u64, u64, u64, u64, u64);
+
+//==----------------------------------------------------==//
 //      Heap allocation
 //==----------------------------------------------------==//
 

@@ -4,6 +4,7 @@
 
 use segment::*;
 use common::*;
+use memory::*;
 
 use std::cell::UnsafeCell;
 use std::sync::atomic;
@@ -16,6 +17,12 @@ use std::u64;
 use crossbeam::sync::SegQueue;
 
 //==----------------------------------------------------==//
+//      Constants
+//==----------------------------------------------------==//
+
+const EPOCHTBL_MAX_THREADS: u16 = 768;
+
+//==----------------------------------------------------==//
 //      Segment usage table
 //==----------------------------------------------------==//
 
@@ -23,6 +30,7 @@ use crossbeam::sync::SegQueue;
 /// Compactor uses 'live' to allocate new segments. Manager uses the
 /// epoch to release cleaned segments.
 struct SegmentInfo {
+    _align: [align64;0],
     /// segment timestamp
     epoch: AtomicUsize,
     /// live bytes in segment
@@ -33,6 +41,7 @@ impl SegmentInfo {
 
     pub fn new() -> Self {
         SegmentInfo {
+            _align: unsafe { mem::zeroed() },
             epoch: AtomicUsize::new(0),
             live: AtomicUsize::new(0),
         }
@@ -167,8 +176,6 @@ static EPOCH: AtomicUsize = AtomicUsize::new(0);
 //      Per-thread epoch tracker
 //==----------------------------------------------------==//
 
-const EPOCHTBL_MAX_THREADS: u16 = 128;
-
 /// Global epoch tracker for each thread.
 lazy_static! {
     static ref EPOCH_TABLE: EpochTable = { EpochTable::new() };
@@ -270,11 +277,12 @@ pub fn __dump() {
 /// A slot in the global table a unique thread is assigned.  Holds an
 /// epoch, used to coordinate memory reclamation with Segment
 /// compaction.
-#[repr(packed)]
+/// TODO remove the SIMD type once #[repr(align = "N")] works:
+/// https://github.com/rust-lang/rfcs/pull/1358
 pub struct EpochSlot {
+    _align: [align64;0],
     epoch: EpochRaw,
     slot: u16,
-    _padding: [u8; (CACHE_LINE-10)]
 }
 
 /// Statically ensure EpochSlot is exactly one cache line.
@@ -290,9 +298,9 @@ impl EpochSlot {
 
     pub fn new(slot: u16) -> Self {
         let t = EpochSlot {
+            _align: unsafe { mem::zeroed() },
             epoch: EPOCH_QUIESCE,
             slot: slot,
-            _padding: [0xdB; (CACHE_LINE-10)],
         };
         t
     }

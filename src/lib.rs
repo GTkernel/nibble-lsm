@@ -1,6 +1,7 @@
 #![feature(test)]
 #![feature(const_fn)]
 #![feature(asm)]
+#![feature(repr_simd)]
 
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
