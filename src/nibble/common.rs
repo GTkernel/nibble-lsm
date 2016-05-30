@@ -12,6 +12,19 @@ pub type Pointer = Option<*const u8>;
 pub type PointerMut = Option<*mut u8>;
 
 //==----------------------------------------------------==//
+//      Random stuff
+//==----------------------------------------------------==//
+
+#[inline(always)]
+#[allow(unused_mut)]
+pub unsafe fn rdrand() -> u32 {
+    let mut r: u32;
+    asm!("rdrand $0" : "=r" (r));
+    r
+}
+
+
+//==----------------------------------------------------==//
 //      Error handling
 //==----------------------------------------------------==//
 
