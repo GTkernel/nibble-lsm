@@ -74,6 +74,13 @@ impl NodeMap {
         self.sockets[sock.0].cpus
     }
 
+    pub fn sock_of(&self, cpu: usize) -> NodeId {
+        match self.cpu2sock.get(&cpu) {
+            None => panic!("bad key"),
+            Some(id) => NodeId(*id),
+        }
+    }
+
     pub fn sockets(&self) -> usize {
         self.sockets.len()
     }

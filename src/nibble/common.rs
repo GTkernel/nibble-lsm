@@ -49,6 +49,7 @@ pub enum ErrorCode {
     OutOfMemory,
 
     KeyNotExist,
+    InvalidSocket,
 
     EmptyObject,
 
@@ -61,6 +62,7 @@ pub fn err2str(code: ErrorCode) -> &'static str {
         ErrorCode::SegmentClosed => { "Segment is closed" },
         ErrorCode::OutOfMemory   => { "Out of memory" },
         ErrorCode::KeyNotExist   => { "Key does not exist" },
+        ErrorCode::InvalidSocket => { "Invalid socket ID" },
         ErrorCode::EmptyObject   => { "Object is empty" },
         ErrorCode::ObjectTooBig  => { "Object too big" },
     }

@@ -157,6 +157,10 @@ impl Nibble {
         };
         trace!("put socket {:?}", socket);
 
+        if socket >= self.nodes.len() {
+            return Err(ErrorCode::InvalidSocket);
+        }
+
         // 1. add object to log
         match self.nodes[socket].log.append(obj) {
             Err(code) => {
