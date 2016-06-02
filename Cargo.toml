@@ -23,3 +23,9 @@ default = ["epoch-tsc"]
 epoch-tsc = []
 epoch-atomic = []   # not implemented
 epoch-combiner = [] # not implemented
+
+# http://doc.crates.io/manifest.html#the-%5Bprofile.*%5D-sections
+[profile.release]
+opt-level = 3
+debug = true
+debug-assertions = false
