@@ -248,7 +248,7 @@ impl Log {
     /// FIXME check key is valid UTF-8
     pub fn append(&self, buf: &ObjDesc) -> Status {
         // 1. pick a log head
-        let x = rand::thread_rng().next_u32() % NUM_LOG_HEADS;
+        let x = unsafe { rdrand() } % NUM_LOG_HEADS;
         let head = &self.heads[x as usize];
         // 2. call append on the log head
         let va: usize = {

@@ -152,8 +152,7 @@ impl Nibble {
         let socket: usize = match hint {
             PutPolicy::Specific(id) => id,
             PutPolicy::Interleave =>
-                (rand::thread_rng()
-                    .next_u32() % self.nnodes) as usize,
+                (unsafe { rdrand() } % self.nnodes) as usize,
         };
         trace!("put socket {:?}", socket);
 
