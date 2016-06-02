@@ -74,6 +74,11 @@ impl NodeMap {
         self.sockets[sock.0].cpus
     }
 
+    pub fn cpus_in(&self, sock: NodeId) -> usize {
+        assert!(sock.0<self.sockets.len(),"sock is too big: {}",sock);
+        self.sockets[sock.0].ncpus
+    }
+
     pub fn sock_of(&self, cpu: usize) -> NodeId {
         match self.cpu2sock.get(&cpu) {
             None => panic!("bad key"),
