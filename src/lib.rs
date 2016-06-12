@@ -20,5 +20,6 @@ extern crate crossbeam;
 extern crate itertools;
 extern crate quicksort;
 
+mod cuckoo;
 pub mod nibble;
 pub use nibble::*;

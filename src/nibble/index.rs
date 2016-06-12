@@ -20,6 +20,7 @@ pub struct Index {
 impl Index {
 
     pub fn new() -> Self {
+        super::super::cuckoo::init();
         Index {
             table: RwLock::new(HashMap::new()), // also ::with_capacity(N)
         }
