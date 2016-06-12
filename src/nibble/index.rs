@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc,RwLock,RwLockWriteGuard};
+use std::sync::{Arc,RwLock,RwLockWriteGuard,RwLockReadGuard};
 
 //==----------------------------------------------------==//
 //      Index
@@ -31,6 +31,11 @@ impl Index {
         table.get(key).map(|r| *r) // &usize -> usize
     }
 
+    pub fn get_locked(guard: &RwLockReadGuard<IndexInner>,
+                      key: &String) -> Option<usize> {
+        guard.get(key).map(|r| *r) // &usize -> usize
+    }
+
     /// Update location of object in the index. Returns None if object
     /// was newly inserted, or the virtual address of the prior
     /// object.
@@ -55,6 +60,10 @@ impl Index {
     pub fn len(&self) -> usize {
         let table = self.table.read().unwrap();
         table.len()
+    }
+
+    pub fn rlock(&self) -> RwLockReadGuard<IndexInner> {
+        self.table.read().unwrap()
     }
 
     pub fn wlock(&self) -> RwLockWriteGuard<IndexInner> {
