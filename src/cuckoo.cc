@@ -3,7 +3,7 @@
 // Desc:    Make one instance of the cuckoo hash table and provide
 //          pass-through functions to each of the instance members.
 // Use of this interface should only be done via the provided Rust
-// wrapper for safety.  This file compiles to a static archive that
+// wrapper for safety.  This file compiles to a library that
 // includes libcityhash.a The safe Rust interface will link against
 // this derivative library which exports the below C interface, hiding
 // the libcuckoo C++ interface. The file build.rs will handle
