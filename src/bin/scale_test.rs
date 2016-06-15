@@ -149,8 +149,9 @@ fn run(policy: PutPolicy, size: usize, capacity: usize,
                 info!("thread {} key range {}-{}",
                          t, sock.0*pernode, sock.0*pernode+pernode);
                 let now = Instant::now();
-                //while now.elapsed().as_secs() < 20 {
-                loop {
+                // XXX modify these loops to debug scalability XXX
+                while now.elapsed().as_secs() < 10 {
+                //loop {
                     //for _ in 0..100usize {
                     let r = unsafe { rdrand() } as usize;
                     let idx = (r % pernode) + (sock.0 * pernode);
