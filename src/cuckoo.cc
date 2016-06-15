@@ -9,30 +9,60 @@
 // the libcuckoo C++ interface. The file build.rs will handle
 // compiling us.
 //
-// Test this code compiles correctly with
-// g++ cuckoo.cc -c -o cuckoo.o \
-//          -std=c++11 -O3 -Ithirdparty/libcuckoo/src
-// If any changes need to be made, update this comment, then reflect
-// them back to build.rs
+// Test this code compiles correctly with 'make'
 
 #include <iostream>
 #include <cstdlib>
 #include <mutex>
 #include <cuckoohash_map.hh>
 
+// We have to use custom comparators and hashers because we are using
+// C strings (char*) for our keys, and the templated cuckoo table and
+// friends treat C strings and memory addresses (they don't look at
+// the char buffer)
+
+extern uint64_t CityHash64(const char *buf, size_t len);
+
+// Use cityhasher from google to calculate hashes of C strings.
+// Reference: thirdparty/libcukcoo/src/default_hasher.hh
+// Hard-coded for char* types
+class CStringHasher {
+    public:
+        // we assume NUL-termination
+        size_t operator()(const char *k) const {
+            return (size_t)CityHash64(k, strlen(k));
+        }
+};
+
+// Comparator for C strings that examines the entire buffer.
+// Reference: cppreference.com/w/cpp/utility/functional/equal_to
+// Hard-coded for char* types
+class CStringEqual : public std::equal_to<char*> {
+    public:
+        // we assume NUL-termination
+        bool operator() (const char *lhs, const char *rhs) const {
+            return (0 == strcmp(lhs, rhs));
+        }
+};
+
 extern "C" {
+    // Value type should be a primitive, as we've coded function
+    // parameters to copy-by-value (no references). If that changes,
+    // the interface should be made with references (l- or r-value).
     typedef char* KType;
     typedef uint64_t VType;
 
     // Singleton instance of the hash table.
-    static cuckoohash_map<KType, VType> *cuckoomap = nullptr;
+    static cuckoohash_map<KType, VType,
+        CStringHasher, CStringEqual> *cuckoomap = nullptr;
 
     // Lock used only for initialization.
     static std::mutex singleton_lock;
 
     void libcuckoo_init(void) {
         if (!cuckoomap && singleton_lock.try_lock()) {
-            cuckoomap = new cuckoohash_map<KType,VType>();
+            cuckoomap = new cuckoohash_map<KType,VType,
+                      CStringHasher, CStringEqual>();
             if (!cuckoomap) {
                 std::cerr << "Error: OOM allocating cuckoo table"
                     << std::endl;
@@ -63,18 +93,19 @@ extern "C" {
         return cuckoomap->empty();
     }
 
-    bool libcuckoo_find(const KType &key, VType &value) {
+    bool libcuckoo_find(const KType key, VType &value) {
         assert(cuckoomap);
         return cuckoomap->find(key, value);
     }
 
-    bool libcuckoo_contains(const KType &key) {
+    bool libcuckoo_contains(const KType key) {
         assert(cuckoomap);
-        return cuckoomap->contains(key);
+        bool ret = cuckoomap->contains(key);
+        return ret;
     }
 
 
-    bool libcuckoo_insert(const KType &key, VType &value) {
+    bool libcuckoo_insert(const KType key, VType value) {
         assert(cuckoomap);
         try {
             return cuckoomap->insert(key, value);
@@ -95,14 +126,17 @@ extern "C" {
         return false; // currently not reached
     }
 
-    bool libcuckoo_erase(const KType &key) {
+    bool libcuckoo_erase(const KType key, VType &value) {
         assert(cuckoomap);
-        return cuckoomap->erase(key);
+        return cuckoomap->erase2(key, &value);
     }
 
-    bool libcuckoo_update(const KType &key, VType &value) {
+    // return true if value was replaced (old item made
+    // available), or false if item was inserted (nothing replaced)
+    bool libcuckoo_update(const KType key,
+            VType value, VType &old) {
         assert(cuckoomap);
-        return cuckoomap->update(key, value);
+        return cuckoomap->update_insert(key, value, old);
     }
 
     bool libcuckoo_reserve(size_t n) {

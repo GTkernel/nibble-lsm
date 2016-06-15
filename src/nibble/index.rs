@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::sync::{Arc,RwLock,RwLockWriteGuard,RwLockReadGuard};
 
+use super::super::cuckoo;
+
 //==----------------------------------------------------==//
 //      Index
 //==----------------------------------------------------==//
 
 pub type IndexRef = Arc<Index>;
-pub type IndexInner = HashMap<String, usize>;
 
 /// Index structure that allows us to retreive objects from the log.
 /// It is just a simple wrapper over whatever data structure we wish
@@ -14,61 +15,40 @@ pub type IndexInner = HashMap<String, usize>;
 /// TODO what if i store the hash of a key instead of the key itself?
 /// save space? all the keys are kept in the log anyway
 pub struct Index {
-    table: RwLock<IndexInner>,
+    // cuckoo interface has no Rust state (behind FFI)
 }
 
 impl Index {
 
     pub fn new() -> Self {
-        super::super::cuckoo::init();
-        Index {
-            table: RwLock::new(HashMap::new()), // also ::with_capacity(N)
-        }
+        cuckoo::init(); // FIXME should only be called once
+        Index { }
     }
 
     /// Return value of object if it exists, else None.
     pub fn get(&self, key: &str) -> Option<usize> {
-        let table = self.table.read().unwrap();
-        table.get(key).map(|r| *r) // &usize -> usize
-    }
-
-    pub fn get_locked(guard: &RwLockReadGuard<IndexInner>,
-                      key: &String) -> Option<usize> {
-        guard.get(key).map(|r| *r) // &usize -> usize
+        cuckoo::find(key)
     }
 
     /// Update location of object in the index. Returns None if object
     /// was newly inserted, or the virtual address of the prior
     /// object.
     pub fn update(&self, key: &String, value: usize) -> Option<usize> {
-        let mut guard = self.table.write().unwrap();
-        Index::update_locked(&mut guard, key, value)
-    }
-
-    /// Same as update but you pass in the held lock
-    pub fn update_locked(guard: &mut RwLockWriteGuard<IndexInner>,
-                         key: &String, value: usize) -> Option<usize> {
-        guard.insert(key.clone(), value)
+        cuckoo::update(key.as_str(), value)
     }
 
     /// Remove an entry. If it existed, return value, else return
     /// None.
     pub fn remove(&self, key: &String) -> Option<usize> {
-        let mut table = self.table.write().unwrap();
-        table.remove(key)
+        let mut val: usize = 0;
+        match cuckoo::erase(key, &mut val) {
+            true => Some(val),
+            false => None,
+        }
     }
 
     pub fn len(&self) -> usize {
-        let table = self.table.read().unwrap();
-        table.len()
-    }
-
-    pub fn rlock(&self) -> RwLockReadGuard<IndexInner> {
-        self.table.read().unwrap()
-    }
-
-    pub fn wlock(&self) -> RwLockWriteGuard<IndexInner> {
-        self.table.write().unwrap()
+        cuckoo::size()
     }
 }
 

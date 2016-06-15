@@ -525,6 +525,15 @@ public:
         return (st == ok);
     }
 
+    //! same as erase but returns value removed, if found
+    bool erase2(const key_type& key, mapped_type* val) {
+        size_t hv = hashed_key(key);
+        auto b = snapshot_and_lock_two(hv);
+        const cuckoo_status st = cuckoo_delete2(key, hv,
+                b.i[0], b.i[1], val);
+        return (st == ok);
+    }
+
     //! update changes the value associated with \p key to \p val. If \p key is
     //! not there, it returns false, otherwise it returns true.
     template <typename V>
@@ -532,8 +541,33 @@ public:
         size_t hv = hashed_key(key);
         auto b = snapshot_and_lock_two(hv);
         const cuckoo_status st = cuckoo_update(hv, b.i[0], b.i[1],
-                                               key, std::forward<V>(val));
+                key, std::forward<V>(val));
         return (st == ok);
+    }
+
+    //! same as update but returns old value
+    bool update2(const key_type& key, T&& val, T* old) {
+        size_t hv = hashed_key(key);
+        auto b = snapshot_and_lock_two(hv);
+        const cuckoo_status st = cuckoo_update2(hv, b.i[0], b.i[1],
+                key, std::forward<T>(val), old);
+        return (st == ok);
+    }
+
+    //! same but with no rvalue reference
+    bool update2(const key_type& key, T& val, T& old) {
+        size_t hv = hashed_key(key);
+        auto b = snapshot_and_lock_two(hv);
+        const cuckoo_status st = cuckoo_update2(hv, b.i[0], b.i[1],
+                key, val, old);
+        return (st == ok);
+    }
+
+    // calls upsert. return true if value was replaced (old item made
+    // available), or false if item was inserted (nothing replaced)
+    bool update_insert(const key_type& key, T& val, T& old) {
+        return upsert2(key, old,
+                [&val](mapped_type& v) { v = val; }, val);
     }
 
     //! update_fn changes the value associated with \p key with the function \p
@@ -546,7 +580,8 @@ public:
         bool>::type update_fn(const key_type& key, Updater fn) {
         size_t hv = hashed_key(key);
         auto b = snapshot_and_lock_two(hv);
-        const cuckoo_status st = cuckoo_update_fn(key, fn, hv, b.i[0], b.i[1]);
+        const cuckoo_status st = cuckoo_update_fn(key, fn, hv,
+                b.i[0], b.i[1]);
         return (st == ok);
     }
 
@@ -586,6 +621,45 @@ public:
                 // case, we retry the entire upsert operation.
             }
         } while (st != ok);
+    }
+
+    // same as upsert, but returns old value if item was replaced
+    // return true means item was updated, and old is valid
+    template <typename Updater, typename K, typename... Args>
+    typename std::enable_if<
+        std::is_convertible<Updater, updater_type>::value,
+        bool>::type upsert2(K&& key, mapped_type& old,
+                Updater fn, Args&&... val) {
+        size_t hv = hashed_key(key);
+        cuckoo_status st;
+        bool ret = false;
+        do {
+            auto b = snapshot_and_lock_two(hv);
+            size_t hp = get_hashpower();
+            st = cuckoo_update_fn2(key, fn, hv, b.i[0], b.i[1], old);
+            if (st == ok) {
+                ret = true;
+                break;
+            }
+
+            // We run an insert, since the update failed. Since we already have
+            // the locks, we don't run cuckoo_insert_loop immediately, to avoid
+            // releasing and re-grabbing the locks. Recall, that the locks will
+            // be released at the end of this call to cuckoo_insert.
+            st = cuckoo_insert(hv, std::move(b), std::forward<K>(key),
+                               std::forward<Args>(val)...);
+            if (st == failure_table_full) {
+                cuckoo_fast_double(hp);
+                // Retry until the insert doesn't fail due to expansion.
+                if (cuckoo_insert_loop(hv, std::forward<K>(key),
+                                       std::forward<Args>(val)...)) {
+                    break;
+                }
+                // The only valid reason for failure is a duplicate key. In this
+                // case, we retry the entire upsert operation.
+            }
+        } while (st != ok);
+        return ret;
     }
 
     /**
@@ -1355,6 +1429,28 @@ private:
         return false;
     }
 
+    // same as the other function but returns the value it removed
+    bool try_del_from_bucket2(const partial_t partial,
+                             const key_type &key, Bucket& b,
+                             mapped_type* val) {
+        for (size_t i = 0; i < slot_per_bucket; ++i) {
+            if (!b.occupied(i)) {
+                continue;
+            }
+            if (!is_simple && b.partial(i) != partial) {
+                continue;
+            }
+            if (eqfn()(b.key(i), key)) {
+                *val = b.val(i);
+                b.eraseKV(i);
+                num_deletes_[get_counterid()].num.fetch_add(
+                    1, std::memory_order_relaxed);
+                return true;
+            }
+        }
+        return false;
+    }
+
     // try_update_bucket will search the bucket for the given key and change its
     // associated value if it finds it.
     template <typename V>
@@ -1375,6 +1471,47 @@ private:
         return false;
     }
 
+    // same as try_update_bucket but returns old value and inserts
+    // value if it does not exist
+    bool try_update_bucket2(const partial_t partial, Bucket& b,
+                           const key_type &key,
+                           T&& val, T& old) {
+        for (size_t i = 0; i < slot_per_bucket; ++i) {
+            if (!b.occupied(i)) {
+                continue;
+            }
+            if (!is_simple && b.partial(i) != partial) {
+                continue;
+            }
+            if (eqfn()(b.key(i), key)) {
+                old = b.val(i);
+                b.val(i) = std::forward<T>(val);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // same but no rvalue reference
+    bool try_update_bucket2(const partial_t partial, Bucket& b,
+                           const key_type &key,
+                           T& val, T& old) {
+        for (size_t i = 0; i < slot_per_bucket; ++i) {
+            if (!b.occupied(i)) {
+                continue;
+            }
+            if (!is_simple && b.partial(i) != partial) {
+                continue;
+            }
+            if (eqfn()(b.key(i), key)) {
+                old = b.val(i);
+                b.val(i) = val;
+                return true;
+            }
+        }
+        return false;
+    }
+
     // try_update_bucket_fn will search the bucket for the given key and change
     // its associated value with the given function if it finds it.
     template <typename Updater>
@@ -1388,6 +1525,26 @@ private:
                 continue;
             }
             if (eqfn()(b.key(i), key)) {
+                fn(b.val(i));
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // same but returns old value if replaced
+    template <typename Updater>
+    bool try_update_bucket_fn2(const partial_t partial, const key_type &key,
+                              Updater fn, Bucket& b, mapped_type& old) {
+        for (size_t i = 0; i < slot_per_bucket; ++i) {
+            if (!b.occupied(i)) {
+                continue;
+            }
+            if (!is_simple && b.partial(i) != partial) {
+                continue;
+            }
+            if (eqfn()(b.key(i), key)) {
+                old = b.val(i);
                 fn(b.val(i));
                 return true;
             }
@@ -1539,6 +1696,20 @@ private:
         return failure_key_not_found;
     }
 
+    // same as cuckoo_delete but returns value
+    cuckoo_status cuckoo_delete2(const key_type &key, const size_t hv,
+                                const size_t i1, const size_t i2,
+                                mapped_type* val) {
+        const partial_t partial = partial_key(hv);
+        if (try_del_from_bucket2(partial, key, buckets_[i1], val)) {
+            return ok;
+        }
+        if (try_del_from_bucket2(partial, key, buckets_[i2], val)) {
+            return ok;
+        }
+        return failure_key_not_found;
+    }
+
     // cuckoo_update searches the table for the given key and updates its value
     // if it finds it. It expects the locks to be taken and released outside the
     // function.
@@ -1557,6 +1728,39 @@ private:
         return failure_key_not_found;
     }
 
+    // same as cuckoo_update but returns old value and inserts value
+    // if it does not exist
+    cuckoo_status cuckoo_update2(const size_t hv, const size_t i1,
+                                const size_t i2, const key_type &key,
+                                T&& val, T& old) {
+        const partial_t partial = partial_key(hv);
+        if (try_update_bucket2(partial, buckets_[i1], key,
+                              std::forward<T>(val), old)) {
+            return ok;
+        }
+        if (try_update_bucket2(partial, buckets_[i2], key,
+                              std::forward<T>(val), old)) {
+            return ok;
+        }
+        return failure_key_not_found;
+    }
+
+    // same but no rvalue reference
+    cuckoo_status cuckoo_update2(const size_t hv, const size_t i1,
+                                const size_t i2, const key_type &key,
+                                T& val, T& old) {
+        const partial_t partial = partial_key(hv);
+        if (try_update_bucket2(partial, buckets_[i1], key,
+                              val, old)) {
+            return ok;
+        }
+        if (try_update_bucket2(partial, buckets_[i2], key,
+                              val, old)) {
+            return ok;
+        }
+        return failure_key_not_found;
+    }
+
     // cuckoo_update_fn searches the table for the given key and runs the given
     // function on its value if it finds it, assigning the result of the
     // function to the value. It expects the locks to be taken and released
@@ -1570,6 +1774,21 @@ private:
             return ok;
         }
         if (try_update_bucket_fn(partial, key, fn, buckets_[i2])) {
+            return ok;
+        }
+        return failure_key_not_found;
+    }
+
+    // same but returns old value if replaced
+    template <typename Updater>
+    cuckoo_status cuckoo_update_fn2(const key_type &key, Updater fn,
+                                   const size_t hv, const size_t i1,
+                                   const size_t i2, mapped_type& old) {
+        const partial_t partial = partial_key(hv);
+        if (try_update_bucket_fn2(partial, key, fn, buckets_[i1], old)) {
+            return ok;
+        }
+        if (try_update_bucket_fn2(partial, key, fn, buckets_[i2], old)) {
             return ok;
         }
         return failure_key_not_found;
