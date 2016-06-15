@@ -169,6 +169,7 @@ impl Nibble {
             },
             Ok(v) => va = v,
         }
+        trace!("key {} va 0x{:x}", obj.getkey(), va);
         // 2. update reference to object
         let opt = self.index.update(&String::from(obj.getkey()), va);
         // 3. decrement live size of segment if we overwrite object
@@ -213,6 +214,8 @@ impl Nibble {
         unsafe {
             header = ptr::read(va as *const EntryHeader);
         }
+        trace!("key {} va 0x{:x} datalen {}",
+               key, va, header.getdatalen());
         let buf = Buffer::new(header.getdatalen() as usize);
         unsafe {
             let src = header.data_address(va);
