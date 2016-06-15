@@ -1001,7 +1001,10 @@ mod tests {
         let log = Log::new(manager.clone());
 
         let key = String::from("onlyone");
-        let val = String::from("valuevaluevalue");
+        let mut val = String::from("valuevaluevalue");
+        for _ in 0..200 {
+            val.push_str("valuevaluevaluevaluevalue");
+        }
         let obj = ObjDesc::new(key.as_str(),
                         Some(val.as_ptr()), val.len() as u32);
         // fill up the log
@@ -1049,7 +1052,7 @@ mod tests {
         // TODO export rand str generation
 
         let key_sizes: Vec<u32> = vec!(30, 89, 372); // arbitrary
-        let value_sizes: Vec<u32> = vec!(433, 884, 511); // arbitrary
+        let value_sizes: Vec<u32> = vec!(4330, 8840, 5110);
         let total: u32 = key_sizes.iter().fold(0, ops::Add::add)
             + value_sizes.iter().fold(0, ops::Add::add);
         let nbatches = (SEGMENT_SIZE/2) / (total as usize);
