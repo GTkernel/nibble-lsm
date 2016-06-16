@@ -6,7 +6,8 @@
 # LD_LIBRARY_PATH to src/ before running with gdb
 CXX := g++
 CXXFLAGS := -std=c++11 -O3 -I./thirdparty/libcuckoo/src/ -fPIC -Wall -Wextra
-LDFLAGS := -shared -Wl,-soname,libcuckoo.so
+CXXFLAGS += -msse4.2 -mtune=native -march=native -malign-double
+LDFLAGS := -shared -Wl,-soname,libcuckoo.so -flto
 LIBS := -pthread -lcityhash
 
 all: src/libcuckoo.so

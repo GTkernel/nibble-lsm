@@ -31,24 +31,30 @@ use std::collections::VecDeque;
 use std::time::Duration;
 use std::time::Instant;
 
-fn run(policy: PutPolicy, size: usize, capacity: usize,
-       cpuinterleave: bool) {
+struct Config {
+    size: usize,
+    capacity: usize,
+    cpu_interleave: bool,
+    mem_interleave: PutPolicy,
+}
+
+fn run(config: &Config) {
     logger::enable();
 
     info!("creating Nibble...");
-    let mut nib = match capacity {
+    let mut nib = match config.capacity {
         0 => Nibble::default(),
-        _ => Nibble::new(capacity),
+        _ => Nibble::new(config.capacity),
     };
 
     info!("inserting objects...");
     let mut keycount: usize = 0;
 
-    let value = memory::allocate::<u8>(size);
+    let value = memory::allocate::<u8>(config.size);
     let v = Some(value as *const u8);
 
     let fill: usize = 
-            ((nib.capacity() as f64) * 0.9) as usize;
+            ((nib.capacity() as f64) * 0.8) as usize;
 //    let fill: usize = match policy {
 //        PutPolicy::Interleave =>
 //            ((nib.capacity() as f64) * 0.9) as usize,
@@ -58,7 +64,7 @@ fn run(policy: PutPolicy, size: usize, capacity: usize,
              (nib.capacity() as f64) / ((1usize<<30)as f64),
              (fill as f64) / ((1usize<<30)as f64));
 
-    let nobj: usize = fill/size;
+    let nobj: usize = fill/config.size;
     let pernode: usize = nobj/nib.nnodes();
     info!("nobj {} pernode {}", nobj, pernode);
     let mut node = 0;
@@ -70,7 +76,7 @@ fn run(policy: PutPolicy, size: usize, capacity: usize,
             break;
         }
         let key = keycount.to_string();
-        let obj = ObjDesc::new(key.as_str(), v, size as u32);
+        let obj = ObjDesc::new(key.as_str(), v, config.size as u32);
         if let Err(code) = nib.put_where(&obj, PutPolicy::Specific(node)) {
             panic!("{:?}", code)
         }
@@ -178,10 +184,10 @@ fn run(policy: PutPolicy, size: usize, capacity: usize,
                  (keycount as f64) / 1e6,
                  (nib.capacity() as f64) / ((1usize<<30) as f64),
                  (fill as f64) / ((1usize<<30) as f64),
-                 size,
+                 config.size,
                  nthreads, (ops/1e3)/((nsec as f64)/1e9));
     }
-    unsafe { memory::deallocate(value, size); }
+    unsafe { memory::deallocate(value, config.size); }
 }
 
 fn main() {
@@ -222,5 +228,12 @@ fn main() {
         },
     };
 
-    run(policy,size,capacity,cpuinterleave);
+    let mut config = Config {
+        size: size,
+        capacity: capacity,
+        cpu_interleave: cpuinterleave,
+        mem_interleave: policy
+    };
+
+    run(&config);
 }
