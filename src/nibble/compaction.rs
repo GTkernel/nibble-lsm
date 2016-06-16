@@ -77,7 +77,7 @@ pub const COMPACTION_RESERVE_SEGMENTS: usize = 0;
 //==----------------------------------------------------==//
 
 pub type CompactorRef = Arc<Mutex< Compactor >>;
-pub type LiveFn = Box<Fn(&EntryReference, &RwLockWriteGuard<IndexInner>) -> bool>;
+pub type LiveFn = Box<Fn(&EntryReference, Arc<Index>) -> bool>;
 type EpochSegment = (epoch::EpochRaw, SegmentRef);
 type ReclaimQueue = SegQueue<EpochSegment>;
 type ReclaimQueueRef = Arc<ReclaimQueue>;
@@ -381,13 +381,12 @@ impl Worker {
             // get_object doesn't lock a Segment to retrieve the value
             // since the virtual address is directly used
 
-            let mut guard = self.index.wlock();
             for entry in dirt.into_iter() {
-                if isLive(&entry, &guard) {
+                if isLive(&entry, self.index.clone()) {
                     let key: String;
                     let va = new.append_entry(&entry);
                     unsafe { key = entry.get_key(); }
-                    Index::update_locked(&mut guard, &key, va);
+                    self.index.update(&key, va);
                 }
             }
             // carry over the epoch state
@@ -405,13 +404,12 @@ impl Worker {
     #[cfg(IGNORE)]
     fn verify(&mut self, segref: &SegmentRef,
               slot: usize, isLive: &LiveFn) {
-        let guard = self.index.lock().unwrap();
         let mut seg = segref.write().unwrap();
         let mut size: usize = 0;
         // read first then iterate and measure
         let live = self.seginfo.get_live(slot);
         for entry in &*seg {
-            if isLive(&entry, &guard) {
+            if isLive(&entry, self.index.clone()) {
                 size += entry.len;
             }
         }
@@ -438,11 +436,10 @@ impl Worker {
     pub fn do_compact(&mut self) {
         // liveness checking function
         // entry: EntryReference
-        // iguard: MutexGuard<Index>
-        let is_live: LiveFn = Box::new( move | entry, wguard | {
+        let is_live: LiveFn = Box::new( move | entry, idx | {
             let key = unsafe { entry.get_key() };
-            match wguard.get(key.as_str()) {
-                Some(loc) => (*loc == entry.get_loc()),
+            match idx.get(key.as_str()) {
+                Some(loc) => (loc == entry.get_loc()),
                 None => false,
             }
         });

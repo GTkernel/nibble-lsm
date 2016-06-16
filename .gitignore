@@ -1,3 +1,6 @@
 target/
 *.swp
 *.swo
+src/cuckoo.o
+src/libcuckoo.so
+core*

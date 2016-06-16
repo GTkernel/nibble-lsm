@@ -302,9 +302,12 @@ mod tests {
         let memlen = 1<<27;
         let manager = segmgr_ref!(SEGMENT_SIZE, memlen);
         let log = Log::new(manager);
-        let key: &'static str = "keykeykeykey";
-        let val: &'static str = "valuevaluevalue";
-        let obj = ObjDesc::new(key, Some(val.as_ptr()), val.len() as u32);
+        let key = String::from("keykeykeykey");
+        let mut val = String::from("valuevaluevalue");
+        for _ in 0..200 {
+            val.push_str("valuevaluevaluevaluevalue");
+        }
+        let obj = ObjDesc::new2(&key, &val);
         loop {
             if let Err(code) = log.append(&obj) {
                 match code {
