@@ -41,11 +41,12 @@ fn make_dynamic() {
         .args(&["./src/cuckoo.cc", "-c", "-fPIC", "-o"])
         .arg(&format!("{}/cuckoo.o", outdir))
         .args(&["-std=c++11", "-O3", "-Ithirdparty/libcuckoo/src"])
+        .args(&["-msse4.2", "-mtune=native", "-march=native", "-malign-double"])
         .status().unwrap();
 
     Command::new("g++")
         .arg(&format!("{}/cuckoo.o", outdir))
-        .args(&["-shared", "-Wl,-soname,libcuckoo.so", "-o"])
+        .args(&["-shared", "-Wl,-soname,libcuckoo.so", "-flto", "-o"])
         .arg(&format!("{}/libcuckoo.so", outdir))
         .status().unwrap();
 
