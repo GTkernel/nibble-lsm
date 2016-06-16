@@ -6,6 +6,13 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
+// Remove these XXX
+#![allow(unused_imports)]
+#![allow(unused_mut)]
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unreachable_code)]
+
 #[macro_use]
 extern crate log;
 
