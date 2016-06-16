@@ -20,7 +20,7 @@ use crossbeam::sync::SegQueue;
 //      Constants
 //==----------------------------------------------------==//
 
-const EPOCHTBL_MAX_THREADS: u16 = 768;
+const EPOCHTBL_MAX_THREADS: u16 = 16384;
 
 //==----------------------------------------------------==//
 //      Segment usage table
