@@ -219,7 +219,8 @@ impl Nibble {
         let buf = Buffer::new(header.getdatalen() as usize);
         unsafe {
             let src = header.data_address(va);
-            ptr::copy(src, buf.getaddr() as *mut u8, buf.getlen());
+            ptr::copy_nonoverlapping(src,
+                buf.getaddr() as *mut u8, buf.getlen());
         }
         epoch::quiesce();
         (Ok(1),Some(buf))
