@@ -82,8 +82,9 @@ fn run(config: &Config) {
         }
         keycount += 1;
         if keycount % pernode == 0 {
-            node += 1;
-            info!("switching to node {} key {}", node, keycount);
+            break; // force all to one node -- i get good throughput!
+//            node += 1;
+//            info!("switching to node {} key {}", node, keycount);
         }
     }
 
@@ -139,6 +140,8 @@ fn run(config: &Config) {
         for t in 0..nthreads {
             let accum = accum.clone();
             let nib = nib.clone();
+            let cap = nib.capacity();
+            let size = config.size;
             let cpu = cpus.pop_front().unwrap();
             handles.push( thread::spawn( move || {
                 accum.fetch_sub(1, Ordering::Relaxed);
@@ -153,19 +156,37 @@ fn run(config: &Config) {
                 let mut ops = 0usize;
                 while accum.load(Ordering::Relaxed) > 0 { ; }
                 info!("thread {} key range {}-{}",
-                         t, sock.0*pernode, sock.0*pernode+pernode);
-                let now = Instant::now();
+                        t, sock.0*pernode, sock.0*pernode+pernode);
                 // XXX modify these loops to debug scalability XXX
-                while now.elapsed().as_secs() < 10 {
-                //loop {
-                    //for _ in 0..100usize {
-                    let r = unsafe { rdrand() } as usize;
-                    let idx = (r % pernode) + (sock.0 * pernode);
-                    //let key = &keys[idx];
-                    let key = idx.to_string();
-                    let _ = nib.get_object(&key);
-                    ops += 1;
-                    //}
+                let mut c: usize = 0;
+                let mut v: Vec<String> = Vec::with_capacity(pernode);
+                for x in 0..pernode {
+                    let mut s = x.to_string();
+                    s.push('\0');
+                    v.push(s);
+                }
+                loop {
+                    let mut ops = 0usize;
+                    let now = Instant::now();
+                    while now.elapsed().as_secs() < 10 {
+                        //for _ in 0..100usize {
+                        //let r = unsafe { rdrand() } as usize; // FIXME slow...
+                        c += 1;
+                        //let idx = (r % pernode) + (sock.0 * pernode);
+                        //let key = &keys[idx];
+                        //let mut key = idx.to_string();
+                        let mut key = &mut v[c%pernode]; // don't generate string
+                        let _ = nib.get_object(key);
+                        ops += 1;
+                        //}
+                    }
+                    let dur = now.elapsed();
+                    let nsec = dur.as_secs() * 1000000000u64
+                        + dur.subsec_nanos() as u64;
+                    println!("cap size threads kops");
+                    println!("{:.3} {} {} {:.3}",
+                             cap, size, t,
+                             ((ops as f64)/1e3)/((nsec as f64)/1e9));
                 }
                 accum.fetch_add(ops, Ordering::Relaxed);
             }));
