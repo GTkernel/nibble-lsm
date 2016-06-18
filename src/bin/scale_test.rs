@@ -165,7 +165,7 @@ fn run(config: &Config) {
                     let mut ops = 0usize;
                     let now = Instant::now();
                     while now.elapsed().as_secs() < 10 {
-                        //for _ in 0..100usize {
+                        for _ in 0..1000usize { // reduce time calc overhead
                         //let r = unsafe { rdrand() } as usize; // FIXME slow...
                         //c += 1;
                         //let idx = (r % pernode) + (sock.0 * pernode);
@@ -175,7 +175,7 @@ fn run(config: &Config) {
                         let _ = nib.get_object(key % (pernode as u64));
                         key += 1;
                         ops += 1;
-                        //}
+                        }
                     }
                     let dur = now.elapsed();
                     let nsec = dur.as_secs() * 1000000000u64
