@@ -25,6 +25,12 @@
 #define __unused    __attribute__((unused))
 #endif
 
+#if defined(CUCKOO_INTERLEAVE)
+#elif defined(CUCKOO_BIND0)
+#else
+#error Define CUCKOO_INTERLEAVE or _BIND0
+#endif
+
 template <typename T>
 class NumaAllocator : public std::allocator<T> {
     public:
@@ -46,8 +52,13 @@ class NumaAllocator : public std::allocator<T> {
                             __FILE__, __func__);
             }
 
+#if defined(CUCKOO_INTERLEAVE)
         NumaAllocator(size_t mask_, size_t nnodes_)
             : mask(mask_), nnodes(nnodes_), lvl(0) {
+#elif defined(CUCKOO_BIND0)
+        NumaAllocator(__unused size_t mask_, size_t nnodes_)
+            : mask(1), nnodes(nnodes_), lvl(0) {
+#endif
                 char *env = getenv(__NIBBLE_DBG_ENV);
                 lvl = strtol(env, NULL, 10);
                 if (env && lvl >= __NIBBLE_DBG_LVL)
@@ -74,8 +85,14 @@ class NumaAllocator : public std::allocator<T> {
                 printf("%s::%s: %.2fmB at %p\n",
                         __FILE__, __func__,
                         (float)bytes/(1ul<<20), p);
+#if defined(CUCKOO_INTERLEAVE)
             if ( 0 != mbind(p, bytes, MPOL_INTERLEAVE,
                         &mask, nnodes+1, MPOL_MF_STRICT) ) abort();
+#elif defined(CUCKOO_BIND0)
+            assert( mask == 1 );
+            if ( 0 != mbind(p, bytes, MPOL_BIND,
+                        &mask, nnodes+1, MPOL_MF_STRICT) ) abort();
+#endif
             memset(p, 0, bytes);
             return static_cast<T*>(p);
         }

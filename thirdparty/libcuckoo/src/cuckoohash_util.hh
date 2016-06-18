@@ -105,9 +105,15 @@ T* create_array(const size_t size) {
             -1, 0);
     if ( arr == MAP_FAILED ) abort();
     // spread memory for hash table across nodes
-    const size_t nnodes = 16; // XXX hard-coded assumption
+    const size_t nnodes = 32; // XXX max nodes one may encounter
+#if defined(CUCKOO_INTERLEAVE)
+    // FIXME find a path to specify which sockets to interleave, like
+    // with cuckoohash_map
+#warning Spreading lock table among all sockets.
     size_t mask = (1ul<<nnodes)-1;
-    //size_t mask = 1ul;
+#elif defined(CUCKOO_BIND0)
+    size_t mask = 1ul;
+#endif
     printf("%s:%s: array %.2fmB allocated at %p numa mask 0x%lx\n",
             __FILE__, __func__, (float)bytes/(1ul<<20), arr, mask);
     if ( 0 != mbind(arr, bytes, MPOL_INTERLEAVE,

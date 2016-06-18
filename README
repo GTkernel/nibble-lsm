@@ -16,6 +16,9 @@ where N is 0-5.
 You must reserve sufficient amount of 2MB pages:
 echo N > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
 
+Configure how the cuckoohash_map memory is allocated in Makefile;
+either it interleaves itself on all nodes, or binds to socket 0.
+
 ----------------------------------------------------------------------
 --- Self notes below
 ----------------------------------------------------------------------
