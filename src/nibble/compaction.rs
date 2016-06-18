@@ -437,8 +437,9 @@ impl Worker {
         // liveness checking function
         // entry: EntryReference
         let is_live: LiveFn = Box::new( move | entry, idx | {
-            let key = unsafe { entry.get_key() };
-            match idx.get(key.as_str()) {
+            let mut key = unsafe { entry.get_key() };
+            //match idx.get(key.as_str()) {
+            match idx.get(&mut key) {
                 Some(loc) => (loc == entry.get_loc()),
                 None => false,
             }

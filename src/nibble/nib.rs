@@ -200,7 +200,7 @@ impl Nibble {
         self.__put(obj, PutPolicy::Specific(0))
     }
 
-    pub fn get_object(&self, key: &String) -> (Status,Option<Buffer>) {
+    pub fn get_object(&self, key: &mut String) -> (Status,Option<Buffer>) {
         epoch::pin();
         let va: usize;
         match self.index.get(key) {

@@ -56,12 +56,11 @@ pub fn erase(key: &str, value: &mut usize) -> bool {
     // FIXME we have to take the value removed as the key and free it
 }
 
-pub fn find(key: &str) -> Option<usize> {
-    let k = key.to_owned(); // TODO see above
+pub fn find(key: &mut String) -> Option<usize> {
     let mut value: usize = 0;
+    //key.push('\0');
     unsafe {
-        let cstr = ffi::CString::from_vec_unchecked(k.into_bytes());
-        match libcuckoo_find(cstr.as_ptr(), &mut value) {
+        match libcuckoo_find(key.as_ptr(), &mut value) {
             true => Some(value),
             false => None,
         }
@@ -96,7 +95,7 @@ extern {
     fn libcuckoo_empty() -> bool;
     fn libcuckoo_insert(key: *const c_char, value: usize) -> bool;
     fn libcuckoo_contains(key: *const c_char) -> bool;
-    fn libcuckoo_find(key: *const c_char, value: &mut usize) -> bool;
+    fn libcuckoo_find(key: *const u8, value: &mut usize) -> bool;
     fn libcuckoo_erase(key: *const c_char, value: &mut usize) -> bool;
     fn libcuckoo_update(key: *const c_char, value: usize,
                         old: &mut usize) -> bool;

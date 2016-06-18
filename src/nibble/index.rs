@@ -26,7 +26,7 @@ impl Index {
     }
 
     /// Return value of object if it exists, else None.
-    pub fn get(&self, key: &str) -> Option<usize> {
+    pub fn get(&self, key: &mut String) -> Option<usize> {
         cuckoo::find(key)
     }
 
