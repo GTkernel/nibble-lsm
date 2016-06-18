@@ -66,10 +66,10 @@ extern "C" {
     // Lock used only for initialization.
     static std::mutex singleton_lock;
 
-    void libcuckoo_init(void) {
+    void libcuckoo_init(size_t numa_mask, size_t nnodes) {
         if (!cuckoomap && singleton_lock.try_lock()) {
             cuckoomap = new cuckoohash_map<KType,VType,
-                      U64Hasher>();
+                      U64Hasher>(numa_mask, nnodes);
             if (!cuckoomap) {
                 std::cerr << "Error: OOM allocating cuckoo table"
                     << std::endl;

@@ -32,6 +32,8 @@
 #include "lazy_array.hh"
 #include "default_hasher.hh"
 
+#include "numa_allocator.hh"
+
 //! cuckoohash_map is the hash table class.
 template < class Key,
            class T,
@@ -277,9 +279,7 @@ private:
     };
 
     // The type of the buckets container
-    typedef std::vector<
-        Bucket, typename allocator_type::template rebind<Bucket>::other>
-    buckets_t;
+    typedef std::vector<Bucket, NumaAllocator<Bucket>> buckets_t;
 
     // The type of the locks container
     static_assert(LOCK_ARRAY_GRANULARITY >= 0 && LOCK_ARRAY_GRANULARITY <= 16,
@@ -365,9 +365,12 @@ public:
      * @throw std::invalid_argument if the given minimum load factor is invalid,
      * or if the initial space exceeds the maximum hashpower
      */
-    cuckoohash_map(size_t n = DEFAULT_SIZE,
+    cuckoohash_map(size_t numa_mask_, size_t nnodes_,
+                   size_t n = DEFAULT_SIZE,
                    double mlf = DEFAULT_MINIMUM_LOAD_FACTOR,
-                   size_t mhp = NO_MAXIMUM_HASHPOWER) {
+                   size_t mhp = NO_MAXIMUM_HASHPOWER)
+   : numa_mask(numa_mask_), nnodes(nnodes_),
+    buckets_(NumaAllocator<Bucket>(numa_mask, nnodes)) {
         minimum_load_factor(mlf);
         maximum_hashpower(mhp);
         size_t hp = reserve_calc(n);
@@ -378,10 +381,6 @@ public:
         }
         set_hashpower(hp);
         buckets_.resize(hashsize(hp));
-        printf("%s:%s: buckets %.2fmB allocated at %p\n",
-                __FILE__, __func__,
-                (float)(buckets_.capacity()*sizeof(Bucket))/(1ul<<20),
-                (void*)&buckets_[0]);
         locks_.allocate(std::min(locks_t::size(), hashsize(hp)));
         num_inserts_.resize(kNumCores(), 0);
         num_deletes_.resize(kNumCores(), 0);
@@ -1978,7 +1977,7 @@ private:
         // Creates a new hash table with hashpower new_hp and adds all
         // the elements from the old buckets
         cuckoohash_map<Key, T, Hash, Pred, Alloc, slot_per_bucket> new_map(
-            hashsize(new_hp) * slot_per_bucket);
+            numa_mask, nnodes, hashsize(new_hp) * slot_per_bucket);
         const size_t threadnum = kNumCores();
         const size_t buckets_per_thread = (
             (hashsize(hp) + threadnum - 1) / threadnum);
@@ -2314,6 +2313,7 @@ private:
     // atomic
     std::atomic<size_t> hashpower_;
 
+    size_t numa_mask, nnodes;
     // vector of buckets. The size or memory location of the buckets cannot be
     // changed unless al the locks are taken on the table. Thus, it is only safe
     // to access the buckets_ vector when you have at least one lock held.

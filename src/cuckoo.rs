@@ -6,9 +6,9 @@
 use std::ffi;
 use libc::c_char;
 
-pub fn init() {
+pub fn init(numa_mask: usize, nnodes: usize) {
     unsafe {
-        libcuckoo_init();
+        libcuckoo_init(numa_mask, nnodes);
     }
 }
 
@@ -75,7 +75,7 @@ pub fn update(key: u64, value: usize) -> Option<usize> {
 #[link(name = "cuckoo")]
 extern {
     // FIXME instead of &mut use *mut
-    fn libcuckoo_init();
+    fn libcuckoo_init(numa_mask: usize, nnodes: usize);
     fn libcuckoo_clear();
     fn libcuckoo_size() -> usize;
     fn libcuckoo_empty() -> bool;

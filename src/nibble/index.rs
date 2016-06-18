@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc,RwLock,RwLockWriteGuard,RwLockReadGuard};
 
 use super::super::cuckoo;
+use numa;
 
 //==----------------------------------------------------==//
 //      Index
@@ -20,8 +21,12 @@ pub struct Index {
 
 impl Index {
 
+    // FIXME pass some Config object that says how the index should be
+    // allocated across NUMA sockets
     pub fn new() -> Self {
-        cuckoo::init(); // FIXME should only be called once
+        let nnodes = numa::NODE_MAP.sockets();
+        let mask: usize = (1usize<<nnodes)-1;
+        cuckoo::init(mask, nnodes); // FIXME should only be called once
         Index { }
     }
 
