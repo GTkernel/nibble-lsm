@@ -17,6 +17,7 @@ lazy_static = "0.2.1"
 quicksort = "1.0.0"
 #lazysort = "0.1.1"
 clap = "2.5.1"
+syscall = "0.2.1"
 
 [features]
 default = ["epoch-tsc"]
@@ -28,6 +29,8 @@ epoch-combiner = [] # not implemented
 # http://doc.crates.io/manifest.html#the-%5Bprofile.*%5D-sections
 [profile.release]
 opt-level = 3
-debug = false
 debug-assertions = false
+# lto=true debug=true -> LLVM bugs, so do not mix
+# https://github.com/rust-lang/rust/issues/34122
+debug = false
 lto = true

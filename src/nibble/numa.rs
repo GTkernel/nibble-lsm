@@ -3,6 +3,12 @@ use std::fs::File;
 use std::io::Read;
 use std::fmt;
 
+// Linux definitions for mbind system call.
+// FIXME put somewhere portable
+pub const MPOL_BIND: usize       = 2;
+pub const MPOL_INTERLEAVE: usize = 3;
+pub const MPOL_MF_STRICT: usize  = (1usize<<0);
+
 /// Special type to represent a NUMA socket.
 #[derive(Copy,Clone,Debug)]
 pub struct NodeId(pub usize);

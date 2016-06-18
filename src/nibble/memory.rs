@@ -1,4 +1,5 @@
 use libc;
+use syscall;
 
 use std::mem;
 use std::ptr;
@@ -119,18 +120,24 @@ impl MemMap {
         info!("mmap 0x{:x}-0x{:x} {} MiB",
               addr, (addr+len), len>>20);
 
-        // bind it TODO mbind not available in Rust
-
-        // allocate by faulting
-        let now = Instant::now();
-        let cpu = numa::NODE_MAP.cpus_of(node).start;
+        // bind the memory to a socket
+        let nnodes = numa::NODE_MAP.sockets();
+        let mask = 1usize << node.0;
         unsafe {
-            sched::pin_map(cpu, || {
-                for pg in 0..(len>>12) {
-                    let pos: usize = addr + (pg<<12);
-                    ptr::write(pos as *mut usize, 42usize);
-                }
-            });
+            let maskaddr: usize = mem::transmute(&mask);
+            assert!(0usize == syscall::syscall6(syscall::nr::MBIND,
+                addr, len, numa::MPOL_BIND,
+                maskaddr, nnodes+1, numa::MPOL_MF_STRICT),
+                "mbind failed");
+        }
+
+        // allocate pages by faulting
+        let now = Instant::now();
+        unsafe {
+            for pg in 0..(len>>12) {
+                let pos: usize = addr + (pg<<12);
+                ptr::write(pos as *mut usize, 42usize);
+            }
         }
         info!("alloc node {}: {} sec", node, now.elapsed().as_secs());
         MemMap { addr: addr, len: len }
