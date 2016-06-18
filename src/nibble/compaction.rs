@@ -383,10 +383,10 @@ impl Worker {
 
             for entry in dirt.into_iter() {
                 if isLive(&entry, self.index.clone()) {
-                    let key: String;
+                    let key: u64;
                     let va = new.append_entry(&entry);
                     unsafe { key = entry.get_key(); }
-                    self.index.update(&key, va);
+                    self.index.update(key, va);
                 }
             }
             // carry over the epoch state
@@ -439,7 +439,7 @@ impl Worker {
         let is_live: LiveFn = Box::new( move | entry, idx | {
             let mut key = unsafe { entry.get_key() };
             //match idx.get(key.as_str()) {
-            match idx.get(&mut key) {
+            match idx.get(key) {
                 Some(loc) => (loc == entry.get_loc()),
                 None => false,
             }

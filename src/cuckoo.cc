@@ -34,6 +34,13 @@ class CStringHasher {
         }
 };
 
+class U64Hasher {
+    public:
+        size_t operator()(uint64_t k) const {
+            return (size_t)CityHash64((char*)&k, sizeof(k));
+        }
+};
+
 // Comparator for C strings that examines the entire buffer.
 // Reference: cppreference.com/w/cpp/utility/functional/equal_to
 // Hard-coded for char* types
@@ -49,12 +56,12 @@ extern "C" {
     // Value type should be a primitive, as we've coded function
     // parameters to copy-by-value (no references). If that changes,
     // the interface should be made with references (l- or r-value).
-    typedef char* KType;
+    typedef uint64_t KType;
     typedef uint64_t VType;
 
     // Singleton instance of the hash table.
     static cuckoohash_map<KType, VType,
-        CStringHasher, CStringEqual> *cuckoomap = nullptr;
+        U64Hasher> *cuckoomap = nullptr;
 
     // Lock used only for initialization.
     static std::mutex singleton_lock;
@@ -62,7 +69,7 @@ extern "C" {
     void libcuckoo_init(void) {
         if (!cuckoomap && singleton_lock.try_lock()) {
             cuckoomap = new cuckoohash_map<KType,VType,
-                      CStringHasher, CStringEqual>();
+                      U64Hasher>();
             if (!cuckoomap) {
                 std::cerr << "Error: OOM allocating cuckoo table"
                     << std::endl;

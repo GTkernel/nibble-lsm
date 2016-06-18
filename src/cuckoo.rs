@@ -30,53 +30,39 @@ pub fn empty() -> bool {
     }
 }
 
-pub fn insert(key: &str, value: usize) -> bool {
-    let k = key.to_owned(); // TODO can we avoid a copy just for the NUL?
+pub fn insert(key: u64, value: usize) -> bool {
     unsafe {
-        let cstr = ffi::CString::from_vec_unchecked(k.into_bytes());
-        let p = cstr.into_raw(); // transfer ownership to cuckoo
-        libcuckoo_insert(p, value)
+        libcuckoo_insert(key, value)
     }
 }
 
-pub fn contains(key: &str) -> bool {
-    let k = key.to_owned(); // TODO see above
+pub fn contains(key: u64) -> bool {
     unsafe {
-        let cstr = ffi::CString::from_vec_unchecked(k.into_bytes());
-        libcuckoo_contains(cstr.as_ptr())
+        libcuckoo_contains(key)
     }
 }
 
-pub fn erase(key: &str, value: &mut usize) -> bool {
-    let k = key.to_owned(); // TODO see above
+pub fn erase(key: u64, value: &mut usize) -> bool {
     unsafe {
-        let cstr = ffi::CString::from_vec_unchecked(k.into_bytes());
-        libcuckoo_erase(cstr.as_ptr(), value)
+        libcuckoo_erase(key, value)
     }
-    // FIXME we have to take the value removed as the key and free it
 }
 
-pub fn find(key: &mut String) -> Option<usize> {
+pub fn find(key: u64) -> Option<usize> {
     let mut value: usize = 0;
-    //key.push('\0');
     unsafe {
-        match libcuckoo_find(key.as_ptr(), &mut value) {
+        match libcuckoo_find(key, &mut value) {
             true => Some(value),
             false => None,
         }
     }
 }
 
-pub fn update(key: &str, value: usize) -> Option<usize> {
-    let k = key.to_owned(); // TODO see above
+pub fn update(key: u64, value: usize) -> Option<usize> {
     let mut ret: usize = 0;
     unsafe {
-        let cstr = ffi::CString::from_vec_unchecked(k.into_bytes());
-        match libcuckoo_update(cstr.as_ptr(), value, &mut ret) {
-            false => { // insertion
-                cstr.into_raw(); // cuckoo owns the string now
-                None
-            },
+        match libcuckoo_update(key, value, &mut ret) {
+            false => None, // insertion
             true => Some(ret), // updated existing
         }
     }
@@ -93,11 +79,11 @@ extern {
     fn libcuckoo_clear();
     fn libcuckoo_size() -> usize;
     fn libcuckoo_empty() -> bool;
-    fn libcuckoo_insert(key: *const c_char, value: usize) -> bool;
-    fn libcuckoo_contains(key: *const c_char) -> bool;
-    fn libcuckoo_find(key: *const u8, value: &mut usize) -> bool;
-    fn libcuckoo_erase(key: *const c_char, value: &mut usize) -> bool;
-    fn libcuckoo_update(key: *const c_char, value: usize,
+    fn libcuckoo_insert(key: u64, value: usize) -> bool;
+    fn libcuckoo_contains(key: u64) -> bool;
+    fn libcuckoo_find(key: u64, value: &mut usize) -> bool;
+    fn libcuckoo_erase(key: u64, value: &mut usize) -> bool;
+    fn libcuckoo_update(key: u64, value: usize,
                         old: &mut usize) -> bool;
 }
 

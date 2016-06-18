@@ -139,31 +139,31 @@ impl BlockAllocator {
 /// transmuting their objects, and for ensuring the lifetime of the
 /// originating buffers exceeds that of an instance of ObjDesc used to
 /// refer to them.
-pub struct ObjDesc<'a> {
-    key: &'a str,
+pub struct ObjDesc {
+    key: u64,
     value: Pointer,
     vlen: u32,
 }
 
 
-impl<'a> ObjDesc<'a> {
+impl ObjDesc {
 
     /// Create ObjDesc where key is str and value is arbitrary memory.
-    pub fn new(key: &'a str, value: Pointer, vlen: u32) -> Self {
+    pub fn new(key: u64, value: Pointer, vlen: u32) -> Self {
         ObjDesc { key: key, value: value, vlen: vlen }
     }
 
     /// Create ObjDesc where key and value are String
-    pub fn new2(key: &'a String, value: &'a String) -> Self {
+    pub fn new2(key: u64, value: &String) -> Self {
         ObjDesc {
-            key: key.as_str(),
+            key: key,
             value: Some(value.as_ptr()),
             vlen: value.len() as u32,
         }
     }
 
     pub fn len(&self) -> usize {
-        self.key.len() + self.vlen as usize
+        mem::size_of::<u64>() + self.vlen as usize
     }
 
     pub fn len_with_header(&self) -> usize {
@@ -181,8 +181,9 @@ impl<'a> ObjDesc<'a> {
         }
     }
 
-    pub fn getkey(&self) -> &'a str { self.key }
-    pub fn keylen(&self) -> usize { self.key.len() }
+    //pub fn getkey(&self) -> &'a str { self.key }
+    pub fn getkey(&self) -> u64 { self.key }
+    pub fn keylen(&self) -> usize { mem::size_of::<u64>() }
     pub fn getvalue(&self) -> Pointer { self.value }
     pub fn valuelen(&self) -> u32 { self.vlen }
 }
@@ -311,7 +312,10 @@ impl Segment {
                 let header = EntryHeader::new(buf);
                 let hlen = size_of::<EntryHeader>();
                 self.append_safe(header.as_ptr(), hlen);
-                self.append_safe(buf.key.as_ptr(), buf.key.len());
+                unsafe {
+                    let v: *const u8 = mem::transmute(&buf.key);
+                    self.append_safe(v, mem::size_of::<u64>());
+                }
                 self.append_safe(val, buf.vlen as usize);
                 self.nobj += 1;
                 self.update_header(1);
@@ -636,18 +640,12 @@ impl EntryReference {
     }
 
     /// Copy out the key
-    pub unsafe fn get_key(&self) -> String {
-        let mut v: Vec<u8> = Vec::with_capacity(self.keylen as usize);
-        v.set_len(self.keylen as usize);
+    pub unsafe fn get_key(&self) -> u64 {
         let mut offset = self.offset + size_of::<EntryHeader>();
         let block  = offset / BLOCK_SIZE;
         offset = offset % BLOCK_SIZE;
-        let ptr = v.as_mut_ptr();
-        self.copy_out(ptr, block, offset, self.keylen as usize);
-        match String::from_utf8(v) {
-            Ok(string) => string,
-            Err(err) => panic!("{:?}", err),
-        }
+        let mut va = self.blocks[block].addr + offset;
+        ptr::read(va as *const u64)
     }
 
     /// Copy out the value

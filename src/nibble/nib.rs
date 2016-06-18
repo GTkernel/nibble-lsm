@@ -171,7 +171,7 @@ impl Nibble {
         }
         trace!("key {} va 0x{:x}", obj.getkey(), va);
         // 2. update reference to object
-        let opt = self.index.update(&String::from(obj.getkey()), va);
+        let opt = self.index.update(obj.getkey(), va);
         // 3. decrement live size of segment if we overwrite object
         if let Some(old) = opt {
             // FIXME this shouldn't need a lock..
@@ -200,7 +200,7 @@ impl Nibble {
         self.__put(obj, PutPolicy::Specific(0))
     }
 
-    pub fn get_object(&self, key: &mut String) -> (Status,Option<Buffer>) {
+    pub fn get_object(&self, key: u64) -> (Status,Option<Buffer>) {
         epoch::pin();
         let va: usize;
         match self.index.get(key) {
@@ -226,7 +226,7 @@ impl Nibble {
         (Ok(1),Some(buf))
     }
 
-    pub fn del_object(&mut self, key: &String) -> Status {
+    pub fn del_object(&mut self, key: u64) -> Status {
         epoch::pin();
         let va: usize;
         match self.index.remove(key) {

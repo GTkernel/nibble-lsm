@@ -48,12 +48,12 @@ fn run(config: &Config) {
     };
 
     info!("inserting objects...");
-    let mut keycount: usize = 0;
+    let mut key: u64 = 0;
 
     let value = memory::allocate::<u8>(config.size);
     let v = Some(value as *const u8);
 
-    let fill: usize = 
+    let mut fill: usize = 
             ((nib.capacity() as f64) * 0.8) as usize;
 //    let fill: usize = match policy {
 //        PutPolicy::Interleave =>
@@ -64,24 +64,27 @@ fn run(config: &Config) {
              (nib.capacity() as f64) / ((1usize<<30)as f64),
              (fill as f64) / ((1usize<<30)as f64));
 
-    let nobj: usize = fill/config.size;
+    let nobj: usize = fill/(config.size+8+8); // + header + key
+    fill = nobj*(config.size+8+8);
     let pernode: usize = nobj/nib.nnodes();
-    info!("nobj {} pernode {}", nobj, pernode);
+    info!("cap {:.3}gb fill {:.3}gb nobj {} pernode {}",
+          (nib.capacity() as f64)/((1usize<<30) as f64),
+          (fill as f64)/((1usize<<30) as f64),
+          nobj, pernode);
     let mut node = 0;
-    info!("switching to node {} key {}", node, keycount);
+    info!("switching to node {} key {}", node, key);
     for c in 0..nobj {
         if node >= nib.nnodes() {
             info!("node > {} (skipping {} objects)",
                 nib.nnodes(), nobj-c);
             break;
         }
-        let key = keycount.to_string();
-        let obj = ObjDesc::new(key.as_str(), v, config.size as u32);
+        let obj = ObjDesc::new(key, v, config.size as u32);
         if let Err(code) = nib.put_where(&obj, PutPolicy::Specific(node)) {
             panic!("{:?}", code)
         }
-        keycount += 1;
-        if keycount % pernode == 0 {
+        key += 1;
+        if key % (pernode as u64) == 0 {
             break; // force all to one node -- i get good throughput!
 //            node += 1;
 //            info!("switching to node {} key {}", node, keycount);
@@ -137,7 +140,7 @@ fn run(config: &Config) {
 //        }
 
         let now = Instant::now();
-        for t in 0..nthreads {
+        for t in 1..(nthreads+1) {
             let accum = accum.clone();
             let nib = nib.clone();
             let cap = nib.capacity();
@@ -158,25 +161,19 @@ fn run(config: &Config) {
                 info!("thread {} key range {}-{}",
                         t, sock.0*pernode, sock.0*pernode+pernode);
                 // XXX modify these loops to debug scalability XXX
-                let mut c: usize = 0;
-                let mut v: Vec<String> = Vec::with_capacity(pernode);
-                for x in 0..pernode {
-                    let mut s = x.to_string();
-                    s.push('\0');
-                    v.push(s);
-                }
                 loop {
                     let mut ops = 0usize;
                     let now = Instant::now();
                     while now.elapsed().as_secs() < 10 {
                         //for _ in 0..100usize {
                         //let r = unsafe { rdrand() } as usize; // FIXME slow...
-                        c += 1;
+                        //c += 1;
                         //let idx = (r % pernode) + (sock.0 * pernode);
                         //let key = &keys[idx];
                         //let mut key = idx.to_string();
-                        let mut key = &mut v[c%pernode]; // don't generate string
-                        let _ = nib.get_object(key);
+                        //let mut key = &mut v[c%pernode]; // don't generate string
+                        let _ = nib.get_object(key % (pernode as u64));
+                        key += 1;
                         ops += 1;
                         //}
                     }
@@ -202,7 +199,7 @@ fn run(config: &Config) {
         let mut fmt = String::new();
         println!("nobj.mil capacity.gb fill.gb size.b threads kops");
         println!("{:.3} {:.3} {:.3} {} {} {:.3}",
-                 (keycount as f64) / 1e6,
+                 (key as f64) / 1e6,
                  (nib.capacity() as f64) / ((1usize<<30) as f64),
                  (fill as f64) / ((1usize<<30) as f64),
                  config.size,
