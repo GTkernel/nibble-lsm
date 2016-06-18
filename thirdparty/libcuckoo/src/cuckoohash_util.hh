@@ -104,13 +104,13 @@ T* create_array(const size_t size) {
             MAP_ANONYMOUS|MAP_PRIVATE|MAP_NORESERVE,
             -1, 0);
     if ( arr == MAP_FAILED ) abort();
-    printf("%s:%s: table allocated at %p\n",
-            __FILE__, __func__, arr);
     // spread memory for hash table across nodes
-    const size_t nnodes = 16;
-    //size_t mask = (1ul<<nnodes)-1;
-    size_t mask = 1ul;
-    if ( 0 != mbind(arr, bytes, MPOL_BIND, //MPOL_INTERLEAVE,
+    const size_t nnodes = 16; // XXX hard-coded assumption
+    size_t mask = (1ul<<nnodes)-1;
+    //size_t mask = 1ul;
+    printf("%s:%s: array %.2fmB allocated at %p numa mask 0x%lx\n",
+            __FILE__, __func__, (float)bytes/(1ul<<20), arr, mask);
+    if ( 0 != mbind(arr, bytes, MPOL_INTERLEAVE,
             &mask, nnodes+1, MPOL_MF_STRICT) ) abort();
     memset((void*)arr, 0, bytes);
     // Initialize all the elements, safely deallocating and destroying

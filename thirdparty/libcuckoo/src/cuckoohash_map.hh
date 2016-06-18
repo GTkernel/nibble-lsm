@@ -378,6 +378,10 @@ public:
         }
         set_hashpower(hp);
         buckets_.resize(hashsize(hp));
+        printf("%s:%s: buckets %.2fmB allocated at %p\n",
+                __FILE__, __func__,
+                (float)(buckets_.capacity()*sizeof(Bucket))/(1ul<<20),
+                (void*)&buckets_[0]);
         locks_.allocate(std::min(locks_t::size(), hashsize(hp)));
         num_inserts_.resize(kNumCores(), 0);
         num_deletes_.resize(kNumCores(), 0);
