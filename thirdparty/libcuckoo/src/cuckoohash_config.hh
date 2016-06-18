@@ -9,7 +9,7 @@
 const size_t DEFAULT_SLOT_PER_BUCKET = 8;
 
 //! The default number of elements in an empty hash table
-const size_t DEFAULT_SIZE = (1U << 20) * DEFAULT_SLOT_PER_BUCKET;
+const size_t DEFAULT_SIZE = (1U << 22) * DEFAULT_SLOT_PER_BUCKET;
 
 //! On a scale of 0 to 16, the memory granularity of the locks array. 0 is the
 //! least granular, meaning the array is a contiguous array and thus offers the
