@@ -1891,8 +1891,14 @@ private:
             return failure_under_expansion;
         }
 
+        fprintf(stderr, "%s::%s() [WARN] table is resizing!"
+                " %lu -> %lu (%lu per slot)\n",
+                __FILE__, __func__, current_hp,
+                new_hp, DEFAULT_SLOT_PER_BUCKET);
+        // locks_ is type lazy_array
         locks_.allocate(std::min(locks_t::size(), hashsize(new_hp)));
         auto unlocker = snapshot_and_lock_all();
+        // buckets_ is type vector
         buckets_.resize(buckets_.size() * 2);
         set_hashpower(new_hp);
 

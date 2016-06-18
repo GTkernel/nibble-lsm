@@ -7,6 +7,10 @@
 #include <pthread.h>
 #include <thread>
 #include <vector>
+#include <numaif.h>
+#include <sys/mman.h>
+#include <assert.h>
+#include <stdio.h>
 #include "cuckoohash_config.hh" // for LIBCUCKOO_DEBUG
 
 #if LIBCUCKOO_DEBUG
@@ -92,7 +96,23 @@ private:
 template <class T, class Alloc>
 T* create_array(const size_t size) {
     Alloc allocator;
-    T* arr = allocator.allocate(size);
+    //T* arr = allocator.allocate(size);
+    size_t bytes = size * sizeof(T);
+    T* arr = (T*) mmap(NULL, bytes,
+            PROT_READ|PROT_WRITE,
+            // don't use hugetlb so we can spread the table out
+            MAP_ANONYMOUS|MAP_PRIVATE|MAP_NORESERVE,
+            -1, 0);
+    if ( arr == MAP_FAILED ) abort();
+    printf("%s:%s: table allocated at %p\n",
+            __FILE__, __func__, arr);
+    // spread memory for hash table across nodes
+    const size_t nnodes = 16;
+    //size_t mask = (1ul<<nnodes)-1;
+    size_t mask = 1ul;
+    if ( 0 != mbind(arr, bytes, MPOL_BIND, //MPOL_INTERLEAVE,
+            &mask, nnodes+1, MPOL_MF_STRICT) ) abort();
+    memset((void*)arr, 0, bytes);
     // Initialize all the elements, safely deallocating and destroying
     // everything in case of error.
     size_t i;
@@ -104,7 +124,8 @@ T* create_array(const size_t size) {
         for (size_t j = 0; j < i; ++j) {
             allocator.destroy(&arr[j]);
         }
-        allocator.deallocate(arr, size);
+        //allocator.deallocate(arr, size);
+        munmap(arr, size);
         throw;
     }
     return arr;
@@ -118,7 +139,8 @@ void destroy_array(T* arr, const size_t size) {
     for (size_t i = 0; i < size; ++i) {
         allocator.destroy(&arr[i]);
     }
-    allocator.deallocate(arr, size);
+    if (munmap(arr, size * sizeof(T))) abort();
+    //allocator.deallocate(arr, size);
 }
 
 // executes the function over the given range split over num_threads threads

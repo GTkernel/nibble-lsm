@@ -53,6 +53,7 @@ fn make_dynamic() {
     println!("cargo:rustc-link-search={}", outdir);
     println!("cargo:rustc-link-search={}", libdir);
     println!("cargo:rustc-link-lib=cityhash");
+    println!("cargo:rustc-link-lib=numa");
 }
 
 /// Commands here must be tested manually, first. See src/cuckoo.cc for
