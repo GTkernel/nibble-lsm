@@ -3,6 +3,10 @@
 #![feature(asm)]
 #![feature(repr_simd)]
 
+// Clippy tool
+//#![feature(plugin)]
+//#![plugin(clippy)]
+
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
