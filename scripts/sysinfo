@@ -28,6 +28,9 @@ for ((sock=0;sock<$num_sockets;sock++)); do
     echo -n "socket ${sock} "
     cat /sys/devices/system/node/node${sock}/cpulist
 done
+echo ''; echo '[cpu detail]';
+n=$(grep -n 'power management' /proc/cpuinfo | head -n 1 | cut -d ':' -f1)
+sed -n 1,${n}p < /proc/cpuinfo
 
 echo '';echo '[meminfo]'; head /proc/meminfo
 
