@@ -1,0 +1,48 @@
+#! /usr/bin/env zsh
+set -u
+set -e
+
+echo '';echo '[date]'; date
+echo '';echo '[uname]'; uname -a
+echo '';echo '[uptime]'; uptime
+echo '';echo '[who]'; who
+echo '';echo '[ulimit]'; ulimit -a
+
+echo '';echo '[env]'; env
+
+echo '';echo '[clang++]'; clang++ --version
+echo '';echo '[g++]'; g++ --version
+if [ -e Makefile ]; then
+    echo '';echo '[Makefile]'; cat Makefile
+fi
+
+echo '';echo '[cpu]'; grep 'model name' /proc/cpuinfo | head -n 1
+echo '';echo '[sockets=cores]';
+num_sockets=$(awk -F '-' '{print $NF}' < /sys/devices/system/node/possible)
+num_sockets=$((num_sockets+1))
+cores_per_socket=$(cut -d ',' -f 1 < /sys/devices/system/node/node0/cpulist | awk -F '-' '{print $NF}')
+cores_per_socket=$((cores_per_socket+1))
+echo "num sockets: $num_sockets"
+echo "cores per socket: $cores_per_socket"
+for ((sock=0;sock<$num_sockets;sock++)); do
+    echo -n "socket ${sock} "
+    cat /sys/devices/system/node/node${sock}/cpulist
+done
+
+echo '';echo '[meminfo]'; head /proc/meminfo
+
+echo '';echo '[nr HP]'
+echo -n '2MB huge pages: '
+cat /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+echo -n '1GB huge pages: '
+cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages
+
+echo '';echo '[THP]'
+echo -n 'enabled: '
+cat /sys/kernel/mm/transparent_hugepage/enabled
+echo -n 'defrag: '
+cat /sys/kernel/mm/transparent_hugepage/defrag
+echo -n 'use zero page: '
+cat /sys/kernel/mm/transparent_hugepage/use_zero_page
+
+echo '';echo '[git]'; git rev-parse HEAD

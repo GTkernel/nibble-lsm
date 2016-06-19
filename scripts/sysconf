@@ -1,0 +1,18 @@
+#! /usr/bin/env zsh
+set -e
+set -u
+
+# turn of THP (we allocate it explicitly)
+sudo su -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
+sudo su -c "echo never > /sys/kernel/mm/transparent_hugepage/defrag"
+
+# remove 1gb page reservation
+sudo su -c "echo 0 > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
+
+# allocate 1TB of 2MB pages
+# (with 16 sockets, 64GB per socket)
+total=40
+n2mb=$((1<<(total-21)))
+numactl --interleave 0-15 \
+    sudo su -c "echo $n2mb > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages"
+
