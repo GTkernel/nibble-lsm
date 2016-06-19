@@ -145,7 +145,7 @@ impl Nibble {
         unimplemented!();
     }
 
-    fn __put(&mut self, obj: &ObjDesc, hint: PutPolicy) -> Status {
+    fn __put(&self, obj: &ObjDesc, hint: PutPolicy) -> Status {
         epoch::pin();
         let va: usize;
 
@@ -191,12 +191,12 @@ impl Nibble {
         Ok(1)
     }
 
-    pub fn put_where(&mut self, obj: &ObjDesc,
+    pub fn put_where(&self, obj: &ObjDesc,
                      hint: PutPolicy) -> Status {
         self.__put(obj, hint)
     }
 
-    pub fn put_object(&mut self, obj: &ObjDesc) -> Status {
+    pub fn put_object(&self, obj: &ObjDesc) -> Status {
         self.__put(obj, PutPolicy::Specific(0))
     }
 
