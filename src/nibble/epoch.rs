@@ -154,7 +154,7 @@ pub const EPOCH_QUIESCE: u64 = 0;
 
 #[inline(always)]
 #[allow(unused_mut)]
-unsafe fn rdtsc() -> u64 {
+pub unsafe fn rdtsc() -> u64 {
     let mut low: u32;
     let mut high: u32;
     asm!("rdtsc" : "={eax}" (low), "={edx}" (high));

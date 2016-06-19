@@ -31,15 +31,31 @@ use std::collections::VecDeque;
 use std::time::Duration;
 use std::time::Instant;
 
+#[derive(Clone,Copy,Debug)]
+enum CPUPolicy {
+    Random,
+    SocketRR, // round-robin among sockets
+    Incremental, // fill each socket
+}
+
+#[derive(Clone,Copy,Debug)]
+enum MemPolicy {
+    Random,
+    Local, // access only keys local to socket
+}
+
+#[derive(Clone,Copy,Debug)]
 struct Config {
     size: usize,
     capacity: usize,
-    cpu_interleave: bool,
-    mem_interleave: PutPolicy,
+    cpu: CPUPolicy,
+    mem: MemPolicy,
 }
 
 fn run(config: &Config) {
     logger::enable();
+
+    info!("config: {:?}", config);
 
     info!("creating Nibble...");
     let mut nib = match config.capacity {
@@ -48,164 +64,174 @@ fn run(config: &Config) {
     };
 
     info!("inserting objects...");
-    let mut key: u64 = 0;
-
-    let value = memory::allocate::<u8>(config.size);
-    let v = Some(value as *const u8);
-
     let mut fill: usize = 
             ((nib.capacity() as f64) * 0.8) as usize;
-//    let fill: usize = match policy {
-//        PutPolicy::Interleave =>
-//            ((nib.capacity() as f64) * 0.9) as usize,
-//        PutPolicy::Specific(_) => (nib.capacity()/nib.nnodes())/2,
-//    };
-    info!("capacity: {:.2} fill: {:.2}",
-             (nib.capacity() as f64) / ((1usize<<30)as f64),
-             (fill as f64) / ((1usize<<30)as f64));
-
     let nobj: usize = fill/(config.size+8+8); // + header + key
     fill = nobj*(config.size+8+8);
     let pernode: usize = nobj/nib.nnodes();
-    info!("cap {:.3}gb fill {:.3}gb nobj {} pernode {}",
+    info!("cap {:.3}gb fill {:.3}gb nobj {} nobj.pernode {}",
           (nib.capacity() as f64)/((1usize<<30) as f64),
           (fill as f64)/((1usize<<30) as f64),
           nobj, pernode);
     let mut node = 0;
-    info!("switching to node {} key {}", node, key);
-    for c in 0..nobj {
-        if node >= nib.nnodes() {
-            info!("node > {} (skipping {} objects)",
-                nib.nnodes(), nobj-c);
-            break;
-        }
-        let obj = ObjDesc::new(key, v, config.size as u32);
-        if let Err(code) = nib.put_where(&obj, PutPolicy::Specific(node)) {
-            panic!("{:?}", code)
-        }
-        key += 1;
-        if key % (pernode as u64) == 0 {
-            break; // force all to one node -- i get good throughput!
-//            node += 1;
-//            info!("switching to node {} key {}", node, keycount);
-        }
-    }
-
-    info!("starting scale test -----------------------");
 
     // downgrade to immutable shareable alias
     let nib = Arc::new(nib);
+
+    info!("inserting all keys -----------------");
+    {
+        let now = Instant::now();
+        let nsock = nib.nnodes();
+        let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(nsock);
+        let size = config.size;
+        for sock in 0..nsock {
+            let start_key: u64 = (sock*pernode) as u64;
+            let end_key: u64   = start_key + (pernode as u64);
+            let arc = nib.clone();
+            handles.push( thread::spawn( move || {
+                let value = memory::allocate::<u8>(size);
+                let v = Some(value as *const u8);
+                info!("range [{},{}) on socket {}",
+                    start_key, end_key, sock);
+                for key in start_key..end_key {
+                    let obj = ObjDesc::new(key, v, size as u32);
+                    if let Err(code) = arc.put_where(&obj,
+                                        PutPolicy::Specific(sock)) {
+                        panic!("{:?}", code)
+                    }
+                }
+                unsafe { memory::deallocate(value, size); }
+            }));
+        }
+        for handle in handles {
+            let _ = handle.join();
+        }
+
+        let sec = now.elapsed().as_secs();
+        info!("insertion took {} seconds", sec);
+    }
+
+    info!("starting scale test -----------------------");
 
     // used to block threads from starting, then again as an
     // accumulator for total ops performed among all threads
     let accum = Arc::new(AtomicUsize::new(0));
 
     let mut threadcount: Vec<usize>;
-    threadcount = (0usize..65).map(|e|if e==0 {1} else {4*e}).collect();
+    // 1, 4, 8, 12, 16, ...
+    //threadcount = (0usize..65).map(|e|if e==0 {1} else {4*e}).collect();
+    // 1, 2, 4, 6, 8, ...
+    //threadcount = (0usize..130).map(|e|if e==0 {1} else {2*e}).collect();
+    // 1, 2, 3, 4, 5, ...
+    threadcount = (1usize..261).collect();
 
+    println!("# tid ntid kops");
+
+    // Run the experiment multiple times using different sets of
+    // threads
     for nthreads in threadcount {
+
         let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(nthreads);
         info!("running with {} threads ---------", nthreads);
         accum.store(nthreads, Ordering::Relaxed);
 
-        // round-robin pinning
+        // Create CPU binding strategy
         let cpus_pernode = numa::NODE_MAP.cpus_in(NodeId(0));
         let nsockets = numa::NODE_MAP.sockets();
         let ncpus = cpus_pernode * nsockets;
         let mut cpus: VecDeque<usize> = VecDeque::with_capacity(ncpus);
-        for i in 0..cpus_pernode {
-            for sock in 0..nsockets {
-                let r = numa::NODE_MAP.cpus_of(NodeId(sock));
-                cpus.push_back(r.start + i);
-            }
+        match config.cpu {
+            CPUPolicy::Random => {
+                for i in 0..ncpus {
+                    cpus.push_back(i);
+                }
+                // Knuth shuffle
+                let mut rng = rand::thread_rng();
+                for i in 0..ncpus {
+                    let o = (rng.next_u32() as usize % (ncpus-i)) + i;
+                    cpus.swap(i, o);
+                }
+            },
+            CPUPolicy::SocketRR => {
+                for i in 0..cpus_pernode {
+                    for sock in 0..nsockets {
+                        let r = numa::NODE_MAP.cpus_of(NodeId(sock));
+                        cpus.push_back(r.start + i);
+                    }
+                }
+            },
+            CPUPolicy::Incremental => {
+                for i in 0..ncpus {
+                    cpus.push_back(i);
+                }
+            },
         }
 
-//        // create cpu IDs threads will bind to
-//        let mut cpus: VecDeque<usize> = VecDeque::new();
-//        // linear
-//        for sock in 0..numa::NODE_MAP.sockets() {
-//            let r = numa::NODE_MAP.cpus_of(NodeId(sock));
-//            for cpu in r.start..(r.end+1) {
-//                cpus.push_back(cpu);
-//            }
-//        }
-//        // Knuth shuffle
-//        if cpuinterleave {
-//            let mut rng = rand::thread_rng();
-//            let max = cpus.len();
-//            for i in 0..max {
-//                let o = (rng.next_u32() as usize % (max-i)) + i;
-//                cpus.swap(i, o);
-//            }
-//        }
-
-        let now = Instant::now();
-        for t in 1..(nthreads+1) {
+        // Spawn each of the threads in this set
+        for t in 0..nthreads {
             let accum = accum.clone();
             let nib = nib.clone();
             let cap = nib.capacity();
             let size = config.size;
             let cpu = cpus.pop_front().unwrap();
+            let memint = config.mem;
+
             handles.push( thread::spawn( move || {
                 accum.fetch_sub(1, Ordering::Relaxed);
                 unsafe { pin_cpu(cpu); }
+
+                let nsockets = numa::NODE_MAP.sockets();
                 let sock = numa::NODE_MAP.sock_of(cpu);
-                info!("thread {} cpu {} sock {:?}", t, cpu, sock);
-                // pre-build the key strings, and private to each thread
-                //let mut keys: Vec<String> = Vec::with_capacity(keycount);
-                //for k in 0..keycount {
-                    //keys.push( k.to_string() );
-                //}
-                let mut ops = 0usize;
+                info!("thread {} on cpu {} sock {:?}", t, cpu, sock);
+
+                // wait for all other threads to spawn
+                // after this, accum is zero
                 while accum.load(Ordering::Relaxed) > 0 { ; }
-                info!("thread {} key range {}-{}",
-                        t, sock.0*pernode, sock.0*pernode+pernode);
-                // XXX modify these loops to debug scalability XXX
-                loop {
+
+                // main loop (do warmup first)
+                let mut n: usize = 7877 * t; // offset all threads
+                for x in 0..2 {
                     let mut ops = 0usize;
                     let now = Instant::now();
-                    while now.elapsed().as_secs() < 10 {
-                        for _ in 0..1000usize { // reduce time calc overhead
-                        //let r = unsafe { rdrand() } as usize; // FIXME slow...
-                        //c += 1;
-                        //let idx = (r % pernode) + (sock.0 * pernode);
-                        //let key = &keys[idx];
-                        //let mut key = idx.to_string();
-                        //let mut key = &mut v[c%pernode]; // don't generate string
-                        let _ = nib.get_object(key % (pernode as u64));
-                        key += 1;
-                        ops += 1;
+                    while now.elapsed().as_secs() < 15 {
+                        match memint {
+                            s @ MemPolicy::Local => {
+                                let key = sock.0*pernode + (n % pernode);
+                                for _ in 0..1000usize {
+                                    let _ = nib.get_object(key as u64);
+                                    n += 7; // skip some
+                                    ops += 1;
+                                }
+                            },
+                            s @ MemPolicy::Random => {
+                                for _ in 0..1000usize {
+                                    let key = ((n % nsockets)*pernode)+
+                                        (unsafe { epoch::rdtsc() as usize } % pernode);
+                                    let _ = nib.get_object(key as u64);
+                                    n += 7;
+                                    ops += 1;
+                                }
+                            },
                         }
                     }
-                    let dur = now.elapsed();
-                    let nsec = dur.as_secs() * 1000000000u64
-                        + dur.subsec_nanos() as u64;
-                    println!("cap size threads kops");
-                    println!("{:.3} {} {} {:.3}",
-                             cap, size, t,
-                             ((ops as f64)/1e3)/((nsec as f64)/1e9));
+                    if x == 1 {
+                        let dur = now.elapsed();
+                        let nsec = dur.as_secs() * 1000000000u64
+                            + dur.subsec_nanos() as u64;
+                        let kops = ((ops as f64)/1e3)/((nsec as f64)/1e9);
+                        println!("# {} {} {:.3}", t, nthreads, kops);
+                        // aggregate the performance
+                        accum.fetch_add(kops as usize, Ordering::Relaxed);
+                    }
                 }
-                accum.fetch_add(ops, Ordering::Relaxed);
             }));
         }
         for handle in handles {
             let _ = handle.join();
         }
-        let dur = now.elapsed();
-
-        let ops = accum.load(Ordering::Relaxed) as f64;
-        let nsec = dur.as_secs() * 1000000000u64
-            + dur.subsec_nanos() as u64;
-        let mut fmt = String::new();
-        println!("nobj.mil capacity.gb fill.gb size.b threads kops");
-        println!("{:.3} {:.3} {:.3} {} {} {:.3}",
-                 (key as f64) / 1e6,
-                 (nib.capacity() as f64) / ((1usize<<30) as f64),
-                 (fill as f64) / ((1usize<<30) as f64),
-                 config.size,
-                 nthreads, (ops/1e3)/((nsec as f64)/1e9));
+        println!("# total kops {}",
+                 accum.load(Ordering::Relaxed));
     }
-    unsafe { memory::deallocate(value, config.size); }
 }
 
 fn main() {
@@ -214,23 +240,43 @@ fn main() {
         .arg(Arg::with_name("size")
              .long("size")
              .takes_value(true))
-        .arg(Arg::with_name("threads")
-             .long("threads")
-             .takes_value(true))
         .arg(Arg::with_name("capacity")
              .long("capacity")
              .takes_value(true))
-        .arg(Arg::with_name("mem_interleave")
-             .long("mem_interleave"))
-        .arg(Arg::with_name("cpu_interleave")
-             .long("cpu_interleave"))
+        .arg(Arg::with_name("mem")
+             .long("mem")
+             .takes_value(true))
+        .arg(Arg::with_name("cpu")
+             .long("cpu")
+             .takes_value(true))
         .get_matches();
 
-    let policy = match matches.is_present("mem_interleave") {
-        true => PutPolicy::Interleave,
-        false => PutPolicy::Specific(0),
+    let mem = match matches.value_of("mem") {
+        None => panic!("Specify memory policy"),
+        Some(s) => {
+            if s == "random" {
+                MemPolicy::Random
+            } else if s == "local" {
+                MemPolicy::Local
+            } else {
+                panic!("invalid memory policy");
+            }
+        },
     };
-    let cpuinterleave = matches.is_present("cpu_interleave");
+    let cpu = match matches.value_of("cpu") {
+        None => panic!("Specify CPU policy"),
+        Some(s) => {
+            if s == "random" {
+                CPUPolicy::Random
+            } else if s == "rr" {
+                CPUPolicy::SocketRR
+            } else if s == "incr" {
+                CPUPolicy::Incremental
+            } else {
+                panic!("invalid CPU policy");
+            }
+        },
+    };
     let capacity = match matches.value_of("capacity") {
         None => 0,
         Some(s) => match usize::from_str_radix(s, 10) {
@@ -249,8 +295,8 @@ fn main() {
     let mut config = Config {
         size: size,
         capacity: capacity,
-        cpu_interleave: cpuinterleave,
-        mem_interleave: policy
+        cpu: cpu,
+        mem: mem,
     };
 
     run(&config);
