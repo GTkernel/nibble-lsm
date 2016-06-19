@@ -119,11 +119,11 @@ fn run(config: &Config) {
 
     let mut threadcount: Vec<usize>;
     // 1, 4, 8, 12, 16, ...
-    //threadcount = (0usize..65).map(|e|if e==0 {1} else {4*e}).collect();
+    threadcount = (0usize..65).map(|e|if e==0 {1} else {4*e}).collect();
     // 1, 2, 4, 6, 8, ...
     //threadcount = (0usize..130).map(|e|if e==0 {1} else {2*e}).collect();
     // 1, 2, 3, 4, 5, ...
-    threadcount = (1usize..261).collect();
+    //threadcount = (1usize..261).collect();
 
     println!("# tid ntid kops");
 
