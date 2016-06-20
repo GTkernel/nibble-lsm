@@ -23,6 +23,13 @@ either it interleaves itself on all nodes, or binds to socket 0.
 --- Self notes below
 ----------------------------------------------------------------------
 
+Performance killers
+- using strings as keys
+    - you need to strncmp on collisions
+    - hashes run over arbitrarily long buffers
+- too many function indirections
+    - inline common paths
+
 crates to consider
 
 mempool by Andrew Gallant

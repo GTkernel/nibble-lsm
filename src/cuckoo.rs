@@ -30,24 +30,28 @@ pub fn empty() -> bool {
     }
 }
 
+#[inline(always)]
 pub fn insert(key: u64, value: usize) -> bool {
     unsafe {
         libcuckoo_insert(key, value)
     }
 }
 
+#[inline(always)]
 pub fn contains(key: u64) -> bool {
     unsafe {
         libcuckoo_contains(key)
     }
 }
 
+#[inline(always)]
 pub fn erase(key: u64, value: &mut usize) -> bool {
     unsafe {
         libcuckoo_erase(key, value)
     }
 }
 
+#[inline(always)]
 pub fn find(key: u64) -> Option<usize> {
     let mut value: usize = 0;
     unsafe {
@@ -58,6 +62,7 @@ pub fn find(key: u64) -> Option<usize> {
     }
 }
 
+#[inline(always)]
 pub fn update(key: u64, value: usize) -> Option<usize> {
     let mut ret: usize = 0;
     unsafe {

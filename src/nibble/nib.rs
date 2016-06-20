@@ -145,6 +145,7 @@ impl Nibble {
         unimplemented!();
     }
 
+    #[inline(always)]
     fn __put(&self, obj: &ObjDesc, hint: PutPolicy) -> Status {
         epoch::pin();
         let va: usize;
@@ -191,15 +192,18 @@ impl Nibble {
         Ok(1)
     }
 
+    #[inline(always)]
     pub fn put_where(&self, obj: &ObjDesc,
                      hint: PutPolicy) -> Status {
         self.__put(obj, hint)
     }
 
+    #[inline(always)]
     pub fn put_object(&self, obj: &ObjDesc) -> Status {
         self.__put(obj, PutPolicy::Specific(0))
     }
 
+    #[inline(always)]
     pub fn get_object(&self, key: u64) -> (Status,Option<Buffer>) {
         epoch::pin();
         let va: usize;
@@ -226,6 +230,7 @@ impl Nibble {
         (Ok(1),Some(buf))
     }
 
+    #[inline(always)]
     pub fn del_object(&mut self, key: u64) -> Status {
         epoch::pin();
         let va: usize;

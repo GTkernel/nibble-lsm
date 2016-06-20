@@ -12,7 +12,7 @@ extern uint64_t CityHash64(const char *buf, size_t len);
 
 class U64Hasher {
     public:
-        size_t operator()(uint64_t k) const {
+        size_t inline operator()(uint64_t k) const {
             return (size_t)CityHash64((char*)&k, sizeof(k));
         }
 };

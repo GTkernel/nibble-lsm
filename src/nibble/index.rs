@@ -31,6 +31,7 @@ impl Index {
     }
 
     /// Return value of object if it exists, else None.
+    #[inline(always)]
     pub fn get(&self, key: u64) -> Option<usize> {
         cuckoo::find(key)
     }
@@ -38,12 +39,14 @@ impl Index {
     /// Update location of object in the index. Returns None if object
     /// was newly inserted, or the virtual address of the prior
     /// object.
+    #[inline(always)]
     pub fn update(&self, key: u64, value: usize) -> Option<usize> {
         cuckoo::update(key, value)
     }
 
     /// Remove an entry. If it existed, return value, else return
     /// None.
+    #[inline(always)]
     pub fn remove(&self, key: u64) -> Option<usize> {
         let mut val: usize = 0;
         match cuckoo::erase(key, &mut val) {

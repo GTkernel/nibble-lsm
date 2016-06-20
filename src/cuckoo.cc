@@ -16,6 +16,8 @@
 #include <mutex>
 #include <cuckoohash_map.hh>
 
+#define __inline __attribute__((always_inline))
+
 // We have to use custom comparators and hashers because we are using
 // C strings (char*) for our keys, and the templated cuckoo table and
 // friends treat C strings and memory addresses (they don't look at
@@ -29,14 +31,14 @@ extern uint64_t CityHash64(const char *buf, size_t len);
 class CStringHasher {
     public:
         // we assume NUL-termination
-        size_t operator()(const char *k) const {
+        size_t __inline operator()(const char *k) const {
             return (size_t)CityHash64(k, strlen(k));
         }
 };
 
 class U64Hasher {
     public:
-        size_t operator()(uint64_t k) const {
+        size_t __inline operator()(uint64_t k) const {
             return (size_t)CityHash64((char*)&k, sizeof(k));
         }
 };
@@ -47,7 +49,8 @@ class U64Hasher {
 class CStringEqual : public std::equal_to<char*> {
     public:
         // we assume NUL-termination
-        bool operator() (const char *lhs, const char *rhs) const {
+        bool __inline operator() (const char *lhs,
+                const char *rhs) const {
             return (0 == strcmp(lhs, rhs));
         }
 };
