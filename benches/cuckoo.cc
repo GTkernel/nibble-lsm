@@ -57,8 +57,8 @@ int main() {
         //k = map->find((rand()+k)%n);
     clock_gettime(CLOCK_MONOTONIC, &t2);
 
-    float sec = ((t2.tv_sec*1e9 - t2.tv_nsec)
-        - (t1.tv_sec*1e9 - t1.tv_nsec)) / 1e9;
+    float sec = ((t2.tv_sec*1e9 + t2.tv_nsec)
+        - (t1.tv_sec*1e9 + t1.tv_nsec)) / 1e9;
     cout << "Sec:  " << sec << endl;
     float kops = (((float)ops)/1e3) / sec;
     cout << "Perf: " << kops << endl;
