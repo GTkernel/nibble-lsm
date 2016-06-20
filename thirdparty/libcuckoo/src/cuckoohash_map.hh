@@ -157,12 +157,23 @@ private:
     class spinlock {
         std::atomic_flag lock_;
     public:
-        spinlock() {
+        size_t conflicts, attempts;
+
+        spinlock() : conflicts(0), attempts(0) {
             lock_.clear();
         }
 
         inline void lock() {
-            while (lock_.test_and_set(std::memory_order_acquire));
+            attempts++;
+            if (lock_.test_and_set(std::memory_order_acquire)) {
+                conflicts++;
+                while (lock_.test_and_set(std::memory_order_acquire));
+            }
+        }
+
+        inline void clear() {
+            conflicts = 0;
+            attempts = 0;
         }
 
         inline void unlock() {
@@ -170,7 +181,10 @@ private:
         }
 
         inline bool try_lock() {
-            return !lock_.test_and_set(std::memory_order_acquire);
+            attempts++;
+            bool v = !lock_.test_and_set(std::memory_order_acquire);
+            if (!v) conflicts++;
+            return v;
         }
 
     } __attribute__((aligned(64)));
@@ -2343,6 +2357,22 @@ private:
     // NO_MAXIMUM_HASHPOWER, this limit will be disregarded.
     std::atomic<size_t> maximum_hashpower_;
 
+public:
+    // return locks which have experienced a non-negligible percentage
+    // of conflicts (returns (idx,pct) if for that lock its pct >
+    // input parameter).
+    std::vector<std::pair<size_t,size_t>> lock_conflicts(size_t pct) {
+        std::vector<std::pair<size_t,size_t>> ret;
+        size_t max = locks_.allocated_size();
+        for (size_t i = 0; i < max; i++) {
+            if (locks_[i].attempts == 0)
+                continue;
+            size_t p = (100 * locks_[i].conflicts) / locks_[i].attempts;
+            if (p > pct)
+                ret.push_back( std::make_pair(i, p) );
+        }
+        return ret;
+    }
 };
 
 #endif // _CUCKOOHASH_MAP_HH

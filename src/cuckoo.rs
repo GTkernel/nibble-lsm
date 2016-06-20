@@ -68,6 +68,12 @@ pub fn update(key: u64, value: usize) -> Option<usize> {
     }
 }
 
+pub fn print_conflicts(pct: usize) {
+    unsafe {
+        libcuckoo_print_conflicts(pct);
+    }
+}
+
 /// The lower-level raw interface called by the above.
 /// Repeat the cuckoo.cc interface but in Rust syntax.
 /// We don't invoke the interface in cuckoo.cc directly; instead, use
@@ -85,6 +91,7 @@ extern {
     fn libcuckoo_erase(key: u64, value: &mut usize) -> bool;
     fn libcuckoo_update(key: u64, value: usize,
                         old: &mut usize) -> bool;
+    fn libcuckoo_print_conflicts(pct: usize);
 }
 
 #[cfg(tests)]

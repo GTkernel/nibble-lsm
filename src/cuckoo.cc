@@ -159,4 +159,20 @@ extern "C" {
             abort();
         }
     }
+
+    void libcuckoo_print_conflicts(size_t pct) {
+        assert(cuckoomap);
+        auto v = cuckoomap->lock_conflicts(pct);
+        long buckets[10]; // [0] is 0-10 percent conflicts, etc.
+        memset(buckets, 0, 10*sizeof(long));
+        for (auto p : v) {
+            size_t percent = p.second;
+            buckets[ percent/10 ]++;
+        }
+        std::cout << "Histogram of lock conflicts: [ ";
+        for (size_t i = 0; i < 10; i++) {
+            std::cout << buckets[i] << ", ";
+        }
+        std::cout << "]" << std::endl;
+    }
 }

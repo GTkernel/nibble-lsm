@@ -22,6 +22,7 @@ use nibble::nib::{PutPolicy,Nibble};
 use nibble::numa::{self,NodeId};
 use nibble::sched::*;
 use nibble::segment::{ObjDesc,SEGMENT_SIZE};
+use nibble::cuckoo;
 use rand::Rng;
 use std::mem;
 use std::sync::Arc;
@@ -233,6 +234,7 @@ fn run(config: &Config) {
         }
         println!("# total kops {}",
                  accum.load(Ordering::Relaxed));
+        cuckoo::print_conflicts(0usize);
     }
 }
 
