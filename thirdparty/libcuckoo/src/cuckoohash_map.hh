@@ -275,10 +275,6 @@ private:
             }
         }
 
-        ~Bucket() {
-            clear();
-        }
-
         // Moves the item in b1[slot1] into b2[slot2] without copying
         static void move_to_bucket(
             Bucket& b1, size_t slot1,
@@ -348,11 +344,22 @@ private:
 
     // reserve_calc takes in a parameter specifying a certain number of slots
     // for a table and returns the smallest hashpower that will hold n elements.
-    static size_t reserve_calc(size_t n) {
-        double nhd = ceil(log2((double)n / (double)slot_per_bucket));
-        size_t new_hp = (size_t) (nhd <= 0 ? 1.0 : nhd);
-        assert(n <= hashsize(new_hp) * slot_per_bucket);
-        return new_hp;
+    static size_t reserve_calc(const size_t n) {
+        size_t buckets = (n + slot_per_bucket - 1) / slot_per_bucket;
+        size_t blog2;
+        if (buckets <= 1) {
+            blog2 = 1;
+        } else {
+            blog2 = 0;
+            for (size_t bcounter = buckets; bcounter > 1; bcounter >>= 1) {
+                ++blog2;
+            }
+            if (hashsize(blog2) < buckets) {
+                ++blog2;
+            }
+        }
+        assert(n <= hashsize(blog2) * slot_per_bucket);
+        return blog2;
     }
 
     // hashfn returns an instance of the hash function
@@ -398,6 +405,10 @@ public:
         locks_.allocate(std::min(locks_t::size(), hashsize(hp)));
         num_inserts_.resize(kNumCores(), 0);
         num_deletes_.resize(kNumCores(), 0);
+    }
+
+    ~cuckoohash_map() {
+        cuckoo_clear();
     }
 
     //! clear removes all the elements in the hash table, calling their
@@ -977,7 +988,7 @@ private:
     // hashsize returns the number of buckets corresponding to a given
     // hashpower.
     static inline size_t hashsize(const size_t hp) {
-        return 1U << hp;
+        return 1UL << hp;
     }
 
     // hashmask returns the bitmask for the buckets array corresponding to a
