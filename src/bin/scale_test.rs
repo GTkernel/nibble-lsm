@@ -194,24 +194,25 @@ fn run(config: &Config) {
                 // main loop (do warmup first)
                 let mut n: usize = 7877 * t; // offset all threads
                 for x in 0..2 {
+                //loop {
                     let mut ops = 0usize;
                     let now = Instant::now();
                     while now.elapsed().as_secs() < 15 {
+                        let offset = unsafe { rdrand() as usize };
                         match memint {
                             s @ MemPolicy::Local => {
-                                let key = sock.0*pernode + (n % pernode);
                                 for _ in 0..1000usize {
+                                    let key = sock.0*pernode + (n % pernode);
                                     let _ = nib.get_object(key as u64);
-                                    n += 7; // skip some
+                                    n += offset; // skip some
                                     ops += 1;
                                 }
                             },
                             s @ MemPolicy::Random => {
                                 for _ in 0..1000usize {
-                                    let key = ((n % nsockets)*pernode)+
-                                        (unsafe { epoch::rdtsc() as usize } % pernode);
+                                    let key = ((n % nsockets)*pernode)+(n % pernode);
                                     let _ = nib.get_object(key as u64);
-                                    n += 7;
+                                    n += offset;
                                     ops += 1;
                                 }
                             },
