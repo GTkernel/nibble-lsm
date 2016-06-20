@@ -5,24 +5,34 @@
 # If you need to debug this library, change to -O0 and add -ggdb, set
 # LD_LIBRARY_PATH to src/ before running with gdb
 CXX := g++
-CXXFLAGS := -std=c++11 -O3 -I./thirdparty/libcuckoo/src/ -fPIC -Wall -Wextra
+CXXFLAGS := -std=c++11 -O3 -I./thirdparty/libcuckoo/src/ -Wall -Wextra
 CXXFLAGS += -msse4.2 -mtune=native -march=native -malign-double
-CXXFLAGS += -Wno-unused-variable
+CXXFLAGS += -Wno-unused-variable -ggdb
 # Configure how the memory backing the hashtable will be allocated:
 # CUCKOO_INTERLEAVE or CUCKOO_BIND0
-CXXFLAGS += -DCUCKOO_INTERLEAVE
-LDFLAGS := -shared -Wl,-soname,libcuckoo.so -flto
-LIBS := -pthread -lcityhash
+#CXXFLAGS += -DCUCKOO_INTERLEAVE
+CXXFLAGS += -DCUCKOO_BIND0
+SOFLAGS := -shared -Wl,-soname,libcuckoo.so
+LDFLAGS := 
+LIBS := -pthread -lcityhash -lnuma
 
-all: src/libcuckoo.so
+all: src/libcuckoo.so benches/cuckoo
 
 # too many other dependencies
 .PHONY:	src/cuckoo.o
 src/cuckoo.o:	src/cuckoo.cc
-	$(CXX) $^ -o $@ $(CXXFLAGS) -c
+	$(CXX) $^ -o $@ $(CXXFLAGS) -c -fPIC
 
 src/libcuckoo.so:	src/cuckoo.o
+	$(CXX) $^ -o $@ $(LDFLAGS) $(SOFLAGS) $(LIBS)
+
+.PHONY:	benches/cuckoo.o
+benches/cuckoo.o:	benches/cuckoo.cc
+	$(CXX) $^ -o $@ $(CXXFLAGS) -c
+
+benches/cuckoo:	benches/cuckoo.o
 	$(CXX) $^ -o $@ $(LDFLAGS) $(LIBS)
 
 clean:
-	rm -v -f src/cuckoo.o src/libcuckoo.so
+	rm -v -f src/cuckoo.o src/libcuckoo.so \
+		benches/cuckoo.o benches/cuckoo
