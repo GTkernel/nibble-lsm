@@ -4,3 +4,5 @@ target/
 src/cuckoo.o
 src/libcuckoo.so
 core*
+benches/cuckoo.o
+benches/cuckoo
