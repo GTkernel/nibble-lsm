@@ -64,6 +64,29 @@ fn run(config: &Config) {
         _ => Nibble::new(config.capacity),
     };
 
+    let primes: Arc<Vec<usize>> = Arc::new(vec![
+        1381307, 6019001, 11193733, 14861299, 6361351, 15351997,
+        2708891, 2116481, 9440021, 6157033, 8387, 4796677, 1276897,
+        4200143, 7220249, 2988497, 14146999, 5322179, 14291581,
+        1857197, 10220563, 13330529, 1592111, 2597939, 15020969,
+        14975717, 5863679, 1614947, 9474713, 10742443, 6644069,
+        4353431, 2395333, 11995661, 4167931, 12396053, 9801271,
+        3887083, 5121581, 4171523, 14333611, 11998381, 9099899,
+        8742317, 12136643, 7334081, 1137167, 5674547, 2865413,
+        6476513, 11416421, 706033, 9013993, 12062621, 10737593,
+        9398957, 11984653, 10067789, 6356041, 5073643, 8615543,
+        8297459, 5118031, 12785459, 9249701, 6056731, 11694251,
+        7076581, 2538353, 7597157, 15386681, 1316407, 1451759,
+        12761011, 903607, 10882471, 8433619, 10823921, 1074751,
+        9478793, 13141259, 10069427, 2977441, 3845579, 12657457,
+        12164179, 577153, 5605477, 14701097, 3476303, 6433591,
+        1887511, 495877, 8908621, 9220279, 6634447, 2438773, 5266273,
+        6404117, 5436881, 2574839, 12587629, 1555231, 13881713,
+        2169841, 6425707, 1236623, 6322259, 14010851, 11166613,
+        2645399, 10244369, 1052237, 4396361, 4498099, 2595157,
+        5999129, 5933869, 1091047, 4149023, 11117611, 11976901,
+        5706919, 15093643, 9159289, 10301803, 11645737, 9598019]);
+
     info!("inserting objects...");
     let mut fill: usize = 
             ((nib.capacity() as f64) * 0.8) as usize;
@@ -178,6 +201,7 @@ fn run(config: &Config) {
             let size = config.size;
             let cpu = cpus.pop_front().unwrap();
             let memint = config.mem;
+            let primes = primes.clone();
 
             handles.push( thread::spawn( move || {
                 accum.fetch_sub(1, Ordering::Relaxed);
@@ -192,27 +216,33 @@ fn run(config: &Config) {
                 while accum.load(Ordering::Relaxed) > 0 { ; }
 
                 // main loop (do warmup first)
-                let mut n: usize = 7877 * t; // offset all threads
+                let mut n: usize = 7877 * (t+1); // offset all threads
                 for x in 0..2 {
                 //loop {
                     let mut ops = 0usize;
                     let now = Instant::now();
-                    while now.elapsed().as_secs() < 15 {
-                        let offset = unsafe { rdrand() as usize };
+                    while now.elapsed().as_secs() < 5 {
+                        // don't want rdrand or other generator on the
+                        // critical path, so we choose random prime as
+                        // offset, and read offsets in multiples of
+                        // that
+                        let r = unsafe { rdrand() as usize };
+                        let offset = primes[r%primes.len()];
                         match memint {
                             s @ MemPolicy::Local => {
                                 for _ in 0..1000usize {
                                     let key = sock.0*pernode + (n % pernode);
                                     let _ = nib.get_object(key as u64);
-                                    n += offset; // skip some
+                                    n *= offset; // skip some
                                     ops += 1;
                                 }
                             },
                             s @ MemPolicy::Random => {
                                 for _ in 0..1000usize {
-                                    let key = ((n % nsockets)*pernode)+(n % pernode);
+                                    let key = n % nobj;
+                                    //let key = ((n % nsockets)*pernode)+(n % pernode);
                                     let _ = nib.get_object(key as u64);
-                                    n += offset;
+                                    n *= offset;
                                     ops += 1;
                                 }
                             },
