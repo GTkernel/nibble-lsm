@@ -7,13 +7,13 @@
 CXX := g++
 CXXFLAGS := -std=c++11 -O3 -I./thirdparty/libcuckoo/src/ -Wall -Wextra
 CXXFLAGS += -msse4.2 -mtune=native -march=native -malign-double
-CXXFLAGS += -Wno-unused-variable -ggdb
+CXXFLAGS += -Wno-unused-variable
 # Configure how the memory backing the hashtable will be allocated:
 # CUCKOO_INTERLEAVE or CUCKOO_BIND0
-#CXXFLAGS += -DCUCKOO_INTERLEAVE
-CXXFLAGS += -DCUCKOO_BIND0
+CXXFLAGS += -DCUCKOO_INTERLEAVE
+#CXXFLAGS += -DCUCKOO_BIND0
 SOFLAGS := -shared -Wl,-soname,libcuckoo.so
-LDFLAGS := 
+LDFLAGS :=  -flto
 LIBS := -pthread -lcityhash -lnuma
 
 all: src/libcuckoo.so benches/cuckoo
