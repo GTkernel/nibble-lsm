@@ -10,6 +10,7 @@ echo '';echo '[ulimit]'; ulimit -a
 
 echo '';echo '[env]'; env
 
+echo '';echo '[rustc]'; rustc --version --verbose
 echo '';echo '[clang++]'; clang++ --version
 echo '';echo '[g++]'; g++ --version
 if [ -e Makefile ]; then
