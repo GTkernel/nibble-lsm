@@ -42,6 +42,7 @@ fn make_dynamic() {
         .arg(&format!("{}/cuckoo.o", outdir))
         .args(&["-std=c++11", "-O3", "-Ithirdparty/libcuckoo/src"])
         .args(&["-msse4.2", "-mtune=native", "-march=native", "-malign-double"])
+        .args(&["-DCUCKOO_INTERLEAVE"])
         .status().unwrap();
 
     Command::new("g++")
