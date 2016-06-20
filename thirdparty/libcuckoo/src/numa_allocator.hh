@@ -46,8 +46,8 @@ class NumaAllocator : public std::allocator<T> {
 
         NumaAllocator() : mask(0ul), nnodes(0ul), lvl(0) {
                 char *env = getenv(__NIBBLE_DBG_ENV);
-                lvl = strtol(env, NULL, 10);
-                if (env && lvl >= __NIBBLE_DBG_LVL)
+                if (env) lvl = strtol(env, NULL, 10);
+                if (lvl >= __NIBBLE_DBG_LVL)
                     printf("%s::%s: default constructor\n",
                             __FILE__, __func__);
             }
@@ -60,8 +60,8 @@ class NumaAllocator : public std::allocator<T> {
             : mask(1), nnodes(nnodes_), lvl(0) {
 #endif
                 char *env = getenv(__NIBBLE_DBG_ENV);
-                lvl = strtol(env, NULL, 10);
-                if (env && lvl >= __NIBBLE_DBG_LVL)
+                if (env) lvl = strtol(env, NULL, 10);
+                if (lvl >= __NIBBLE_DBG_LVL)
                     printf("%s::%s: mask 0x%lx nnodes %lu\n",
                             __FILE__, __func__, mask, nnodes);
             }
