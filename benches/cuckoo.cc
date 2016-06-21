@@ -50,8 +50,8 @@ int main(int nargs, char *args[]) {
         return 1;
     }
     size_t n = strtol(args[1], NULL, 10);
-    cout << ">> Reserving " << ((float)n/1e6) << " mil. items" << endl;
-    map->reserve(n<<1);
+    //cout << ">> Reserving " << ((float)n/1e6) << " mil. items" << endl;
+    //map->reserve(n<<1);
     cout << ">> Inserting items" << endl;
     for (uint64_t i = 0; i < n; i++)
         map->insert(i, i);
