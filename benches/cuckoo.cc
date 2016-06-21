@@ -17,6 +17,13 @@ class U64Hasher {
         }
 };
 
+// return nanosec difference
+static inline unsigned long diff(struct timespec &t1,
+        struct timespec &t2) {
+    return ((t2.tv_sec*1e9 + t2.tv_nsec)
+        - (t1.tv_sec*1e9 + t1.tv_nsec));
+}
+
 void pin_cpu(int cpu) {
     cpu_set_t mask;
     CPU_ZERO(&mask);
@@ -28,7 +35,13 @@ void pin_cpu(int cpu) {
 using K = uint64_t;
 using V = uint64_t;
 
-int main() {
+int main(int nargs, char *args[]) {
+    struct timespec t1,t2;
+
+    if (nargs != 2) {
+        fprintf(stderr, "Specify number of entries");
+        return 1;
+    }
     pin_cpu(0);
     cuckoohash_map<K,V,U64Hasher> *map =
             new cuckoohash_map<K,V,U64Hasher>(0x1ul, 2ul);
@@ -36,29 +49,36 @@ int main() {
         cerr << "Error: OOM" << endl;
         return 1;
     }
-    const size_t n = 1ul<<23;
+    size_t n = strtol(args[1], NULL, 10);
     cout << ">> Reserving " << ((float)n/1e6) << " mil. items" << endl;
     map->reserve(n<<1);
     cout << ">> Inserting items" << endl;
     for (uint64_t i = 0; i < n; i++)
         map->insert(i, i);
 
-    size_t k = 7877ul, ops = (n<<3);
+    size_t k = 7877ul, ops = 0;
     cout << ">> Warmup" << endl;
-    for (uint64_t i = 0; i < ops; i++)
-        k = 7877 * map->find(k%n);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    clock_gettime(CLOCK_MONOTONIC, &t2);
+    while ((diff(t1,t2)/1e9) < 4) {
+        for (uint64_t i = 0; i < (1ul<<10); i++) {
+            k = 7877 * map->find(k%n);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+    }
 
     cout << ">> Executing" << endl;
-    struct timespec t1,t2;
+    ops = 0;
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    for (uint64_t i = 0; i < ops; i++)
-    //while (1)
-        k = 7877 * map->find(k%n);
-        //k = map->find((rand()+k)%n);
     clock_gettime(CLOCK_MONOTONIC, &t2);
+    while ((diff(t1,t2)/1e9) < 4) {
+        for (uint64_t i = 0; i < (1ul<<10); i++)
+            k = 7877 * map->find(k%n);
+        ops += 1ul<<10;
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+    }
 
-    float sec = ((t2.tv_sec*1e9 + t2.tv_nsec)
-        - (t1.tv_sec*1e9 + t1.tv_nsec)) / 1e9;
+    float sec = diff(t1,t2)/1e9;
     cout << "Sec:  " << sec << endl;
     float kops = (((float)ops)/1e3) / sec;
     cout << "Perf: " << kops << endl;
