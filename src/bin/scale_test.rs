@@ -49,6 +49,7 @@ enum MemPolicy {
 struct Config {
     size: usize,
     capacity: usize,
+    nobject: usize,
     cpu: CPUPolicy,
     mem: MemPolicy,
 }
@@ -58,10 +59,28 @@ fn run(config: &Config) {
 
     info!("config: {:?}", config);
 
+    let mut fill: usize;
+    let nobj: usize = if config.nobject == 0 {
+        fill = ((Nibble::default_capacity() as f64) * 0.8) as usize;
+        fill/(config.size+8+8) // + header + key
+    } else {
+        fill = config.nobject * (config.size+8+8);
+        config.nobject
+    };
     info!("creating Nibble...");
     let mut nib = match config.capacity {
-        0 => Nibble::default(),
-        _ => Nibble::new(config.capacity),
+        0 => {
+            if fill > Nibble::default_capacity() {
+                panic!("nobjects too many for capacity");
+            }
+            Nibble::default()
+        },
+        _ => {
+            if fill > config.capacity {
+                panic!("nobjects too many for capacity");
+            }
+            Nibble::new(config.capacity)
+        },
     };
 
     let primes: Arc<Vec<usize>> = Arc::new(vec![
@@ -87,11 +106,6 @@ fn run(config: &Config) {
         5999129, 5933869, 1091047, 4149023, 11117611, 11976901,
         5706919, 15093643, 9159289, 10301803, 11645737, 9598019]);
 
-    info!("inserting objects...");
-    let mut fill: usize = 
-            ((nib.capacity() as f64) * 0.8) as usize;
-    let nobj: usize = fill/(config.size+8+8); // + header + key
-    fill = nobj*(config.size+8+8);
     let pernode: usize = nobj/nib.nnodes();
     info!("cap {:.3}gb fill {:.3}gb nobj {} nobj.pernode {}",
           (nib.capacity() as f64)/((1usize<<30) as f64),
@@ -278,6 +292,9 @@ fn main() {
         .arg(Arg::with_name("capacity")
              .long("capacity")
              .takes_value(true))
+        .arg(Arg::with_name("nobject")
+             .long("nobject")
+             .takes_value(true))
         .arg(Arg::with_name("mem")
              .long("mem")
              .takes_value(true))
@@ -319,6 +336,13 @@ fn main() {
             Err(_) => panic!("Object size NAN"),
         },
     };
+    let nobject = match matches.value_of("nobject") {
+        None => 0,
+        Some(s) => match usize::from_str_radix(s, 10) {
+            Ok(s) => s,
+            Err(_) => panic!("no. objects is NAN"),
+        },
+    };
     let size = match matches.value_of("size") {
         None => panic!("Specify object size"),
         Some(s) => match usize::from_str_radix(s, 10) {
@@ -327,9 +351,13 @@ fn main() {
         },
     };
 
+    // if nobject == 0, then we compute it based on filling 80% of
+    // the capacity
+
     let mut config = Config {
         size: size,
         capacity: capacity,
+        nobject: nobject,
         cpu: cpu,
         mem: mem,
     };

@@ -119,11 +119,13 @@ impl Nibble {
         }
     }
 
+    pub fn default_capacity() -> usize {
+        min_log_size!( numa::NODE_MAP.sockets() )
+    }
+
     /// Allocate Nibble with a default (small) amount of memory.
     pub fn default() -> Self {
-        let nnodes = numa::NODE_MAP.sockets();
-        let cap: usize = min_log_size!(nnodes);
-        Nibble::new(cap)
+        Nibble::new( Self::default_capacity() )
     }
 
     pub fn capacity(&self) -> usize {
