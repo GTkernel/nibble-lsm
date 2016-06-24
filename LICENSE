@@ -29,3 +29,5 @@ detailed in the source files.
 * CityHash (thirdparty/libcuckoo/lib/city.h,
 thirdparty/libcuckoo/lib/city.cc) is Copyright (c) Google, Inc. and
 has its own license, as detailed in the source files.
+
+* FNV (thirdparty/fnv) is public domain code.
