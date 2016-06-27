@@ -2384,6 +2384,39 @@ public:
         }
         return ret;
     }
+
+    // Update the value of the entry if found, and return the lock
+    // object associated with it; you must subsequently call
+    // update_release to release the lock. If not found, the value is
+    // not inserted, NULL is returned, and you do not need to invoke
+    // update_release.
+    //
+    // This method should be used when you (the caller) need to
+    // perform non-trivial work while the lock is held.  When you want
+    // to release, call update_release with the pointer passed only by
+    // this function.
+    //
+    // In Nibble, this is invoked by the compaction logic to move an
+    // object in the log, which is non-trivial work.
+    inline void* update_hold(const key_type& key, T& val) {
+        size_t hv = hashed_key(key);
+        auto b = snapshot_and_lock_two(hv);
+        const cuckoo_status st = cuckoo_update(hv,
+                b.i[0], b.i[1], key, val);
+        TwoBuckets *h = nullptr;
+        if (st == ok) {
+            // move it onto a heap-allocated object
+            h = new TwoBuckets();
+            *h = std::move(b);
+        }
+        return static_cast<void*>(h);
+    }
+
+    // Release the locks.
+    inline void update_release(void* buckets) {
+        assert(buckets);
+        delete static_cast<TwoBuckets*>(buckets);
+    }
 };
 
 #endif // _CUCKOOHASH_MAP_HH

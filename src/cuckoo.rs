@@ -3,8 +3,9 @@
 // which gets built by build.rs from cuckoo.cc
 // See: https://doc.rust-lang.org/book/ffi.html
 
-use std::ffi;
-use libc::c_char;
+//use std::ffi;
+use std::os::raw::c_void;
+use std::ptr;
 
 pub fn init(numa_mask: usize, nnodes: usize) {
     unsafe {
@@ -73,6 +74,25 @@ pub fn update(key: u64, value: usize) -> Option<usize> {
     }
 }
 
+#[inline(always)]
+pub fn update_hold(key: u64, value: usize) -> Option<*const c_void> {
+    unsafe {
+        let p: *const c_void = libcuckoo_update_hold(key, value);
+        if p.is_null() {
+            None
+        } else {
+            Some(p)
+        }
+    }
+}
+
+#[inline(always)]
+pub fn update_release(obj: *const c_void) {
+    unsafe {
+        libcuckoo_update_release(obj);
+    }
+}
+
 pub fn print_conflicts(pct: usize) {
     unsafe {
         libcuckoo_print_conflicts(pct);
@@ -82,7 +102,7 @@ pub fn print_conflicts(pct: usize) {
 /// The lower-level raw interface called by the above.
 /// Repeat the cuckoo.cc interface but in Rust syntax.
 /// We don't invoke the interface in cuckoo.cc directly; instead, use
-/// the Rust-based methods below this extern block.
+/// the Rust-based methods above this extern block.
 #[link(name = "cuckoo")]
 extern {
     // FIXME instead of &mut use *mut
@@ -97,6 +117,8 @@ extern {
     fn libcuckoo_update(key: u64, value: usize,
                         old: &mut usize) -> bool;
     fn libcuckoo_print_conflicts(pct: usize);
+    fn libcuckoo_update_hold(key: u64, value: usize) -> *const c_void;
+    fn libcuckoo_update_release(obj: *const c_void);
 }
 
 #[cfg(tests)]

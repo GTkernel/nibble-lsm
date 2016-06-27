@@ -9,6 +9,7 @@ use numa::{NodeId};
 use std::cmp;
 use std::mem;
 use std::mem::size_of;
+use std::os::raw::c_void;
 use std::ptr;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -116,6 +117,9 @@ impl BlockAllocator {
 
     pub fn len(&self) -> usize { self.pool.len() }
     pub fn freelen(&self) -> usize { self.freepool.len() }
+    pub fn freesz(&self) -> usize {
+        self.freepool.len() * BLOCK_SIZE
+    }
 
     /// Convert virtual address to containing block.
     pub fn block_of(&self, addr: usize) -> Option<BlockRef> {
@@ -418,16 +422,16 @@ impl Segment {
         self.can_hold_amt(buf.len_with_header())
     }
 
-    //
-    // --- Private methods ---
-    //
-
-    fn headref(&mut self) -> *mut u8 {
+    pub fn headref(&mut self) -> *mut u8 {
         match self.head {
             Some(va) => va as *mut u8,
             None => panic!("taking head ref but head not set"),
         }
     }
+
+    //
+    // --- Private methods ---
+    //
 
     /// Append some buffer safely across block boundaries (if needed).
     /// Caller must ensure the containing segment has sufficient
@@ -603,7 +607,7 @@ impl Iterator for SegmentIter {
         self.next_obj += 1;
 
         Some( EntryReference {
-            // TODO is this clone expensive?
+            // FIXME this clone is expensive
             blocks: self.blocks.clone().into_iter()
                 .skip(self.cur_blk).take(nblks).collect(),
             offset: self.blk_offset,
@@ -855,6 +859,10 @@ impl SegmentManager {
 
     pub fn len(&self) -> usize {
         self.size
+    }
+
+    pub fn freesz(&self) -> usize {
+        self.allocator.freesz()
     }
 
     //

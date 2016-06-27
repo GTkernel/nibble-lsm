@@ -19,6 +19,9 @@ echo N > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
 Configure how the cuckoohash_map memory is allocated in Makefile;
 either it interleaves itself on all nodes, or binds to socket 0.
 
+Currently, we cannot compact multiple segments if their total live
+size exceeds the maximum size of one segment.
+
 ----------------------------------------------------------------------
 --- Self notes below
 ----------------------------------------------------------------------

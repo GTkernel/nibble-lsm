@@ -54,11 +54,12 @@
 use common::*;
 use segment::*;
 use index::*;
+use cuckoo;
 use epoch;
 
 use std::mem;
 use std::sync::{Arc,Mutex,MutexGuard,RwLockWriteGuard,RwLock};
-use std::sync::atomic::{AtomicBool};
+use std::sync::atomic::{self,AtomicBool};
 use std::thread;
 use std::time::{Duration,Instant};
 
@@ -76,8 +77,12 @@ pub const COMPACTION_RESERVE_SEGMENTS: usize = 0;
 //      Compactor types, macros
 //==----------------------------------------------------==//
 
+/// Will update the entry for the object in the index if it exists.
+/// Returns true if it made an update, or false if it did not.
+/// Performing an update means the object is live in the log.
+//pub type UpdateFn = Box<Fn(&EntryReference, Arc<Index>, usize) -> bool>;
+
 pub type CompactorRef = Arc<Mutex< Compactor >>;
-pub type LiveFn = Box<Fn(&EntryReference, Arc<Index>) -> bool>;
 type EpochSegment = (epoch::EpochRaw, SegmentRef);
 type ReclaimQueue = SegQueue<EpochSegment>;
 type ReclaimQueueRef = Arc<ReclaimQueue>;
@@ -205,13 +210,20 @@ fn __compact(state: &Arc<RwLock<Worker>>) {
     let new = s.check_new();
     debug!("{} new candidates", new);
     let run: bool = {
-        let live: f64 = s.seginfo.live_bytes() as f64;
+        // FIXME the ratio should include the data not yet returned to
+        // the block allocator -- data waiting for reclamation
+        let remaining = s.manager.lock().unwrap().freesz() as f64;
         let total: f64 = s.mgrsize as f64;
-        (live/total) > 0.8
+        let ratio = remaining/total;
+        debug!("rem. {} total {} ratio {:.2} run: {:?}",
+               remaining, total, ratio, ratio<0.2);
+        ratio < 0.2
     };
     if run {
         debug!("compaction initiated");
         s.do_compact();
+        //let short = Duration::from_millis(100);
+        //thread::sleep(dur);
     } else {
         trace!("sleeping");
         thread::sleep(dur);
@@ -366,8 +378,15 @@ impl Worker {
         Some( (segs,tally) )
     }
 
+    /// Current implementation: iterate old segment, for each entry,
+    /// lock it, if live: migrate + unlock.  Might be more concurrent
+    /// to iterate and only check if entry is live (without holding
+    /// lock) to migrate, then afterwards, verify again if live (and
+    /// address points within OLD segment), then update.  If we
+    /// eventually use DMA, we'll need to do the latter method,
+    /// because the DMA is specifically asynchronous.
     pub fn compact(&mut self, dirty: &Vec<SegmentRef>,
-               new: &SegmentRef, isLive: &LiveFn) -> Status
+               new: &SegmentRef) -> Status
     {
         let status: Status = Ok(1);
         let mut new = new.write().unwrap();
@@ -378,22 +397,20 @@ impl Worker {
             debug!("performing compaction slot {} -> slot {}",
                    dirt.slot(), new.slot());
 
-            // get_object doesn't lock a Segment to retrieve the value
-            // since the virtual address is directly used
-
             for entry in dirt.into_iter() {
-                if isLive(&entry, self.index.clone()) {
-                    let key: u64;
-                    let va = new.append_entry(&entry);
-                    unsafe { key = entry.get_key(); }
-                    self.index.update(key, va);
+                let key: u64 = unsafe { entry.get_key() };
+                let va = new.headref() as usize;
+                if let Some(lock) = cuckoo::update_hold(key,va) {
+                    new.append_entry(&entry);
+                    // three atomics follow...
+                    atomic::fence(atomic::Ordering::SeqCst);
+                    self.seginfo.incr_live(new.slot(), entry.len);
+                    cuckoo::update_release(lock);
                 }
             }
-            // carry over the epoch state
-            self.seginfo.incr_live(new.slot(),
-                self.seginfo.swap_live(dirt.slot(), 0usize));
-        }
 
+            self.seginfo.set_live(dirt.slot(), 0usize);
+        }
 
         status
     }
@@ -430,28 +447,14 @@ impl Worker {
     /// Select a segment, grab a clean one, compact. Remove cleaned
     /// segment from candidates and notify segment manager it must be
     /// reclaimed. 
-    /// TODO FIXME we should only compact if the ratio of live bytes
-    /// to used bytes in a segment exceeds some threshold, otherwise
-    /// compaction will run in endless loops, moving data :)
     pub fn do_compact(&mut self) {
-        // liveness checking function
-        // entry: EntryReference
-        let is_live: LiveFn = Box::new( move | entry, idx | {
-            let mut key = unsafe { entry.get_key() };
-            //match idx.get(key.as_str()) {
-            match idx.get(key) {
-                Some(loc) => (loc == entry.get_loc()),
-                None => false,
-            }
-        });
-
         let (segs,livebytes) = match self.next_candidates() {
             None => { debug!("no candidates"); return; },
             Some(x) => x,
         };
         debug!("candidates: # {} livebytes {}", segs.len(), livebytes);
 
-        //self.verify(&segref, slot, &is_live);
+        //self.verify(&segref, slot, &update_fn);
 
         // livebytes may be stale by the time we start cleaning (it's ok)
         // if significant, we may TODO free more blocks after
@@ -505,7 +508,7 @@ impl Worker {
                       dur.subsec_nanos() / 1000u32);
             }
 
-            let ret = self.compact(&segs, &newseg, &is_live);
+            let ret = self.compact(&segs, &newseg);
             if ret.is_err() { panic!("compact failed"); }
 
             // monitor the new segment, too

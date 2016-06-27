@@ -222,6 +222,7 @@ pub struct Log {
     heads: Vec<LogHeadRef>,
     manager: SegmentManagerRef,
     seginfo: SegmentInfoTableRef,
+    // TODO track current capacity?
 }
 
 impl Log {
