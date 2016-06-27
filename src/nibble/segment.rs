@@ -15,9 +15,9 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use crossbeam::sync::SegQueue;
 
-pub const BLOCK_SHIFT:   usize = 20;
+pub const BLOCK_SHIFT:   usize = 18;
 pub const BLOCK_SIZE:    usize = 1 << BLOCK_SHIFT;
-pub const SEGMENT_SHIFT: usize = 27;
+pub const SEGMENT_SHIFT: usize = 25;
 pub const SEGMENT_SIZE:  usize = 1 << SEGMENT_SHIFT;
 
 //==----------------------------------------------------==//
