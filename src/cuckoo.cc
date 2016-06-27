@@ -67,6 +67,9 @@ class CStringEqual : public std::equal_to<char*> {
         }
 };
 
+// See thirdparty/libcuckoo/src/cuckoohash_map.hh for explanations of
+// the below functions used.
+
 extern "C" {
     // Value type should be a primitive, as we've coded function
     // parameters to copy-by-value (no references). If that changes,
