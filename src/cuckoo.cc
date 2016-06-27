@@ -38,8 +38,20 @@ class CStringHasher {
 
 class U64Hasher {
     public:
+        uint64_t __inline fnv(uint64_t key) const {
+            const uint64_t FNV_64_PRIME = 0x100000001b3ULL;
+            const unsigned char *bp = (unsigned char *)&key;
+            uint64_t state = 0;
+            for (size_t i = 0; i < sizeof(key); i++) {
+                state ^= (uint64_t)bp[i];
+                state *= FNV_64_PRIME;
+            }
+            return state;
+        }
+
         size_t __inline operator()(uint64_t k) const {
-            return (size_t)CityHash64((char*)&k, sizeof(k));
+            return (size_t)fnv(k);
+            //return (size_t)CityHash64((char*)&k, sizeof(k));
         }
 };
 
