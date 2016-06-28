@@ -366,12 +366,11 @@ impl Worker {
                 let guard = seg.read().unwrap();
                 guard.slot()
             };
-            let live = self.seginfo.get_live(slot);
-            if tally + live > SEGMENT_SIZE {
+            tally += self.seginfo.get_live(slot);
+            if tally > SEGMENT_SIZE {
                 guard.push(seg);
                 break;
             }
-            tally += live;
             segs.push(seg);
         }
         assert!(segs.len() > 0, "next candidate list is empty");
