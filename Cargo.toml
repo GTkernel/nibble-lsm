@@ -19,6 +19,7 @@ quicksort = "1.0.0"
 clap = "2.5.1"
 syscall = "0.2.1"
 #clippy = "*"
+num = "0.1.32"
 
 [features]
 default = ["epoch-tsc"]
@@ -33,5 +34,5 @@ opt-level = 3
 debug-assertions = false
 # lto=true debug=true -> LLVM bugs, so do not mix
 # https://github.com/rust-lang/rust/issues/34122
-debug = false
-lto = true
+debug = true
+lto = false
