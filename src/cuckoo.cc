@@ -182,9 +182,10 @@ extern "C" {
     //      std::ptr::null<std::os::raw::c_void>()
     // C++ -> Rust
     //      c_void
-    void* libcuckoo_update_hold(const KType key, VType value) {
+    void* libcuckoo_update_hold_ifeq(const KType key,
+            VType value, VType cmp) {
         assert(cuckoomap);
-        return cuckoomap->update_hold(key, value);
+        return cuckoomap->update_hold_ifeq(key, value, cmp);
     }
 
     void libcuckoo_update_release(void *lock_obj) {

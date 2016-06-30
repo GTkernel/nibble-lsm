@@ -7,6 +7,8 @@
 use std::os::raw::c_void;
 use std::ptr;
 
+pub type CVoidPointer = *const c_void;
+
 pub fn init(numa_mask: usize, nnodes: usize) {
     unsafe {
         libcuckoo_init(numa_mask, nnodes);
@@ -75,9 +77,11 @@ pub fn update(key: u64, value: usize) -> Option<usize> {
 }
 
 #[inline(always)]
-pub fn update_hold(key: u64, value: usize) -> Option<*const c_void> {
+pub fn update_hold_ifeq(key: u64, value: usize, cmp: usize)
+    -> Option<CVoidPointer> {
     unsafe {
-        let p: *const c_void = libcuckoo_update_hold(key, value);
+        let p: CVoidPointer;
+        p = libcuckoo_update_hold_ifeq(key, value, cmp);
         if p.is_null() {
             None
         } else {
@@ -117,8 +121,9 @@ extern {
     fn libcuckoo_update(key: u64, value: usize,
                         old: &mut usize) -> bool;
     fn libcuckoo_print_conflicts(pct: usize);
-    fn libcuckoo_update_hold(key: u64, value: usize) -> *const c_void;
-    fn libcuckoo_update_release(obj: *const c_void);
+    fn libcuckoo_update_hold_ifeq(key: u64, value: usize,
+                                  cmp: usize) -> CVoidPointer;
+    fn libcuckoo_update_release(obj: CVoidPointer);
 }
 
 #[cfg(tests)]

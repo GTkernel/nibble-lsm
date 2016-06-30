@@ -27,6 +27,8 @@
 #include <utility>
 #include <vector>
 
+#include <stdio.h>
+
 #include "cuckoohash_config.hh"
 #include "cuckoohash_util.hh"
 #include "lazy_array.hh"
@@ -1499,6 +1501,28 @@ private:
         return false;
     }
 
+    template <typename V>
+    bool try_update_bucket_ifeq(const partial_t partial, Bucket& b,
+                           const key_type &key, V&& val, V&& cmp) {
+        for (size_t i = 0; i < slot_per_bucket; ++i) {
+            if (!b.occupied(i)) {
+                continue;
+            }
+            if (!is_simple && b.partial(i) != partial) {
+                continue;
+            }
+            if (eqfn()(b.key(i), key)) {
+                // XXX HACK -- we assume V is a primitive type
+                if (b.val(i) == std::forward<V>(cmp)) {
+                    b.val(i) = std::forward<V>(val);
+                    return true;
+                }
+                break;
+            }
+        }
+        return false;
+    }
+
     // same as try_update_bucket but returns old value and inserts
     // value if it does not exist
     bool try_update_bucket2(const partial_t partial, Bucket& b,
@@ -1754,6 +1778,28 @@ private:
             return ok;
         }
         return failure_key_not_found;
+    }
+
+    // cuckoo_update_ifeq searches the table for the given key and
+    // updates its value to the specified new value if i. it finds the
+    // entry and ii. the stored value is equal to the provided
+    // comparison value.  It expects the locks to be taken and
+    // released outside the function.
+    template <typename V>
+    cuckoo_status cuckoo_update_ifeq(const size_t hv, const size_t i1,
+            const size_t i2, const key_type &key, V&& val, V&& cmp) {
+        const partial_t partial = partial_key(hv);
+        if (try_update_bucket_ifeq(partial, buckets_[i1], key,
+                              std::forward<V>(val),
+                              std::forward<V>(cmp))) {
+            return ok;
+        }
+        if (try_update_bucket_ifeq(partial, buckets_[i2], key,
+                              std::forward<V>(val),
+                              std::forward<V>(cmp))) {
+            return ok;
+        }
+        return failure;
     }
 
     // same as cuckoo_update but returns old value and inserts value
@@ -2385,11 +2431,11 @@ public:
         return ret;
     }
 
-    // Update the value of the entry if found, and return the lock
-    // object associated with it; you must subsequently call
-    // update_release to release the lock. If not found, the value is
-    // not inserted, NULL is returned, and you do not need to invoke
-    // update_release.
+    // If the entry is found and is equal the given value, update the
+    // entry and return the lock object associated with it; you must
+    // subsequently call update_release to release the lock. If not
+    // found, the value is not inserted, NULL is returned, and you do
+    // not need to invoke update_release.
     //
     // This method should be used when you (the caller) need to
     // perform non-trivial work while the lock is held.  When you want
@@ -2398,11 +2444,12 @@ public:
     //
     // In Nibble, this is invoked by the compaction logic to move an
     // object in the log, which is non-trivial work.
-    inline void* update_hold(const key_type& key, T& val) {
+    inline void* update_hold_ifeq(const key_type& key,
+            T& update, T& cmp) {
         size_t hv = hashed_key(key);
         auto b = snapshot_and_lock_two(hv);
-        const cuckoo_status st = cuckoo_update(hv,
-                b.i[0], b.i[1], key, val);
+        const cuckoo_status st = cuckoo_update_ifeq(hv,
+                b.i[0], b.i[1], key, update, cmp);
         TwoBuckets *h = nullptr;
         if (st == ok) {
             // move it onto a heap-allocated object
