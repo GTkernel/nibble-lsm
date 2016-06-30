@@ -5,6 +5,7 @@
 use segment::*;
 use common::*;
 use memory::*;
+use clock::rdtsc;
 
 use std::cell::UnsafeCell;
 use std::sync::atomic;
@@ -151,15 +152,6 @@ pub type EpochRaw = u64;
 
 /// Special-case value of EpochRaw meaning the value is non-existent.
 pub const EPOCH_QUIESCE: u64 = 0;
-
-#[inline(always)]
-#[allow(unused_mut)]
-pub unsafe fn rdtsc() -> u64 {
-    let mut low: u32;
-    let mut high: u32;
-    asm!("rdtsc" : "={eax}" (low), "={edx}" (high));
-    ((high as u64) << 32) | (low as u64)
-}
 
 /// Read the current value of the epoch.
 #[inline(always)]

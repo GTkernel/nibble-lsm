@@ -11,5 +11,6 @@ pub mod thelog;
 pub mod epoch;
 pub mod numa;
 pub mod sched;
+pub mod clock;
 
 pub mod logger;
