@@ -15,10 +15,20 @@ pub type PointerMut = Option<*mut u8>;
 //      Random stuff
 //==----------------------------------------------------==//
 
+/// Generate 32-bit random numbers via the CPU's rdrand instruction.
 #[inline(always)]
 #[allow(unused_mut)]
 pub unsafe fn rdrand() -> u32 {
     let mut r: u32;
+    asm!("rdrand $0" : "=r" (r));
+    r
+}
+
+/// Generate 64-bit random numbers via the CPU's rdrand instruction.
+#[inline(always)]
+#[allow(unused_mut)]
+pub unsafe fn rdrandq() -> u64 {
+    let mut r: u64;
     asm!("rdrand $0" : "=r" (r));
     r
 }
