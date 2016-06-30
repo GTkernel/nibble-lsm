@@ -276,6 +276,31 @@ impl Nibble {
     pub fn nlive(&self) -> usize {
         self.index.len()
     }
+
+    #[cfg(IGNORE)]
+    pub fn dump_seg_info(&self) {
+        for node in &self.nodes {
+            let mgr = node.manager.lock().unwrap();
+            mgr.dump_seg_info();
+        }
+    }
+
+    // hack
+    #[cfg(IGNORE)]
+    #[inline(always)]
+    pub fn seg_of(&mut self, key: u64) -> Option<usize> {
+        epoch::pin();
+        let va: usize;
+        match self.index.get(key) {
+            None => return None,
+            Some(v) => va = v,
+        }
+        match self.nodes[0].manager.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(manager) => manager.segment_of(va),
+        }
+    }
+
 }
 
 //==----------------------------------------------------==//
