@@ -42,11 +42,13 @@ impl Block {
         Block { addr: addr, len: len, slot: slot, seg: None }
     }
 
+    // FIXME put a memory fence
     pub unsafe fn set_segment(&self, seg: usize) {
         let p: *mut Option<usize> = mem::transmute(&self.seg);
         ptr::write(p, Some(seg));
     }
 
+    // FIXME put a memory fence
     pub unsafe fn clear_segment(&self) {
         let p: *mut Option<usize> = mem::transmute(&self.seg);
         ptr::write(p, None);
@@ -326,14 +328,23 @@ impl Segment {
     }
 
     /// Copy an entry from one set of blocks to this segment. Used by
-    /// the compaction logic. Returns address of relocated entry.
+    /// the compaction logic. Returns address of relocated entry, or
+    /// None if no space is available.  Specify whether upon
+    /// expansion, the segment is allowed to allocate additional
+    /// blocks.
     /// TODO optimize to know when the blocks are contiguous
     /// TODO optimize for large objects: transfer whole blocks?
     /// TODO use Pointer or something to represent return address
     /// nearly verbatim overlap with EntryReference::copy_out
-    pub fn append_entry(&mut self, entry: &EntryReference) -> usize {
+    pub fn append_entry(&mut self, entry: &EntryReference)
+        -> Option<usize> {
         assert_eq!(self.head.is_some(), true);
-        assert_eq!(self.can_hold_amt(entry.len), true);
+
+        if !self.can_hold_amt(entry.len) {
+            debug!("cannot append: need {} have {}",
+                   entry.len, self.rem);
+            return None;
+        }
 
         let new_va = self.headref() as usize;
 
@@ -359,7 +370,7 @@ impl Segment {
         self.nobj += 1;
         self.update_header(1);
 
-        new_va
+        Some(new_va)
     }
 
     pub fn close(&mut self) {

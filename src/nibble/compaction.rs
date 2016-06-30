@@ -54,9 +54,12 @@
 use common::*;
 use segment::*;
 use index::*;
+use thelog::*;
+use clock;
 use cuckoo;
 use epoch;
 
+use std::collections::VecDeque;
 use std::mem;
 use std::sync::{Arc,Mutex,MutexGuard,RwLockWriteGuard,RwLock};
 use std::sync::atomic::{self,AtomicBool};
@@ -306,7 +309,7 @@ impl Worker {
         }
     }
 
-    #[cfg(IGNORE)]
+    //#[cfg(IGNORE)]
     fn __dump_candidates(&self, guard: &MutexGuard<Vec<SegmentRef>>) {
         debug!("sorted candidates:");
         let mut i: usize = 0;
@@ -318,33 +321,72 @@ impl Worker {
             i += 1;
         }
     }
-    //#[cfg(IGNORE)]
+    #[cfg(IGNORE)]
     fn __dump_candidates(&self, guard: &MutexGuard<Vec<SegmentRef>>) { ; }
 
+    fn nlive(&self, seg: &SegmentRef) -> usize {
+        let seg = seg.read().unwrap();
+        debug!("verifying seg {}", seg.slot());
+        let mut live: usize = 0;
+        for entry in &*seg {
+            let va = entry.get_loc();
+            let key = unsafe { entry.get_key() };
+            if let Some(old) = self.index.get(key) {
+                live += (old == va) as usize;
+            }
+        }
+        debug!("found #live {} in seg {}",live, seg.slot());
+        live
+    }
+
+
+    // XXX if you have segment candidates with 0 live bytes, we just
+    // move them directly to reclamation. if, in the set of
+    // candidates, we have only one with >0 live bytes, we don't even
+    // do compaction, then.
+    //
+    // I don't think we should try to allow candidates to be compacted
+    // if they have no stale memory.
+    //
+    // Maybe we should have a pre-filter that will check for
+    // zero-sized segments and just move them automatically to
+    // reclamation? Or we make the compaction logic itself just change
+    // its behavior based on the composition of the candidates.
+    //
+    // HOw do we handle the contingency that a segment is less than
+    // SEGMENT_SIZE but all entries are live? With many of these, the
+    // nubmer of segments needed will grow (and thus use more segment
+    // slots). At some point, we'd need to merge these. Cheaper to
+    // merge the blocks into another segment, but that may break
+    // contiguity. TO support this, might add some metadata into
+    // struct Segment to indicate where the continuity breakage is, to
+    // avoid actually shifting the objects.
+
     /// Pick a set of candidate segments and remove them from the set.
-    /// Return that set of candidates with their tally of live bytes.
+    /// Return the set of candidates and their total live bytes.
     /// TODO use a lazy, batch iterator to get best-N segments, like
     /// https://github.com/benashford/rust-lazysort
     /// TODO create a candidates object instead?
-    pub fn next_candidates(&mut self) -> Option<(Vec<SegmentRef>,usize)> {
-        let mut segs: Vec<SegmentRef> = Vec::new();
-        let mut guard = self.candidates.lock().unwrap();
+    /// TODO allow compaction to multiple destination segments, prob.
+    /// needed when the system capacity reaches near-full
+    ///
+    /// NOTE: this is a bin-packing problem at its heart (specifically
+    /// a knapsack problem). All we do now is sort segments and pick
+    /// the top N that roughly fit within a new segment.
+    pub fn next_candidates(&mut self)
+        -> Option<(Vec<SegmentRef>,usize)> {
+
+        let mut candidates = self.candidates.lock().unwrap();
+
         // this if-stmt shouldn't actually execute if compaction
         // thread only runs when we have lots of dirty segments
-        if guard.len() == 0 {
+        if candidates.len() == 0 {
             return None;
         }
-        // optimization. if all candidates fit in a seg, return all
-        let total = guard.iter()
-            .fold(0usize, |acc,segref| {
-                  let guard = segref.read().unwrap();
-                  acc + self.seginfo.get_live(guard.slot())
-            });
-        if total < SEGMENT_SIZE {
-            mem::swap(&mut segs, &mut *guard);
-            return Some( (segs,total) );
-        }
-        // slow path (common?)
+
+        // FIXME try to acquire the slot# without locking
+        // FIXME can we just extract all slot# and sort an array of
+        // integer values instead?
         let pred = | a: &SegmentRef, b: &SegmentRef | {
             let (sa,sb) = {
                 let guarda = a.read().unwrap();
@@ -355,26 +397,96 @@ impl Worker {
             self.seginfo.get_live(sb)
                 .cmp(&self.seginfo.get_live(sa))
         };
-        quicksort::quicksort_by(guard.as_mut_slice(), pred);
-        self.__dump_candidates(&guard);
+
+        quicksort::quicksort_by(candidates.as_mut_slice(), pred);
+        self.__dump_candidates(&candidates);
+
         // grab enough candidates to fill one segment
-        segs = Vec::new();
+
+        // pre-allocate to avoid resizing
+        let mut segs: Vec<SegmentRef>;
+        segs = Vec::with_capacity(32);
+
+        // total live bytes in candidates we return
         let mut tally: usize = 0;
+
+        // our own reclamation list
+        let mut empties: VecDeque< (epoch::EpochRaw,SegmentRef) >;
+        empties = VecDeque::with_capacity(32);
+
         while tally < SEGMENT_SIZE {
-            let seg = guard.pop().unwrap();
-            let slot = {
-                let guard = seg.read().unwrap();
-                guard.slot()
+            let seg = match candidates.pop() {
+                None => break, // none left
+                Some(s) => s,
             };
-            tally += self.seginfo.get_live(slot);
-            if tally > SEGMENT_SIZE {
-                guard.push(seg);
+            let (slot,len) = {
+                let guard = seg.read().unwrap();
+                (guard.slot(),guard.len())
+            };
+
+            let live = self.seginfo.get_live(slot);
+            // arbitrary for now FIXME
+            let too_full: bool = (len - live) <
+                (mem::size_of::<EntryHeader>() << 3);
+
+            // filter out segments that cannot be compacted
+            if live == 0 {
+                debug!("slot {} zero bytes -> reclamation", slot);
+                //assert_eq!(self.nlive(&seg), 0usize);
+                //self.reclaim_glob.push( (epoch::next(), seg) );
+                empties.push_back( (epoch::next(),seg) );
+            }
+            // skip if it has no free space
+            else if too_full {
+                debug!("slot {} not enough free space: {}",
+                       slot, len-live);
+                candidates.push(seg);
+            }
+            // too much, put it back
+            else if (tally + live) > SEGMENT_SIZE {
+                debug!("slot {} would cause overflow, skipping", slot);
+                candidates.push(seg);
                 break;
             }
-            segs.push(seg);
+            // viable candidate to compact
+            else {
+                debug!("slot {} is good candidate", slot);
+                tally += live;
+                segs.push(seg);
+            }
         }
-        assert!(segs.len() > 0, "next candidate list is empty");
-        Some( (segs,tally) )
+
+        // first try to release the empties
+        if empties.len() > 0 {
+            let start = unsafe { clock::rdtsc() };
+            loop {
+                let tuple = match empties.pop_front() {
+                    None => break,
+                    Some(item) => item,
+                };
+                while match epoch::min() {
+                    None => false,
+                    Some(m) => m <= tuple.0,
+                } { ; } // wait
+                let mut mgr = self.manager.lock().unwrap();
+                mgr.free(tuple.1);
+            }
+            let end = unsafe { clock::rdtsc() };
+            let tim = clock::to_nano(end-start);
+            debug!("consumed {} nsec to release empties", tim);
+        }
+
+        if segs.len() == 0 {
+            debug!("No candidates to return");
+            None
+        } else if segs.len() == 1 {
+            debug!("Only 1 candidate, putting back");
+            candidates.push(segs.remove(0));
+            None
+        } else {
+            debug!("Found {} candidates", segs.len());
+            Some( (segs,tally) )
+        }
     }
 
     /// Current implementation: iterate old segment, for each entry,
@@ -390,25 +502,63 @@ impl Worker {
         let status: Status = Ok(1);
         let mut new = new.write().unwrap();
 
-        self.seginfo.set_live(new.slot(), 0usize);
+        assert_eq!(self.seginfo.get_live(new.slot()), 0usize);
+
+        let mut bytes_appended = 0usize;
         for segref in dirty {
             let dirt = segref.read().unwrap();
-            debug!("performing compaction slot {} -> slot {}",
-                   dirt.slot(), new.slot());
+            debug!("compaction {} (live {} total {} entries {}) -> {}",
+                   dirt.slot(), self.seginfo.get_live(dirt.slot()),
+                   dirt.len(), dirt.nobjects(), new.slot());
 
+            let mut n = 0usize;
+            let mut live_count = 0usize;
             for entry in dirt.into_iter() {
                 let key: u64 = unsafe { entry.get_key() };
                 let va = new.headref() as usize;
-                if let Some(lock) = cuckoo::update_hold(key,va) {
-                    new.append_entry(&entry);
+
+                // Lock the object while we relocate.  If object
+                // doesn't exist or it points to another location
+                // (i.e. it is stale), we skip it.
+                let old = entry.get_loc();
+                if let Some(lock) = cuckoo::update_hold_ifeq(key,va,old) {
+                    live_count += 1;
+
+                    // try append; if fail, extend, try again
+                    if let None = new.append_entry(&entry) {
+                        debug!("extending segment; entry {}",n);
+                        let mut manager = self.manager.lock().unwrap();
+                        match manager.alloc_blocks(1) {
+                            Some(mut blocks) =>
+                                new.extend(&mut blocks),
+                            None => panic!("OOM"), // FIXME spin?
+                        }
+                        debug!("retrying append");
+                        if let None = new.append_entry(&entry) {
+                            // can only happen if obj > block
+                            panic!("OOM?");
+                        }
+                    }
+
                     // three atomics follow...
                     atomic::fence(atomic::Ordering::SeqCst);
                     self.seginfo.incr_live(new.slot(), entry.len);
+
+                    // release object
                     cuckoo::update_release(lock);
+
+                    bytes_appended += entry.len;
                 }
+
+                n += 1;
             }
 
+            // make sure nobjects is consistent with the iterator
+            assert_eq!(n, dirt.nobjects());
+
             self.seginfo.set_live(dirt.slot(), 0usize);
+            debug!("appended {}", bytes_appended);
+            bytes_appended = 0usize;
         }
 
         status
@@ -463,7 +613,7 @@ impl Worker {
         if livebytes > 0  {
             // allocate new segment
             let mut newseg: SegmentRef;
-            let nblks = ((livebytes-1)/BLOCK_SIZE)+1;
+            let nblks = (livebytes+(BLOCK_SIZE-1))/BLOCK_SIZE;
             debug!("allocating new segment #blks {}",nblks);
             let mut retries = 0;
             let start = Instant::now();
