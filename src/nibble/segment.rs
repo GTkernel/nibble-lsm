@@ -277,18 +277,15 @@ impl Segment {
     /// TODO need unit test
     pub fn extend(&mut self, blocks: &mut BlockRefPool) {
         assert!(self.blocks.len() > 0);
-        match self.head {
-            // segment was empty
-            None => {
-                self.curblk = Some(0);
-                self.head = Some(blocks[0].addr);
-                self.front = Some(blocks[0].addr);
-            },
-            _ => {},
+        if let None = self.head {
+            self.curblk = Some(0);
+            self.head = Some(blocks[0].addr);
+            self.front = Some(blocks[0].addr);
         }
         let mut len = 0 as usize;
         for b in blocks.iter() {
             len += b.len;
+            unsafe { b.set_segment(self.slot); }
         }
         self.len += len;
         self.rem += len;
@@ -379,6 +376,14 @@ impl Segment {
 
     pub fn slot(&self) -> usize {
         self.slot
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn remaining(&self) -> usize {
+        self.rem
     }
 
     /// Increment values in header by specified amount
@@ -646,9 +651,7 @@ impl EntryReference {
     /// Copy out the key
     pub unsafe fn get_key(&self) -> u64 {
         let mut offset = self.offset + size_of::<EntryHeader>();
-        let block  = offset / BLOCK_SIZE;
-        offset = offset % BLOCK_SIZE;
-        let mut va = self.blocks[block].addr + offset;
+        let mut va = self.blocks[0].addr + offset;
         ptr::read(va as *const u64)
     }
 
@@ -823,6 +826,13 @@ impl SegmentManager {
         self.free_slots.push(slot as u32);
     }
 
+    /// Directly allocate raw blocks without a containing segment.
+    pub fn alloc_blocks(&mut self, count: usize)
+        -> Option<BlockRefPool> {
+        debug!("allocating {} blocks out-of-band", count);
+        self.allocator.alloc(count)
+    }
+
     pub fn segment_of(&self, va: usize) -> Option<usize> {
         let mut ret: Option<usize> = None;
         if let Some(block) = self.allocator.block_of(va) {
@@ -863,6 +873,19 @@ impl SegmentManager {
 
     pub fn freesz(&self) -> usize {
         self.allocator.freesz()
+    }
+
+    // hack
+    #[cfg(IGNORE)]
+    pub fn dump_seg_info(&self) {
+        for opt in self.segments.iter() {
+            if let Some(ref segref) = *opt {
+                let seg = segref.read().unwrap();
+                println!("socket {:?} seg {} rem {} len {}",
+                         self.socket, seg.slot(),
+                         seg.remaining(), seg.len());
+            }
+        }
     }
 
     //
