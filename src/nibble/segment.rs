@@ -11,7 +11,7 @@ use std::mem;
 use std::mem::size_of;
 use std::os::raw::c_void;
 use std::ptr;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{atomic, Arc, Mutex, RwLock};
 
 use crossbeam::sync::SegQueue;
 
@@ -42,16 +42,16 @@ impl Block {
         Block { addr: addr, len: len, slot: slot, seg: None }
     }
 
-    // FIXME put a memory fence
     pub unsafe fn set_segment(&self, seg: usize) {
         let p: *mut Option<usize> = mem::transmute(&self.seg);
         ptr::write(p, Some(seg));
+        atomic::fence(atomic::Ordering::SeqCst);
     }
 
-    // FIXME put a memory fence
     pub unsafe fn clear_segment(&self) {
         let p: *mut Option<usize> = mem::transmute(&self.seg);
         ptr::write(p, None);
+        atomic::fence(atomic::Ordering::SeqCst);
     }
 
     pub fn addr(&self) -> usize { self.addr }
