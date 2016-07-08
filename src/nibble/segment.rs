@@ -539,8 +539,8 @@ impl Drop for Segment {
 }
 
 impl<'a> IntoIterator for &'a Segment {
-    type Item = EntryReference;
-    type IntoIter = SegmentIter;
+    type Item = EntryReference<'a>;
+    type IntoIter = SegmentIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         SegmentIter::new(self)
@@ -554,34 +554,34 @@ impl<'a> IntoIterator for &'a Segment {
 /// Iterator for a Segment.  We expect a segment to be iterated over
 /// by one thread at a time.  The compactor will check liveness of
 /// each entry, not us.
-pub struct SegmentIter {
-    blocks: BlockRefPool,
+pub struct SegmentIter<'a> {
     n_obj: usize,
     blk_offset: usize,
     cur_blk: usize,
     seg_offset: usize,
     next_obj: usize,
+    blocks: &'a [BlockRef],
 }
 
-impl SegmentIter {
+impl<'a> SegmentIter<'a> {
 
-    pub fn new(seg: &Segment) -> Self {
+    pub fn new(seg: &'a Segment) -> Self {
         let offset = SegmentHeader::len();
         SegmentIter {
-            blocks: seg.blocks.clone(), // refs to blocks
             n_obj: seg.nobj,
             blk_offset: offset,
             cur_blk: 0,
             seg_offset: offset,
             next_obj: 0,
+            blocks: seg.blocks.as_slice(),
         }
     }
 }
 
-impl Iterator for SegmentIter {
-    type Item = EntryReference;
+impl<'a> Iterator for SegmentIter<'a> {
+    type Item = EntryReference<'a>;
 
-    fn next(&mut self) -> Option<EntryReference> {
+    fn next(&mut self) -> Option<EntryReference<'a>> {
         if self.next_obj >= self.n_obj {
             return None;
         }
@@ -622,14 +622,13 @@ impl Iterator for SegmentIter {
 
         self.next_obj += 1;
 
+        let last_blk = self.cur_blk + nblks;
         Some( EntryReference {
-            // FIXME this clone is expensive
-            blocks: self.blocks.clone().into_iter()
-                .skip(self.cur_blk).take(nblks).collect(),
             offset: self.blk_offset,
             len: entry_len,
             keylen: entry.getkeylen(),
             datalen: entry.getdatalen(),
+            blocks: &self.blocks[self.cur_blk..last_blk],
         } )
     }
 }
@@ -643,17 +642,17 @@ impl Iterator for SegmentIter {
 /// provides that function) and ii) we want to avoid copying objects
 /// each time a reference is passed around; we lazily copy the object
 /// from the log only when a client asks for it
-pub struct EntryReference {
-    pub blocks: BlockRefPool,
+pub struct EntryReference<'a> {
     pub offset: usize, // into first block
     pub len: usize, /// header + key + data
     pub keylen: u32,
     pub datalen: u32,
+    pub blocks: &'a [BlockRef],
 }
 
 // TODO optimize for cases where the blocks are contiguous
 // copying directly, or avoid copying (provide reference to it)
-impl EntryReference {
+impl<'a> EntryReference<'a> {
 
     pub fn get_loc(&self) -> usize {
         self.offset + self.blocks[0].addr
