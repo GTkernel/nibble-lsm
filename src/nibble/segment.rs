@@ -29,10 +29,10 @@ pub const SEGMENT_SIZE:  usize = 1 << SEGMENT_SHIFT;
 /// FIXME seg may alias others across NUMA domains
 #[derive(Debug)]
 pub struct Block {
-    addr: usize,
-    len: usize,
-    slot: usize,
-    seg: Option<usize>,
+    pub addr: usize,
+    pub len: usize,
+    pub slot: usize,
+    pub seg: Option<usize>,
 }
 
 impl Block {
@@ -53,12 +53,6 @@ impl Block {
         ptr::write(p, None);
         atomic::fence(atomic::Ordering::SeqCst);
     }
-
-    pub fn addr(&self) -> usize { self.addr }
-    pub fn len(&self)  -> usize { self.len }
-    pub fn slot(&self) -> usize { self.slot }
-    pub fn seg(&self)  -> Option<usize> { self.seg }
-
 }
 
 pub type BlockRef = Arc<Block>;
@@ -634,88 +628,6 @@ impl<'a> Iterator for SegmentIter<'a> {
 }
 
 //==----------------------------------------------------==//
-//      Entry reference
-//==----------------------------------------------------==//
-
-/// Reference to entry in the log. Used by Segment iterators since i)
-/// items in memory don't have an associated language type (this
-/// provides that function) and ii) we want to avoid copying objects
-/// each time a reference is passed around; we lazily copy the object
-/// from the log only when a client asks for it
-pub struct EntryReference<'a> {
-    pub offset: usize, // into first block
-    pub len: usize, /// header + key + data
-    pub keylen: u32,
-    pub datalen: u32,
-    pub blocks: &'a [BlockRef],
-}
-
-// TODO optimize for cases where the blocks are contiguous
-// copying directly, or avoid copying (provide reference to it)
-impl<'a> EntryReference<'a> {
-
-    pub fn get_loc(&self) -> usize {
-        self.offset + self.blocks[0].addr
-    }
-
-    /// Copy out the key
-    pub unsafe fn get_key(&self) -> u64 {
-        let mut offset = self.offset + size_of::<EntryHeader>();
-        let mut va = self.blocks[0].addr + offset;
-        ptr::read(va as *const u64)
-    }
-
-    /// Copy out the value
-    pub unsafe fn get_data(&self, out: *mut u8) {
-        let mut offset = self.offset + self.len
-                            - self.datalen as usize;
-        let block  = offset / BLOCK_SIZE;
-        offset = offset % BLOCK_SIZE;
-        self.copy_out(out, block, offset, self.datalen as usize)
-    }
-
-    //
-    // --- Private methods ---
-    //
-
-    /// TODO clean up code
-    /// nearly verbatim overlap with Segment::append_entry
-    unsafe fn copy_out(&self, out: *mut u8,
-                       block: usize, offset: usize,
-                       remaining: usize) {
-        // reassign as mutable
-        let mut block = block;
-        let mut remaining = remaining;
-
-        let mut src: *const u8;
-        let mut dst: *mut u8;
-
-        // Logical offset into new buffer
-        let mut poffset: usize = 0;
-
-        let mut va = self.blocks[block].addr + offset;
-        let mut amt = cmp::min(BLOCK_SIZE - offset, remaining);
-        src = va as *const u8;
-        dst = ((out as usize) + poffset) as *mut u8;
-        ptr::copy_nonoverlapping(src, dst, amt);
-        remaining -= amt;
-        poffset += amt;
-        block += 1;
-
-        while remaining > 0 {
-            va = self.blocks[block].addr;
-            amt = cmp::min(BLOCK_SIZE, remaining);
-            src = va as *const u8;
-            dst = ((out as usize) + poffset) as *mut u8;
-            ptr::copy_nonoverlapping(src, dst, amt);
-            remaining -= amt;
-            poffset += amt;
-            block += 1;
-        }
-    }
-}
-
-//==----------------------------------------------------==//
 //      Segment manager
 //==----------------------------------------------------==//
 
@@ -846,7 +758,7 @@ impl SegmentManager {
     pub fn segment_of(&self, va: usize) -> Option<usize> {
         let mut ret: Option<usize> = None;
         if let Some(block) = self.allocator.block_of(va) {
-            if let Some(idx) = block.seg() {
+            if let Some(idx) = block.seg {
                 assert!(idx < self.segments.len());
                 ret = Some(idx);
             }
