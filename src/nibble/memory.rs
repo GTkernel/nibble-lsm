@@ -61,6 +61,11 @@ impl Buffer {
     pub fn getaddr(&self) -> usize { self.addr }
     pub fn getlen(&self) -> usize { self.len }
 
+
+    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.addr as *mut usize as *mut u8
+    }
+
     // TODO append()
 }
 
