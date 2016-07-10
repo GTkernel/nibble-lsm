@@ -340,7 +340,7 @@ impl EpochTable {
     }
 }
 
-#[cfg(test)]
+#[cfg(IGNORE)]
 mod tests {
     use super::*;
     use super::read;

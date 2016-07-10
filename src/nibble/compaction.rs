@@ -756,7 +756,7 @@ impl Worker {
 //      Unit tests
 //==----------------------------------------------------==//
 
-#[cfg(IGNORE)]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -776,6 +776,7 @@ mod tests {
 
     use super::super::logger;
 
+    #[cfg(IGNORE)]
     #[test]
     fn add_segments() {
         logger::enable();
@@ -795,6 +796,7 @@ mod tests {
     }
 
     /// Big beasty compaction test. TODO break down into smaller tests
+    #[cfg(IGNORE)]
     #[test]
     fn compact_two() {
         logger::enable();
@@ -926,6 +928,7 @@ mod tests {
         unsafe { deallocate::<u8>(buf, total as usize); }
     }
 
+    #[cfg(IGNORE)]
     #[test]
     fn try_compact() {
         logger::enable();

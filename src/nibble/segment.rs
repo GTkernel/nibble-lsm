@@ -868,6 +868,7 @@ mod tests {
     use super::super::logger;
 
     #[test]
+    #[cfg(IGNORE)]
     fn block() {
         logger::enable();
         let b = Block::new(42, 0, 37);
@@ -878,6 +879,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(IGNORE)]
     fn block_allocator_alloc_all() {
         logger::enable();
         let num = 64;
@@ -903,6 +905,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(IGNORE)]
     fn alloc_segment() {
         logger::enable();
         let num = 64;
@@ -925,6 +928,7 @@ mod tests {
     // TODO free blocks of segment (e.g. after compaction)
 
     #[test]
+    #[cfg(IGNORE)]
     fn segment_manager_alloc_all() {
         logger::enable();
         let memlen = 1<<30;
@@ -945,6 +949,7 @@ mod tests {
     /// there should be only one live object in the log.
     /// lots of copy/paste...
     #[test]
+    #[cfg(IGNORE)]
     fn segment_manager_one_obj_overwrite() {
         logger::enable();
         let memlen = 1<<27;

@@ -126,7 +126,7 @@ extern {
     fn libcuckoo_update_release(obj: CVoidPointer);
 }
 
-#[cfg(tests)]
+#[cfg(IGNORE)]
 mod test {
     fn init() {
         super::init();

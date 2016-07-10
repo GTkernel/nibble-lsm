@@ -19,7 +19,7 @@ use nibble::segment::{ObjDesc,SEGMENT_SIZE};
 use nibble::common::ErrorCode;
 use nibble::cuckoo;
 
-#[test]
+#[cfg(IGNORE)]
 fn direct_insert() {
     logger::enable();
     cuckoo::init();
@@ -51,7 +51,7 @@ fn direct_insert() {
     assert_eq!(old, 0usize);
 }
 
-#[test]
+#[cfg(IGNORE)]
 fn nibble_insert() {
     logger::enable();
 

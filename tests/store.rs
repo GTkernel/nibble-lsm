@@ -34,6 +34,7 @@ use nibble::numa::NodeId;
 
 /// Allocate a bunch of objects, free some, observe compactor.
 /// We assume compactor runs continuously.
+#[cfg(IGNORE)]
 fn alloc_free(pct_to_free: f32) {
     assert!(pct_to_free <= 1.0);
     assert!(pct_to_free >= 0.0);
@@ -80,12 +81,13 @@ fn alloc_free(pct_to_free: f32) {
     thread::sleep(dur);
 }
 
+#[cfg(IGNORE)]
 #[allow(dead_code)]
 fn alloc_free_all() {
     alloc_free(1.0f32);
 }
 
-#[test]
+#[cfg(IGNORE)]
 fn alloc_free_half() {
     alloc_free(0.5f32);
 }
