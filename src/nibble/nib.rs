@@ -234,7 +234,7 @@ impl Nibble {
                key, ientry, socket, va);
 
         // 2. ask Log to give us the object
-        let buf = match self.nodes[socket]
+        let buf = match self.nodes[socket as usize]
                             .log.get_entry(va as usize) {
             None => panic!("VA has no entry?"),
             Some(b) => b,
