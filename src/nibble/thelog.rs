@@ -37,7 +37,7 @@ pub const NUM_LOG_HEADS: u32 = 1;
 ///     | EntryHeader | Key bytes | Data bytes |
 /// This struct MUST NOT contain any pointers.
 #[derive(Debug)]
-#[repr(packed)]
+#[repr(C)]
 pub struct EntryHeader {
     keylen: u32,
     datalen: u32,
