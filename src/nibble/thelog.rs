@@ -1,11 +1,13 @@
 use common::*;
+use segment;
 use segment::*;
 use epoch::*;
+use memory::*;
 
 use std::cmp;
 use std::mem::{size_of,transmute};
 use std::ptr;
-use std::sync::{Arc,Mutex};
+use std::sync::{Arc,Mutex,RwLockReadGuard};
 
 use rand::{self,Rng};
 
@@ -78,16 +80,19 @@ impl EntryHeader {
     }
 
     pub fn as_ptr(&self) -> *const u8 {
-        let addr: *const u8;
-        unsafe { addr = transmute(self); }
-        addr
+        self as *const Self as *const u8
+    }
+
+    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+        self as *mut Self as *mut u8
     }
 
     /// Give the starting address of the object in the log, provided
-    /// the address of this EntryHeader within the log.
+    /// the address of this EntryHeader within the log. Implementation
+    /// is non-trivial, as we must consider the non-contiguity of
+    /// blocks.
     pub fn data_address(&self, entry: usize) -> *const u8 {
-        (entry + size_of::<EntryHeader>() + self.keylen as usize)
-            as *mut u8
+        unimplemented!();
     }
 
     #[cfg(test)]
@@ -275,6 +280,23 @@ impl Log {
         Ok(va)
     }
 
+    /// Pull out the value for an entry within the log (not the entire
+    /// object).
+    pub fn get_entry(&self, va: usize) -> Option<Buffer> {
+        let entry: EntryReference = {
+            let guard = self.manager.lock().unwrap(); // XXX avoid
+            match guard.get_entry_ref(va) {
+                None => return None,
+                Some(e) => e,
+            }
+        };
+        let mut buf = Buffer::new(entry.datalen as usize);
+        unsafe {
+            entry.get_data(buf.as_mut_ptr());
+        }
+        Some(buf)
+    }
+
     //
     // --- Internal methods used for testing only ---
     //
@@ -292,17 +314,19 @@ impl Log {
 /// provides that function) and ii) we want to avoid copying objects
 /// each time a reference is passed around; we lazily copy the object
 /// from the log only when a client asks for it
-pub struct EntryReference<'a> {
+#[derive(Debug)]
+pub struct EntryReference {
     pub offset: usize, // into first block
     pub len: usize, /// header + key + data
     pub keylen: u32,
     pub datalen: u32,
-    pub blocks: &'a [BlockRef],
+    /// TODO can we avoid cloning the Arcs?
+    pub blocks: Vec<BlockRef>,
 }
 
 // TODO optimize for cases where the blocks are contiguous
 // copying directly, or avoid copying (provide reference to it)
-impl<'a> EntryReference<'a> {
+impl EntryReference {
 
     pub fn get_loc(&self) -> usize {
         self.offset + self.blocks[0].addr
@@ -311,58 +335,22 @@ impl<'a> EntryReference<'a> {
     /// Copy out the key
     pub unsafe fn get_key(&self) -> u64 {
         let mut offset = self.offset + size_of::<EntryHeader>();
-        let mut va = self.blocks[0].addr + offset;
-        ptr::read(va as *const u64)
+        let mut key: u64 = 0;
+        // hm, lots of overhead for copying 8 bytes
+        segment::copy_out(&self.blocks, offset,
+                          &mut key as *mut u64 as *mut u8,
+                          size_of::<u64>());
+        key
     }
 
     /// Copy out the value
     pub unsafe fn get_data(&self, out: *mut u8) {
         let mut offset = self.offset + self.len
                             - self.datalen as usize;
-        let block  = offset / BLOCK_SIZE;
-        offset = offset % BLOCK_SIZE;
-        self.copy_out(out, block, offset, self.datalen as usize)
+        segment::copy_out(&self.blocks, offset,
+                          out, self.datalen as usize);
     }
 
-    //
-    // --- Private methods ---
-    //
-
-    /// TODO clean up code
-    /// nearly verbatim overlap with Segment::append_entry
-    unsafe fn copy_out(&self, out: *mut u8,
-                       block: usize, offset: usize,
-                       remaining: usize) {
-        // reassign as mutable
-        let mut block = block;
-        let mut remaining = remaining;
-
-        let mut src: *const u8;
-        let mut dst: *mut u8;
-
-        // Logical offset into new buffer
-        let mut poffset: usize = 0;
-
-        let mut va = self.blocks[block].addr + offset;
-        let mut amt = cmp::min(BLOCK_SIZE - offset, remaining);
-        src = va as *const u8;
-        dst = ((out as usize) + poffset) as *mut u8;
-        ptr::copy_nonoverlapping(src, dst, amt);
-        remaining -= amt;
-        poffset += amt;
-        block += 1;
-
-        while remaining > 0 {
-            va = self.blocks[block].addr;
-            amt = cmp::min(BLOCK_SIZE, remaining);
-            src = va as *const u8;
-            dst = ((out as usize) + poffset) as *mut u8;
-            ptr::copy_nonoverlapping(src, dst, amt);
-            remaining -= amt;
-            poffset += amt;
-            block += 1;
-        }
-    }
 }
 
 //==----------------------------------------------------==//

@@ -5,6 +5,7 @@ use thelog::*;
 use memory::*;
 use epoch::*;
 use numa::{NodeId};
+use std::slice;
 
 use std::cmp;
 use std::mem;
@@ -21,12 +22,59 @@ pub const SEGMENT_SHIFT: usize = 25;
 pub const SEGMENT_SIZE:  usize = 1 << SEGMENT_SHIFT;
 
 //==----------------------------------------------------==//
+//      Utility functions
+//==----------------------------------------------------==//
+
+/// Read out data from the log.
+/// blocks: the set of containing blocks
+/// offset: logical from start of first block, but may refer to beyond
+/// the first block (e.g. large key or object starts very near the end
+/// of the first block)
+/// Similar implementation as in Segment::append_entry
+pub unsafe fn copy_out(blocks: &[BlockRef], offset: usize,
+                       out: *mut u8, len: usize) {
+    let mut remaining = len as isize;
+
+    // which block does offset put us in?
+    let mut idx = offset / BLOCK_SIZE;
+    let mut offset = (offset % BLOCK_SIZE) as isize;
+
+    // Logical offset into new buffer
+    let mut poffset: isize = 0;
+
+    // Copy first chunk in current block
+    let mut base = blocks[idx].addr as *const u8;
+    let mut amt = cmp::min(BLOCK_SIZE as isize - offset, remaining);
+    let from = base.offset(offset);
+    let to   = out.offset(poffset);
+    ptr::copy_nonoverlapping(from, to, amt as usize);
+
+    remaining -= amt;
+    poffset += amt;
+    idx += 1;
+
+    while remaining > 0 {
+        base = blocks[idx].addr as *const u8;
+        amt = cmp::min(BLOCK_SIZE as isize, remaining);
+        ptr::copy_nonoverlapping(base, out.offset(poffset),
+                                 amt as usize);
+        remaining -= amt;
+        poffset += amt;
+        idx += 1;
+    }
+}
+
+// TODO copy_in function?
+
+//==----------------------------------------------------==//
 //      Block structures
 //==----------------------------------------------------==//
 
 
 /// A contiguous region of virtual memory.
 /// FIXME seg may alias others across NUMA domains
+/// TODO store within each Block its Segment-specific slot to avoid
+/// having to scan the block list?
 #[derive(Debug)]
 pub struct Block {
     pub addr: usize,
@@ -139,6 +187,7 @@ impl BlockAllocator {
 /// transmuting their objects, and for ensuring the lifetime of the
 /// originating buffers exceeds that of an instance of ObjDesc used to
 /// refer to them.
+#[derive(Debug)]
 pub struct ObjDesc {
     key: u64,
     value: Pointer,
@@ -217,8 +266,13 @@ impl SegmentHeader {
 pub type SegmentRef = Arc<RwLock<Segment>>;
 pub type SegmentManagerRef = Arc<Mutex<SegmentManager>>;
 
-// TODO need metrics for computing compaction weights
-// TODO head,len,rem as atomics
+/// A Segment of data in the log, composed of many underlying
+/// non-contiguous blocks.
+/// TODO id, slot, blocks - do not change after creation.  head, len,
+/// rem, nobj, curblk, front - all change while segment is a head.
+/// once closed, nothing changes. As a head, we need to allow mutable
+/// updates to the latter, but concurrent immutable access to the
+/// former.
 #[allow(dead_code)]
 pub struct Segment {
     id: usize,
@@ -439,9 +493,94 @@ impl Segment {
         }
     }
 
+    pub fn get_entry_ref(&self, va: usize) -> EntryReference {
+        let blk_idx = match self.block_of(va) {
+            None => panic!("unmatched va in segment"),
+            Some(i) => i,
+        };
+        let mut header = EntryHeader::empty();
+        let offset = va & (BLOCK_SIZE - 1);
+        unsafe {
+            self.read_safe(blk_idx, offset,
+                header.as_mut_ptr(),
+                mem::size_of::<EntryHeader>());
+        }
+
+        debug_assert_eq!(header.getkeylen() as usize,
+                         mem::size_of::<u64>());
+        debug_assert!(header.getdatalen() > 0);
+        // https://github.com/rust-lang/rust/issues/22644
+        debug_assert!( (header.getdatalen() as usize) < SEGMENT_SIZE);
+
+        // determine which blocks belong
+        let mut nblks = 1;
+        let blk_tail = BLOCK_SIZE - (offset % BLOCK_SIZE);
+        let entry_len = header.len_with_header();
+        if entry_len > blk_tail {
+            nblks += ((entry_len - blk_tail) / BLOCK_SIZE) + 1;
+        }
+        debug_assert!(blk_idx+nblks-1 < self.blocks.len());
+
+        EntryReference {
+            offset: offset,
+            len: entry_len,
+            keylen: header.getkeylen(),
+            datalen: header.getdatalen(),
+            blocks: self.blocks[blk_idx..(blk_idx+nblks)].to_vec(),
+        }
+    }
+
     //
     // --- Private methods ---
     //
+
+    /// Read out a set of bytes, safely handling block boundaries.
+    /// Same as append_safe but copies out, instead. Returns the VA
+    /// just past the data we copied out (in case we traveled to a
+    /// subsequent block, it returns its starting address).
+    unsafe fn read_safe(&self, blk_idx: usize, offset: usize,
+                            dst: *mut u8, len: usize) -> usize {
+        // Perform 2+ copies across blocks if needed
+        let mut curblk = blk_idx;
+        let mut loc = (self.blocks[blk_idx].addr+offset) as *const u8;
+        let mut copied = 0_usize;
+        let mut amt = 0_usize;
+        loop {
+            let in_blk = BLOCK_SIZE - (loc as usize & (BLOCK_SIZE-1));
+            amt = cmp::min(in_blk, len - copied);
+            ptr::copy_nonoverlapping(loc,
+                dst.offset(copied as isize), amt);
+            copied += amt;
+            if copied >= len {
+                break;
+            }
+            curblk += 1;
+            loc = self.blocks[curblk].addr as *const u8;
+        }
+
+        let mut next = loc as usize + amt;
+
+        // if we wrote to the end of a block, next address is actually
+        // the next block itself
+        if 0 == (next & (BLOCK_SIZE-1)) {
+            next = self.blocks[curblk+1].addr;
+        }
+
+        next
+    }
+
+    /// Determine which block holds this address.
+    /// TODO optimize with an address range to block mapping
+    fn block_of(&self, va: usize) -> Option<usize> {
+        for tuple in self.blocks.iter().zip(0..) {
+            let start = tuple.0 .addr;
+            let end   = start + tuple.0 .len;
+            if start <= va && va < end {
+                return Some(tuple.1);
+            }
+        }
+        None
+    }
 
     /// Append some buffer safely across block boundaries (if needed).
     /// Caller must ensure the containing segment has sufficient
@@ -500,9 +639,6 @@ impl Segment {
     pub fn rem(&self) -> usize { self.rem }
 
     #[cfg(test)]
-    pub fn len(&self) -> usize { self.len }
-
-    #[cfg(test)]
     pub fn used(&self) -> usize { self.len - self.rem }
 
     #[cfg(test)]
@@ -533,7 +669,7 @@ impl Drop for Segment {
 }
 
 impl<'a> IntoIterator for &'a Segment {
-    type Item = EntryReference<'a>;
+    type Item = EntryReference;
     type IntoIter = SegmentIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -573,9 +709,9 @@ impl<'a> SegmentIter<'a> {
 }
 
 impl<'a> Iterator for SegmentIter<'a> {
-    type Item = EntryReference<'a>;
+    type Item = EntryReference;
 
-    fn next(&mut self) -> Option<EntryReference<'a>> {
+    fn next(&mut self) -> Option<EntryReference> {
         if self.next_obj >= self.n_obj {
             return None;
         }
@@ -583,11 +719,15 @@ impl<'a> Iterator for SegmentIter<'a> {
         // don't advance if we're at first entry
         if self.next_obj > 0 {
             // read length of current entry
-            let addr = self.blocks[self.cur_blk].addr + self.blk_offset;
-            let entry: EntryHeader;
+            let mut entry = EntryHeader::empty();;
             unsafe {
-                entry = ptr::read(addr as *const EntryHeader);
+                copy_out(self.blocks,
+                         self.seg_offset,
+                         entry.as_mut_ptr(),
+                         mem::size_of::<EntryHeader>());
             }
+
+            assert_eq!(entry.getkeylen(), 8);
 
             // advance to next
             self.seg_offset += entry.len();
@@ -596,12 +736,22 @@ impl<'a> Iterator for SegmentIter<'a> {
         }
 
         // read entry info
+        trace!("cur_blk {} addr 0x{:x} offset {} seg offset {}",
+               self.cur_blk, self.blocks[self.cur_blk].addr,
+               self.blk_offset, self.seg_offset);
         let addr = self.blocks[self.cur_blk].addr + self.blk_offset;
-        let entry: EntryHeader;
+        trace!("reading EntryHeader from 0x{:x}", addr);
+        let mut entry = EntryHeader::empty();;
         unsafe {
-            entry = ptr::read(addr as *const EntryHeader);
+            copy_out(self.blocks,
+                     self.seg_offset,
+                     entry.as_mut_ptr(),
+                     mem::size_of::<EntryHeader>());
         }
         let entry_len = entry.len_with_header();
+        trace!("read {:?}", entry);
+        assert_eq!(entry.getkeylen(), 8);
+
 
         // determine which blocks belong
         let mut nblks = 1;
@@ -617,13 +767,15 @@ impl<'a> Iterator for SegmentIter<'a> {
         self.next_obj += 1;
 
         let last_blk = self.cur_blk + nblks;
-        Some( EntryReference {
+        let entry = EntryReference {
             offset: self.blk_offset,
             len: entry_len,
             keylen: entry.getkeylen(),
             datalen: entry.getdatalen(),
-            blocks: &self.blocks[self.cur_blk..last_blk],
-        } )
+            blocks: self.blocks[self.cur_blk..last_blk].to_vec(),
+        };
+        trace!("entry {:?}", entry);
+        Some(entry)
     }
 }
 
@@ -766,6 +918,22 @@ impl SegmentManager {
         ret
     }
 
+    /// Construct an EntryReference to the object pointed to by 'va'.
+    /// If va is bogus, return None. Remember to pin your epoch, else
+    /// your location may be updated underneath you by compaction.
+    pub fn get_entry_ref(&self, va: usize) -> Option<EntryReference> {
+        let idx = match self.segment_of(va) {
+            None => return None,
+            Some(idx) => idx,
+        };
+        debug_assert_eq!(self.segments[idx].is_some(), true);
+        let seg = self.segments[idx].as_ref().unwrap();
+        // XXX avoid locking!!
+        let guard = seg.read().unwrap();
+        let mut entry = guard.get_entry_ref(va);
+        Some(entry)
+    }
+
     /// Log heads pass segments here when it rolls over. Compaction
     /// threads will periodically query this queue for new segments to
     /// add to its candidate list.
@@ -857,10 +1025,12 @@ mod tests {
     use std::ops;
     use std::slice::from_raw_parts;
     use std::sync::{Arc,Mutex};
+    use std::mem::size_of;
 
     use thelog::*;
     use common::*;
     use memory::*;
+    use numa::NodeId;
 
     use rand;
     use rand::Rng;
@@ -991,10 +1161,13 @@ mod tests {
 
         // TODO make a macro out of these lines
         let memlen = 1<<30;
-        let mut mgr = SegmentManager::new(SEGMENT_SIZE, memlen);
+        let mut mgr = SegmentManager::numa(SEGMENT_SIZE, memlen, NodeId(0));
 
         let segref = mgr.alloc().unwrap();
         let mut seg = segref.write().unwrap();
+
+        // TODO generate sizes randomly
+        // TODO export rand str generation
 
         // TODO use crate rand::gen_ascii_chars
         // use this to generate random strings
@@ -1004,58 +1177,55 @@ mod tests {
             "qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM"
             .chars().collect();
 
-        // TODO generate sizes randomly
-        // TODO export rand str generation
-
-        let key_sizes: Vec<u32> = vec!(30, 89, 372); // arbitrary
-        let value_sizes: Vec<u32> = vec!(4330, 8840, 5110);
-        let total: u32 = key_sizes.iter().fold(0, ops::Add::add)
-            + value_sizes.iter().fold(0, ops::Add::add);
+        let value_sizes: Vec<u32> = vec!(4337, 511, 997, 11);
+        let total: u32 = value_sizes.iter().fold(0, ops::Add::add)
+            + (value_sizes.len() * size_of::<u64>()) as u32;
         let nbatches = (SEGMENT_SIZE/2) / (total as usize);
 
         // Buffer to receive items into
         let buf: *mut u8 = allocate::<u8>(total as usize);
 
-        // create the key value pairs
-        let mut keys: Vec<String> = Vec::new();
+        // create the values
         let mut values: Vec<String> = Vec::new();
-        for tuple in (&key_sizes).into_iter().zip(&value_sizes) {
-            let mut s = String::with_capacity(*tuple.0 as usize);
-            for _ in 0..*tuple.0 {
-                let r = rng.gen::<usize>() % alpha.len();
-                s.push( alpha[ r ] );
-            }
-            keys.push(s);
-            s = String::with_capacity(*tuple.1 as usize);
-            for _ in 0..*tuple.1 {
+        for size in &value_sizes {
+            let mut s = String::with_capacity(*size as usize);
+            for _ in 0..*size {
                 let r = rng.gen::<usize>() % alpha.len();
                 s.push( alpha[ r ] );
             }
             values.push(s);
         }
 
+        let mut counter: usize = 0;
+
         // append the objects
         for _ in 0..nbatches {
-            for tuple in (&keys).into_iter().zip(&values) {
-                let key = tuple.0;
-                let value = tuple.1;
-                let loc = Some(value.as_ptr());
-                let len = value.len() as u32;
-                let obj = ObjDesc::new(key.as_str(), loc, len);
+            for value in &values {
+                let key = counter as u64;
+                let obj = ObjDesc::new2(key, value);
                 match seg.append(&obj) {
                     Err(code) => panic!("append error:: {:?}", code),
                     _ => {},
                 }
+                counter += 1;
             }
         }
         
         // count and verify the segment iterator
-        let mut counter: usize = 0;
+        debug!("iterating now");
+        counter = 0;
         for entry in seg.into_iter() {
-            let idx = counter % key_sizes.len();
-            assert_eq!(entry.keylen, key_sizes[idx]);
+            let idx = counter % value_sizes.len();
+            debug!("entry {:?}", entry);
+            assert_eq!(entry.keylen as usize, size_of::<u64>());
             assert_eq!(entry.datalen, value_sizes[idx]);
-            assert!(total > entry.datalen);
+
+            // compare the keys
+            unsafe {
+                let k = entry.get_key();
+                assert!(k == counter as u64,
+                        "keys not equal, k {} counter {}",k,counter);
+            }
 
             // compare the values
             unsafe {
@@ -1068,7 +1238,7 @@ mod tests {
 
             counter += 1;
         }
-        assert_eq!(counter, nbatches * keys.len());
+        assert_eq!(counter, nbatches * values.len());
 
         unsafe { deallocate::<u8>(buf, total as usize); }
     }

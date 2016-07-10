@@ -556,8 +556,8 @@ impl Worker {
             // make sure nobjects is consistent with the iterator
             assert_eq!(n, dirt.nobjects());
 
+            debug!("set live of slot {} to zero", dirt.slot());
             self.seginfo.set_live(dirt.slot(), 0usize);
-            debug!("appended {}", bytes_appended);
             bytes_appended = 0usize;
         }
 
@@ -865,11 +865,6 @@ mod tests {
             }
         }
 
-        // we remove all objects whose value is < 500 bytes
-        // using fancy closures
-        let filter: LiveFn =
-            Box::new( | entry, _ | { entry.datalen < 500 });
-
         // allocate new segment to move objects into
         let new_capacity = ((value_sizes[0] + key_sizes[0]) as usize
                             + mem::size_of::<EntryHeader>())*nbatches
@@ -885,9 +880,8 @@ mod tests {
         
         // move all objects whose data length < 500
         // given the above, we keep only nbatches of the first entry
-        match c.compact(&seg_obj_ref, &seg_clean_ref, &filter) {
-            Ok(1) => {},
-            _ => panic!("compact failed"),
+        if let Err(_) = c.compact(&seg_obj_ref, &seg_clean_ref) {
+            panic!("compact failed");
         }
 
         // Buffer to receive items into
