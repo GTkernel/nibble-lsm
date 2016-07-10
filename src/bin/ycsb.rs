@@ -202,8 +202,15 @@ impl WorkloadGenerator {
                 }
             } else {
                 let obj = ObjDesc::new(key, v, size as u32);
-                if let Err(e) = self.nibble.put_where(&obj, policy) {
-                    panic!("Error {:?}", e);
+                // We know (in this workload) we aren't filling up the
+                // system beyond its capacity, so OOM errors are due
+                // to not compacting. Spin until it works and keep
+                // going.
+                while let Err(e) = self.nibble.put_where(&obj, policy) {
+                    match e {
+                        ErrorCode::OutOfMemory => {},
+                        _ => panic!("Error: {:?}", e),
+                    }
                 }
             }
 
@@ -264,7 +271,8 @@ impl Config {
     }
 
     // more records
-    pub fn ycsb_more(mem: usize, ops: u64, w: YCSB, records: usize) -> Self {
+    pub fn ycsb_more(mem: usize, ops: u64, w: YCSB,
+                     records: usize) -> Self {
         let rs: usize = 100;
         let rp: usize = match w {
             YCSB::A => 50,
