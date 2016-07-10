@@ -544,7 +544,7 @@ impl Worker {
                     atomic::fence(atomic::Ordering::SeqCst);
                     self.seginfo.incr_live(new.slot(), entry.len);
 
-                    // release object
+                    // release object TODO make RAII
                     cuckoo::update_release(lock);
 
                     bytes_appended += entry.len;
