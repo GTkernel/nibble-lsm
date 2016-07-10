@@ -199,11 +199,15 @@ macro_rules! park_or_sleep {
 
 fn __reclaim(state: &Arc<RwLock<Worker>>) {
     let mut s = state.write().unwrap();
-    s.do_reclaim();
+    //s.do_reclaim();
+    let nr = s.do_reclaim_blocking();
+    if nr > 0 {
+        debug!("released {} segments",nr);
+    }
     let park = s.reclaim.as_ref().map_or(false, |r| r.len() == 0 );
     drop(s); // release lock
     if park {
-        thread::sleep(Duration::new(0, 10000000u32))
+        thread::sleep(Duration::new(0, 10_000_000_u32))
     }
 }
 
@@ -415,6 +419,9 @@ impl Worker {
         let mut empties: VecDeque< (epoch::EpochRaw,SegmentRef) >;
         empties = VecDeque::with_capacity(32);
 
+        // non-candidates
+        let mut nc: Vec<SegmentRef> = Vec::with_capacity(32);
+
         while tally < SEGMENT_SIZE {
             let seg = match candidates.pop() {
                 None => break, // none left
@@ -441,12 +448,12 @@ impl Worker {
             else if too_full {
                 debug!("slot {} not enough free space: {}",
                        slot, len-live);
-                candidates.push(seg);
+                nc.push(seg);
             }
             // too much, put it back
             else if (tally + live) > SEGMENT_SIZE {
                 debug!("slot {} would cause overflow, skipping", slot);
-                candidates.push(seg);
+                nc.push(seg);
                 break;
             }
             // viable candidate to compact
@@ -457,6 +464,11 @@ impl Worker {
             }
         }
 
+        // put the segments we excluded back
+        for s in nc {
+            candidates.push(s);
+        }
+
         // first try to release the empties
         if empties.len() > 0 {
             let start = unsafe { clock::rdtsc() };
@@ -465,10 +477,9 @@ impl Worker {
                     None => break,
                     Some(item) => item,
                 };
-                while match epoch::min() {
-                    None => false,
-                    Some(m) => m <= tuple.0,
-                } { ; } // wait
+                while let Some(current) = epoch::min() {
+                    if current > tuple.0 { break; }
+                }
                 let mut mgr = self.manager.lock().unwrap();
                 mgr.free(tuple.1);
             }
@@ -627,8 +638,16 @@ impl Worker {
                 match opt {
                     Some(s) => { newseg = s; break; },
                     None => {
-                        panic!("deadlock: log full, {}",
-                               "cannot allocate for compaction");
+                        // FIXME we should know (for this socket) when
+                        // it is futile to even try compacting, and
+                        // return to caller to append elsewhere.
+                        
+                        // 1. try reclaim enqueued segments
+                        let nr = self.do_reclaim_blocking();
+                        debug!("released {} segments", nr);
+
+                        // 2. use reserve to compact TODO
+
                         // used_reserve = true;
                         // let r = self.reserve.try_pop();
                         // // FIXME we can spin a little if this fails,
@@ -657,6 +676,7 @@ impl Worker {
             }
 
             let ret = self.compact(&segs, &newseg);
+            epoch::next();
             if ret.is_err() { panic!("compact failed"); }
 
             // monitor the new segment, too
@@ -726,6 +746,27 @@ impl Worker {
                     },
             }
         }
+    }
+
+    /// Spin-wait for the epoch to retire all waiting segments.
+    /// This probably should only be called when we're in a dire need
+    /// to acquire new memory, since we hold the manager lock through
+    /// the entire process.
+    fn do_reclaim_blocking(&mut self) -> usize {
+        let mut any = 0usize;
+        let mut manager = match self.manager.lock() {
+            Err(_) => panic!("lock poison"),
+            Ok(mut m) => m,
+        };
+        while let Some(epseg) = self.reclaim_glob.try_pop() {
+            let (ep,segref) = epseg;
+            while let Some(current) = epoch::min() {
+                if current > ep { break; }
+            }
+            manager.free(segref);
+            any += 1;
+        }
+        any
     }
 
     /// Look in segment manager for newly closed segments. If any,
