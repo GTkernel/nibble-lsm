@@ -34,7 +34,7 @@ pub fn empty() -> bool {
 }
 
 #[inline(always)]
-pub fn insert(key: u64, value: usize) -> bool {
+pub fn insert(key: u64, value: u64) -> bool {
     unsafe {
         libcuckoo_insert(key, value)
     }
@@ -48,15 +48,15 @@ pub fn contains(key: u64) -> bool {
 }
 
 #[inline(always)]
-pub fn erase(key: u64, value: &mut usize) -> bool {
+pub fn erase(key: u64, value: &mut u64) -> bool {
     unsafe {
         libcuckoo_erase(key, value)
     }
 }
 
 #[inline(always)]
-pub fn find(key: u64) -> Option<usize> {
-    let mut value: usize = 0;
+pub fn find(key: u64) -> Option<u64> {
+    let mut value: u64 = 0;
     unsafe {
         match libcuckoo_find(key, &mut value) {
             true => Some(value),
@@ -66,8 +66,8 @@ pub fn find(key: u64) -> Option<usize> {
 }
 
 #[inline(always)]
-pub fn update(key: u64, value: usize) -> Option<usize> {
-    let mut ret: usize = 0;
+pub fn update(key: u64, value: u64) -> Option<u64> {
+    let mut ret: u64 = 0;
     unsafe {
         match libcuckoo_update(key, value, &mut ret) {
             false => None, // insertion
@@ -77,7 +77,7 @@ pub fn update(key: u64, value: usize) -> Option<usize> {
 }
 
 #[inline(always)]
-pub fn update_hold_ifeq(key: u64, value: usize, cmp: usize)
+pub fn update_hold_ifeq(key: u64, value: u64, cmp: u64)
     -> Option<CVoidPointer> {
     unsafe {
         let p: CVoidPointer;
@@ -114,15 +114,15 @@ extern {
     fn libcuckoo_clear();
     fn libcuckoo_size() -> usize;
     fn libcuckoo_empty() -> bool;
-    fn libcuckoo_insert(key: u64, value: usize) -> bool;
+    fn libcuckoo_insert(key: u64, value: u64) -> bool;
     fn libcuckoo_contains(key: u64) -> bool;
-    fn libcuckoo_find(key: u64, value: &mut usize) -> bool;
-    fn libcuckoo_erase(key: u64, value: &mut usize) -> bool;
-    fn libcuckoo_update(key: u64, value: usize,
-                        old: &mut usize) -> bool;
+    fn libcuckoo_find(key: u64, value: &mut u64) -> bool;
+    fn libcuckoo_erase(key: u64, value: &mut u64) -> bool;
+    fn libcuckoo_update(key: u64, value: u64,
+                        old: &mut u64) -> bool;
     fn libcuckoo_print_conflicts(pct: usize);
-    fn libcuckoo_update_hold_ifeq(key: u64, value: usize,
-                                  cmp: usize) -> CVoidPointer;
+    fn libcuckoo_update_hold_ifeq(key: u64, value: u64,
+                                  cmp: u64) -> CVoidPointer;
     fn libcuckoo_update_release(obj: CVoidPointer);
 }
 

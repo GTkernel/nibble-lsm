@@ -324,6 +324,7 @@ impl Worker {
     #[cfg(IGNORE)]
     fn __dump_candidates(&self, guard: &MutexGuard<Vec<SegmentRef>>) { ; }
 
+    #[cfg(IGNORE)]
     fn nlive(&self, seg: &SegmentRef) -> usize {
         let seg = seg.read().unwrap();
         debug!("verifying seg {}", seg.slot());
@@ -332,7 +333,7 @@ impl Worker {
             let va = entry.get_loc();
             let key = unsafe { entry.get_key() };
             if let Some(old) = self.index.get(key) {
-                live += (old == va) as usize;
+                live += (old == va as u64) as usize;
             }
         }
         debug!("found #live {} in seg {}",live, seg.slot());
@@ -515,12 +516,12 @@ impl Worker {
             let mut live_count = 0usize;
             for entry in dirt.into_iter() {
                 let key: u64 = unsafe { entry.get_key() };
-                let va = new.headref() as usize;
+                let va = new.headref() as u64;
 
                 // Lock the object while we relocate.  If object
                 // doesn't exist or it points to another location
                 // (i.e. it is stale), we skip it.
-                let old = entry.get_loc();
+                let old = entry.get_loc() as u64;
                 if let Some(lock) = cuckoo::update_hold_ifeq(key,va,old) {
                     live_count += 1;
 
@@ -557,6 +558,7 @@ impl Worker {
             assert_eq!(n, dirt.nobjects());
 
             debug!("set live of slot {} to zero", dirt.slot());
+            debug!("appended {}", bytes_appended);
             self.seginfo.set_live(dirt.slot(), 0usize);
             bytes_appended = 0usize;
         }
@@ -623,10 +625,7 @@ impl Worker {
                     guard.alloc_size(nblks)
                 };
                 match opt {
-                    Some(s) => {
-                        newseg = s;
-                        break;
-                    },
+                    Some(s) => { newseg = s; break; },
                     None => {
                         panic!("deadlock: log full, {}",
                                "cannot allocate for compaction");

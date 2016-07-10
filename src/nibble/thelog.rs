@@ -144,7 +144,7 @@ impl LogHead {
 
         // check if head exists
         if let None = self.segment {
-            debug!("head doesn't exist");
+            trace!("head doesn't exist");
             roll = true;
         }
         // check if the object can fit in remaining space
@@ -163,7 +163,7 @@ impl LogHead {
                 let guard = self.manager.lock().unwrap();
                 guard.socket()
             };
-            debug!("rolling head, socket {:?}", socket);
+            trace!("rolling head, socket {:?}", socket);
             if let Err(code) = self.roll() {
                 return Err(code);
             }

@@ -10,6 +10,23 @@ use numa;
 
 pub type IndexRef = Arc<Index>;
 
+/// Fat pointer as the value in every index entry.
+/// | Socket ID | Virtual Address |
+///     16 bits     48 bits
+pub type IndexEntry = u64;
+
+/// Decompose an IndexEntry
+#[inline(always)]
+pub fn extract(entry: IndexEntry) -> (u16,u64) {
+    ( (entry >> 48) as u16, entry & ((1u64<<48)-1) )
+}
+
+/// Create an index entry from the Socket ID and virtual address
+#[inline(always)]
+pub fn merge(socket: u16, va: u64) -> IndexEntry {
+    ((socket as u64) << 48) | (va & ((1u64<<48)-1))
+}
+
 /// Index structure that allows us to retreive objects from the log.
 /// It is just a simple wrapper over whatever data structure we wish
 /// to eventually use.
@@ -32,7 +49,7 @@ impl Index {
 
     /// Return value of object if it exists, else None.
     #[inline(always)]
-    pub fn get(&self, key: u64) -> Option<usize> {
+    pub fn get(&self, key: u64) -> Option<IndexEntry> {
         cuckoo::find(key)
     }
 
@@ -40,15 +57,16 @@ impl Index {
     /// was newly inserted, or the virtual address of the prior
     /// object.
     #[inline(always)]
-    pub fn update(&self, key: u64, value: usize) -> Option<usize> {
+    pub fn update(&self, key: u64, value: IndexEntry)
+        -> Option<IndexEntry> {
         cuckoo::update(key, value)
     }
 
     /// Remove an entry. If it existed, return value, else return
     /// None.
     #[inline(always)]
-    pub fn remove(&self, key: u64) -> Option<usize> {
-        let mut val: usize = 0;
+    pub fn remove(&self, key: u64) -> Option<IndexEntry> {
+        let mut val: IndexEntry = 0;
         match cuckoo::erase(key, &mut val) {
             true => Some(val),
             false => None,

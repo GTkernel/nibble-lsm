@@ -157,24 +157,28 @@ impl Nibble {
             PutPolicy::Interleave =>
                 (unsafe { rdrand() } % self.nnodes) as usize,
         };
-        trace!("put socket {:?}", socket);
+        trace!("PUT socket {:?}", socket);
 
         if socket >= self.nodes.len() {
             return Err(ErrorCode::InvalidSocket);
         }
 
         // 1. add object to log
+        // FIXME if full for this socket, should we attempt to append
+        // elsewhere?
         match self.nodes[socket].log.append(obj) {
             Err(code) => {
-                warn!("log full: {} bytes",
+                trace!("log full: {} bytes",
                       self.nodes[0].seginfo.live_bytes());
                 return Err(code);
             },
             Ok(v) => va = v,
         }
-        trace!("key {} va 0x{:x}", obj.getkey(), va);
+        let ientry = merge(socket as u16, va as u64);
+        trace!("key {} va 0x{:x} ientry 0x{:x}",
+               obj.getkey(), va, ientry);
         // 2. update reference to object
-        let opt = self.index.update(obj.getkey(), va);
+        let opt = self.index.update(obj.getkey(), ientry);
         // 3. decrement live size of segment if we overwrite object
         if let Some(old) = opt {
             // FIXME this shouldn't need a lock..
@@ -182,7 +186,7 @@ impl Nibble {
                 Err(_) => panic!("lock poison"),
                 Ok(manager) =>  {
                     // should not fail
-                    let opt = manager.segment_of(old);
+                    let opt = manager.segment_of(old as usize);
                     assert_eq!(opt.is_some(), true);
                     opt.unwrap()
                 },
@@ -194,40 +198,76 @@ impl Nibble {
         Ok(1)
     }
 
+    /// Put an object according to a specific policy. If a node is
+    /// specified and an error status returned as OOM, that only
+    /// applies to that node and the caller is free to choose another
+    /// to put to, or to invoke put_object and let the system decide.
     #[inline(always)]
     pub fn put_where(&self, obj: &ObjDesc,
                      hint: PutPolicy) -> Status {
         self.__put(obj, hint)
     }
 
+    /// FIXME shouldn't hard-code to Node 0
+    /// TODO Here is where logic should decide that, when an append to
+    /// a specific node fails, to try allocation to another node. Only
+    /// when all fail, return error to user.
     #[inline(always)]
     pub fn put_object(&self, obj: &ObjDesc) -> Status {
         self.__put(obj, PutPolicy::Specific(0))
     }
 
+    /// TODO use Result<Buffer> as return value
+    /// FIXME invoke some method in thelog that copies out data
     #[inline(always)]
     pub fn get_object(&self, key: u64) -> (Status,Option<Buffer>) {
         epoch::pin();
-        let va: usize;
-        match self.index.get(key) {
+
+        // 1. obtain the virtual address
+        let ientry: IndexEntry = match self.index.get(key) {
             None => return (Err(ErrorCode::KeyNotExist),None),
-            Some(v) => va = v,
-        }
-        //
-        // XXX XXX use EntryReference to copy out data!! XXX XXX
-        //
-        let header: EntryHeader;
-        unsafe {
-            header = ptr::read(va as *const EntryHeader);
-        }
-        trace!("key {} va 0x{:x} datalen {}",
-               key, va, header.getdatalen());
-        let buf = Buffer::new(header.getdatalen() as usize);
-        unsafe {
-            let src = header.data_address(va);
-            ptr::copy_nonoverlapping(src,
-                buf.getaddr() as *mut u8, buf.getlen());
-        }
+            Some(entry) => entry,
+        };
+
+        let (socket,va) = extract(ientry);
+        let mut va = va as usize;
+        trace!("GET key {:x}: ientry {:x} -> socket 0x{:x} va 0x{:x}",
+               key, ientry, socket, va);
+
+        // 1. Get a reference to the containing segment. May not be
+        //    used in this method at all.
+
+        // XXX HACK XXX by-pass the mutex for methods that do
+        // not require the mutex. will refactor later.
+//        let mgr: &SegmentManager = unsafe {
+//            self.nodes[socket as usize]._mgr.0
+//                .as_ref().unwrap()
+//        };
+
+        // SegmentManager::segment_of ->
+        //      BlockAllocator::segment_idx_of ->
+        //          block offset -> Block -> seg idx
+//        let segid = mgr.segment_of(va)
+//            .expect("va unmatched with a segment");
+//        let sref = unsafe {
+//            mgr.segref(segid).as_ref().unwrap()
+//        };
+
+        // 2. Copy the entry header
+        
+//        let guard = sref.read().unwrap();
+
+
+        // 2. extract socket from ientry TODO
+//        let socket = 0_usize;
+//
+//        // 3. ask Log to give us the object
+//        let buf = match self.nodes[socket].log.get_entry(va) {
+//            None => panic!("VA has no entry?"),
+//            Some(b) => b,
+//        };
+
+        let buf = Buffer::new(8);
         epoch::quiesce();
         (Ok(1),Some(buf))
     }
@@ -235,11 +275,11 @@ impl Nibble {
     #[inline(always)]
     pub fn del_object(&mut self, key: u64) -> Status {
         epoch::pin();
-        let va: usize;
-        match self.index.remove(key) {
+        let ientry = match self.index.remove(key) {
             None => return Err(ErrorCode::KeyNotExist),
-            Some(v) => va = v,
-        }
+            Some(v) => v,
+        };
+        let (socket,va) = extract(ientry);
 
         //
         // XXX XXX use EntryReference to copy out data!! XXX XXX
@@ -259,7 +299,7 @@ impl Nibble {
             Err(_) => panic!("lock poison"),
             Ok(guard) =>  {
                 // should not fail
-                let opt = guard.segment_of(va);
+                let opt = guard.segment_of(va as usize);
                 assert_eq!(opt.is_some(), true);
                 opt.unwrap()
             },
