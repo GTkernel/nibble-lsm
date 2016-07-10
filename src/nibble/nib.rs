@@ -223,51 +223,23 @@ impl Nibble {
     pub fn get_object(&self, key: u64) -> (Status,Option<Buffer>) {
         epoch::pin();
 
-        // 1. obtain the virtual address
+        // 1. lookup the key and get the entry
         let ientry: IndexEntry = match self.index.get(key) {
             None => return (Err(ErrorCode::KeyNotExist),None),
             Some(entry) => entry,
         };
-
         let (socket,va) = extract(ientry);
-        let mut va = va as usize;
+
         trace!("GET key {:x}: ientry {:x} -> socket 0x{:x} va 0x{:x}",
                key, ientry, socket, va);
 
-        // 1. Get a reference to the containing segment. May not be
-        //    used in this method at all.
+        // 2. ask Log to give us the object
+        let buf = match self.nodes[socket]
+                            .log.get_entry(va as usize) {
+            None => panic!("VA has no entry?"),
+            Some(b) => b,
+        };
 
-        // XXX HACK XXX by-pass the mutex for methods that do
-        // not require the mutex. will refactor later.
-//        let mgr: &SegmentManager = unsafe {
-//            self.nodes[socket as usize]._mgr.0
-//                .as_ref().unwrap()
-//        };
-
-        // SegmentManager::segment_of ->
-        //      BlockAllocator::segment_idx_of ->
-        //          block offset -> Block -> seg idx
-//        let segid = mgr.segment_of(va)
-//            .expect("va unmatched with a segment");
-//        let sref = unsafe {
-//            mgr.segref(segid).as_ref().unwrap()
-//        };
-
-        // 2. Copy the entry header
-        
-//        let guard = sref.read().unwrap();
-
-
-        // 2. extract socket from ientry TODO
-//        let socket = 0_usize;
-//
-//        // 3. ask Log to give us the object
-//        let buf = match self.nodes[socket].log.get_entry(va) {
-//            None => panic!("VA has no entry?"),
-//            Some(b) => b,
-//        };
-
-        let buf = Buffer::new(8);
         epoch::quiesce();
         (Ok(1),Some(buf))
     }
