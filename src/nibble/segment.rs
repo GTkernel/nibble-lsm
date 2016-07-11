@@ -265,7 +265,6 @@ impl SegmentHeader {
 //==----------------------------------------------------==//
 
 pub type SegmentRef = Arc<RwLock<Segment>>;
-//pub type SegmentManagerRef = Arc<Mutex<SegmentManager>>;
 pub type SegmentManagerRef = Arc<pl::RwLock<SegmentManager>>;
 
 /// A Segment of data in the log, composed of many underlying
@@ -791,7 +790,7 @@ pub struct SegmentManager {
     socket: Option<NodeId>,
     /// Total memory
     size: usize,
-    next_seg_id: usize, // FIXME atomic
+    next_seg_id: atomic::AtomicUsize,
     allocator: BlockAllocator,
     segments: Vec<Option<SegmentRef>>,
     seginfo: SegmentInfoTableRef,
@@ -818,7 +817,7 @@ impl SegmentManager {
         SegmentManager {
             socket: sock,
             size: len,
-            next_seg_id: 0,
+            next_seg_id: atomic::AtomicUsize::new(0),
             allocator: b,
             segments: segments,
             seginfo: Arc::new(SegmentInfoTable::new(num)),
@@ -857,9 +856,9 @@ impl SegmentManager {
             for block in &blocks {
                 unsafe { block.set_segment(slot); }
             }
-            self.next_seg_id += 1;
-            self.segments[slot] = Some(seg_ref!(self.next_seg_id,
-                                                slot, blocks));
+            let id = self.next_seg_id.fetch_add(1,
+                                     atomic::Ordering::Relaxed);
+            self.segments[slot] = Some(seg_ref!(id, slot, blocks));
             ret = self.segments[slot].clone();
         }
         ret
