@@ -20,6 +20,7 @@ clap = "2.5.1"
 syscall = "0.2.1"
 #clippy = "*"
 num = "0.1.32"
+parking_lot = "0.2.6"
 
 [features]
 default = ["epoch-tsc"]

@@ -15,6 +15,7 @@ use std::ptr;
 use std::sync::{atomic, Arc, Mutex, RwLock};
 
 use crossbeam::sync::SegQueue;
+use parking_lot as pl;
 
 pub const BLOCK_SHIFT:   usize = 18;
 pub const BLOCK_SIZE:    usize = 1 << BLOCK_SHIFT;
@@ -264,7 +265,8 @@ impl SegmentHeader {
 //==----------------------------------------------------==//
 
 pub type SegmentRef = Arc<RwLock<Segment>>;
-pub type SegmentManagerRef = Arc<Mutex<SegmentManager>>;
+//pub type SegmentManagerRef = Arc<Mutex<SegmentManager>>;
+pub type SegmentManagerRef = Arc<pl::RwLock<SegmentManager>>;
 
 /// A Segment of data in the log, composed of many underlying
 /// non-contiguous blocks.

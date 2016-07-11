@@ -117,14 +117,11 @@ impl Compactor {
 
     pub fn new(manager: &SegmentManagerRef,
                index: &IndexRef) -> Self {
-        let seginfo = match manager.lock() {
-            Err(_) => panic!("lock poison"),
-            Ok(guard) => guard.seginfo(),
-        };
+        let seginfo = manager.read().seginfo();
         let reserve: SegQueue<SegmentRef>;
         reserve = SegQueue::new();
         {
-            let mut guard = manager.lock().unwrap();
+            let mut guard = manager.write();
             for _ in 0..COMPACTION_RESERVE_SEGMENTS {
                 let opt = guard.alloc();
                 assert!(opt.is_some(),
@@ -219,7 +216,7 @@ fn __compact(state: &Arc<RwLock<Worker>>) {
     let run: bool = {
         // FIXME the ratio should include the data not yet returned to
         // the block allocator -- data waiting for reclamation
-        let remaining = s.manager.lock().unwrap().freesz() as f64;
+        let remaining = s.manager.read().freesz() as f64;
         let total: f64 = s.mgrsize as f64;
         let ratio = remaining/total;
         debug!("rem. {} total {} ratio {:.2} run: {:?}",
@@ -288,10 +285,7 @@ impl Worker {
             WorkerRole::Reclaim => Some(Vec::new()),
             _ => None,
         };
-        let size: usize = {
-            let g = compactor.manager.lock().unwrap();
-            g.len()
-        };
+        let size = compactor.manager.read().len();
         Worker {
             role: *role,
             candidates: compactor.candidates.clone(),
@@ -480,8 +474,7 @@ impl Worker {
                 while let Some(current) = epoch::min() {
                     if current > tuple.0 { break; }
                 }
-                let mut mgr = self.manager.lock().unwrap();
-                mgr.free(tuple.1);
+                self.manager.write().free(tuple.1);
             }
             let end = unsafe { clock::rdtsc() };
             let tim = clock::to_nano(end-start);
@@ -539,8 +532,7 @@ impl Worker {
                     // try append; if fail, extend, try again
                     if let None = new.append_entry(&entry) {
                         debug!("extending segment; entry {}",n);
-                        let mut manager = self.manager.lock().unwrap();
-                        match manager.alloc_blocks(1) {
+                        match self.manager.write().alloc_blocks(1) {
                             Some(mut blocks) =>
                                 new.extend(&mut blocks),
                             None => panic!("OOM"), // FIXME spin?
@@ -631,10 +623,7 @@ impl Worker {
             let mut retries = 0;
             let start = Instant::now();
             loop {
-                let opt = {
-                    let mut guard = self.manager.lock().unwrap();
-                    guard.alloc_size(nblks)
-                };
+                let opt = self.manager.write().alloc_size(nblks);
                 match opt {
                     Some(s) => { newseg = s; break; },
                     None => {
@@ -738,12 +727,9 @@ impl Worker {
 
         if release.len() > 0 {
             debug!("releasing {} segments", release.len());
-            match self.manager.lock() {
-                Err(_) => panic!("lock poison"),
-                Ok(mut manager) =>
-                    for seg in release {
-                        manager.free(seg.1);
-                    },
+            let mut manager = self.manager.write();
+            for seg in release {
+                manager.free(seg.1);
             }
         }
     }
@@ -754,10 +740,7 @@ impl Worker {
     /// the entire process.
     fn do_reclaim_blocking(&mut self) -> usize {
         let mut any = 0usize;
-        let mut manager = match self.manager.lock() {
-            Err(_) => panic!("lock poison"),
-            Ok(mut m) => m,
-        };
+        let mut manager = self.manager.write();
         while let Some(epseg) = self.reclaim_glob.try_pop() {
             let (ep,segref) = epseg;
             while let Some(current) = epoch::min() {
@@ -774,14 +757,8 @@ impl Worker {
     pub fn check_new(&mut self) -> usize {
         match self.candidates.lock() {
             Err(_) => panic!("lock poison"),
-            Ok(ref mut cand) => {
-                match self.manager.lock() {
-                    Err(_) => panic!("lock poison"),
-                    Ok(mut manager) => {
-                        manager.grab_closed(cand)
-                    },
-                }
-            },
+            Ok(ref mut cand) =>
+                self.manager.write().grab_closed(cand),
         }
     }
 

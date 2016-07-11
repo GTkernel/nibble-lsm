@@ -159,10 +159,7 @@ impl LogHead {
             }
         }
         if roll {
-            let socket = {
-                let guard = self.manager.lock().unwrap();
-                guard.socket()
-            };
+            let socket = self.manager.read().socket();
             trace!("rolling head, socket {:?}", socket);
             if let Err(code) = self.roll() {
                 return Err(code);
@@ -183,12 +180,7 @@ impl LogHead {
 
     /// Replace the head segment.
     fn replace(&mut self) -> Status {
-        match self.manager.lock() {
-            Ok(mut manager) => {
-                self.segment = manager.alloc();
-            },
-            Err(_) => panic!("lock poison"),
-        }
+        self.segment = self.manager.write().alloc();
         match self.segment {
             None => Err(ErrorCode::OutOfMemory),
             _ => Ok(1),
@@ -200,12 +192,7 @@ impl LogHead {
     /// TODO move to local head-specific pool to avoid locking
     fn add_closed(&mut self) {
         if let Some(segref) = self.segment.clone() {
-            match self.manager.lock() {
-                Ok(mut manager) => {
-                    manager.add_closed(&segref);
-                },
-                Err(_) => panic!("lock poison"),
-            }
+            self.manager.write().add_closed(&segref);
         }
     }
 
@@ -235,10 +222,7 @@ pub struct Log {
 impl Log {
 
     pub fn new(manager: SegmentManagerRef) -> Self {
-        let seginfo = match manager.lock() {
-            Err(_) => panic!("lock poison"),
-            Ok(guard) => guard.seginfo(),
-        };
+        let seginfo = manager.read().seginfo();
         let mut heads: Vec<LogHeadRef>;
         heads = Vec::with_capacity(NUM_LOG_HEADS as usize);
         for _ in 0..NUM_LOG_HEADS {
@@ -268,10 +252,7 @@ impl Log {
         };
         // 3. update segment info table
         // FIXME shouldn't have to lock for this
-        let idx = {
-            let guard = self.manager.lock().unwrap();
-            guard.segment_of(va)
-        };
+        let idx = self.manager.read().segment_of(va);
         debug_assert_eq!(idx.is_some(), true);
         let len = buf.len_with_header();
         debug_assert!(len < SEGMENT_SIZE);
@@ -283,12 +264,11 @@ impl Log {
     /// Pull out the value for an entry within the log (not the entire
     /// object).
     pub fn get_entry(&self, va: usize) -> Option<Buffer> {
-        let entry: EntryReference = {
-            let guard = self.manager.lock().unwrap(); // XXX avoid
-            match guard.get_entry_ref(va) {
+        // XXX avoid lock
+        let entry: EntryReference =
+            match self.manager.read().get_entry_ref(va) {
                 None => return None,
                 Some(e) => e,
-            }
         };
         let mut buf = Buffer::new(entry.datalen as usize);
         unsafe {

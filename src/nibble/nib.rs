@@ -11,6 +11,7 @@ use std::ptr;
 use std::sync::{Arc,Mutex};
 use std::thread::{self,JoinHandle};
 use rand::{self,Rng};
+use parking_lot as pl;
 
 //==----------------------------------------------------==//
 //      Constants
@@ -84,7 +85,7 @@ impl Nibble {
                     let s = SEGMENT_SIZE;
                     let manager = SegmentManager::numa(s,persock,n);
                     let seginfo = manager.seginfo();
-                    let mref = Arc::new(Mutex::new(manager));
+                    let mref = Arc::new(pl::RwLock::new(manager));
                     let per = NibblePerNode {
                         socket: node,
                         manager: mref.clone(),
@@ -183,14 +184,9 @@ impl Nibble {
         if let Some(old_ientry) = opt {
             let (socket,old) = extract(old_ientry);
             // FIXME this shouldn't need a lock..
-            let idx: usize = match self.nodes[socket as usize].manager.lock() {
-                Err(_) => panic!("lock poison"),
-                Ok(manager) =>  {
-                    // should not fail
-                    let opt = manager.segment_of(old as usize);
-                    opt.unwrap()
-                },
-            };
+            let idx: usize = self.nodes[socket as usize]
+                                 .manager.read()
+                                 .segment_of(old as usize).unwrap();
             self.nodes[socket as usize].seginfo
                 .decr_live(idx, obj.len_with_header());
         }
@@ -267,15 +263,9 @@ impl Nibble {
         // get segment this object belongs to
         // XXX need to make sure delete and object cleaning don't
         // result in decrementing twice!
-        let idx: usize = match self.nodes[0].manager.lock() {
-            Err(_) => panic!("lock poison"),
-            Ok(guard) =>  {
-                // should not fail
-                let opt = guard.segment_of(va as usize);
-                assert_eq!(opt.is_some(), true);
-                opt.unwrap()
-            },
-        };
+        let idx: usize = self.nodes[0].manager.read()
+                                      .segment_of(va as usize)
+                                      .unwrap();
 
         // update epoch table
         self.nodes[0].seginfo.decr_live(idx, header.len_with_header());
@@ -292,8 +282,7 @@ impl Nibble {
     #[cfg(IGNORE)]
     pub fn dump_seg_info(&self) {
         for node in &self.nodes {
-            let mgr = node.manager.lock().unwrap();
-            mgr.dump_seg_info();
+            node.manager.read().dump_seg_info();
         }
     }
 

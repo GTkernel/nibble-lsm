@@ -31,6 +31,7 @@ extern crate crossbeam;
 extern crate itertools;
 extern crate quicksort;
 extern crate syscall;
+extern crate parking_lot;
 
 // TODO keep cuckoo private and move the unit test in the integration
 // test code to where it should be
