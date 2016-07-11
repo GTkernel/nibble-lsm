@@ -61,7 +61,7 @@ fn run(config: &Config) {
 
     let mut fill: usize;
     let nobj: usize = if config.nobject == 0 {
-        fill = ((Nibble::default_capacity() as f64) * 0.8) as usize;
+        fill = ((config.capacity as f64) * 0.8) as usize;
         fill/(config.size+8+8) // + header + key
     } else {
         fill = config.nobject * (config.size+8+8);
