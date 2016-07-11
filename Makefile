@@ -6,7 +6,7 @@
 # LD_LIBRARY_PATH to src/ before running with gdb
 CXX := g++
 CXXFLAGS := -std=c++11 -O3 -I./thirdparty/libcuckoo/src/ -Wall -Wextra
-CXXFLAGS += -msse4.2 -mtune=native -march=native -malign-double
+CXXFLAGS += -msse4.2 -mtune=native -march=native -malign-double -ggdb
 CXXFLAGS += -Wno-unused-variable
 # Configure how the memory backing the hashtable will be allocated:
 # CUCKOO_INTERLEAVE or CUCKOO_BIND0
