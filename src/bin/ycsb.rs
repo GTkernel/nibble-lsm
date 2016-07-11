@@ -35,7 +35,7 @@ use std::thread::{self,JoinHandle};
 use std::time::{Instant,Duration};
 
 trait DistGenerator {
-    fn next(&self) -> u64;
+    fn next(&mut self) -> u64;
 }
 
 #[derive(Debug,Clone,Copy)]
@@ -74,7 +74,7 @@ impl Zipfian {
 impl DistGenerator for Zipfian {
 
     #[inline(always)]
-    fn next(&self) -> u64 {
+    fn next(&mut self) -> u64 {
         let u: f64 = unsafe { rdrandq() as f64 } / 
             (std::u64::MAX as f64);
         let uz: f64 = u * self.zetan;
@@ -87,28 +87,61 @@ impl DistGenerator for Zipfian {
     }
 }
 
+struct ZipfianArray {
+    n: u64,
+    arr: Vec<u32>,
+    next: u32,
+}
+
+impl ZipfianArray {
+
+    pub fn new(n: u64, s: f64) -> Self {
+        let many = (n*4) as usize;
+        let mut v: Vec<u32> = Vec::with_capacity(many);
+        let mut zip = Zipfian::new(n, s);
+        for _ in 0..many {
+            v.push(zip.next() as u32);
+        }
+        let mut rng = rand::thread_rng();
+        rng.shuffle(&mut v);
+        ZipfianArray { n: n, arr: v, next: 0 }
+    }
+}
+
+impl DistGenerator for ZipfianArray {
+
+    #[inline(always)]
+    fn next(&mut self) -> u64 {
+        self.next = (self.next + 1) % self.n as u32;
+        self.arr[self.next as usize] as u64
+    }
+}
+
 struct Uniform {
     n: u64,
+    arr: Vec<u32>,
+    next: u32,
 }
 
 impl Uniform {
 
     pub fn new(n: u64) -> Self {
-        Uniform { n: n }
+        let mut v: Vec<u32> = Vec::with_capacity(n as usize);
+        for x in 0..n {
+            v.push(x as u32);
+        }
+        let mut rng = rand::thread_rng();
+        rng.shuffle(&mut v);
+        Uniform { n: n, arr: v, next: 0 }
     }
 }
 
 impl DistGenerator for Uniform {
 
     #[inline(always)]
-    fn next(&self) -> u64 {
-        // There might be a faster way if n is smaller, instead of
-        // invoking rdrandq each time and performing modulus, e.g., if
-        // n is 128-255 inclusive, we can take a 64bit rdrandq and
-        // use it 8 times (use 8 bits for each before calling rdrandq
-        // again). It's likely we'll have < 2^32 keys (4bil.) in
-        // typical cases, so could reuse at least 2x.
-        unsafe { rdrandq() % self.n }
+    fn next(&mut self) -> u64 {
+        self.next = (self.next + 1) % self.n as u32;
+        self.arr[self.next as usize] as u64
     }
 }
 
@@ -135,7 +168,7 @@ impl WorkloadGenerator {
             config: config,
             gen: match config.dist {
                 Dist::Zipfian(s) => Box::new(
-                    Zipfian::new(n as u64,s)),
+                    ZipfianArray::new(n as u64,s)),
                 Dist::Uniform => Box::new(
                     Uniform::new(n as u64)),
             },
