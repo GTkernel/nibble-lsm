@@ -169,7 +169,7 @@ impl Nibble {
         match self.nodes[socket].log.append(obj) {
             Err(code) => {
                 trace!("log full: {} bytes",
-                      self.nodes[0].seginfo.live_bytes());
+                      self.nodes[socket].seginfo.live_bytes());
                 return Err(code);
             },
             Ok(v) => va = v,
@@ -180,18 +180,18 @@ impl Nibble {
         // 2. update reference to object
         let opt = self.index.update(obj.getkey(), ientry);
         // 3. decrement live size of segment if we overwrite object
-        if let Some(old) = opt {
+        if let Some(old_ientry) = opt {
+            let (socket,old) = extract(old_ientry);
             // FIXME this shouldn't need a lock..
-            let idx: usize = match self.nodes[socket].manager.lock() {
+            let idx: usize = match self.nodes[socket as usize].manager.lock() {
                 Err(_) => panic!("lock poison"),
                 Ok(manager) =>  {
                     // should not fail
                     let opt = manager.segment_of(old as usize);
-                    assert_eq!(opt.is_some(), true);
                     opt.unwrap()
                 },
             };
-            self.nodes[socket].seginfo
+            self.nodes[socket as usize].seginfo
                 .decr_live(idx, obj.len_with_header());
         }
         epoch::quiesce();
