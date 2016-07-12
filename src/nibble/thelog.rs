@@ -51,7 +51,7 @@ impl EntryHeader {
 
     pub fn new(desc: &ObjDesc) -> Self {
         assert!(desc.keylen() <= usize::max_value());
-        assert!(desc.getvalue() != None);
+        assert!(!desc.getvalue().0 .is_null());
         EntryHeader {
             keylen: desc.keylen() as u32,
             datalen: desc.valuelen(),
@@ -159,7 +159,7 @@ impl LogHead {
             }
         }
         if roll {
-            let socket = self.manager.read().socket();
+            let socket = self.manager.socket();
             trace!("rolling head, socket {:?}", socket);
             if let Err(code) = self.roll() {
                 return Err(code);
@@ -180,7 +180,7 @@ impl LogHead {
 
     /// Replace the head segment.
     fn replace(&mut self) -> Status {
-        self.segment = self.manager.write().alloc();
+        self.segment = self.manager.alloc();
         match self.segment {
             None => Err(ErrorCode::OutOfMemory),
             _ => Ok(1),
@@ -192,7 +192,7 @@ impl LogHead {
     /// TODO move to local head-specific pool to avoid locking
     fn add_closed(&mut self) {
         if let Some(segref) = self.segment.clone() {
-            self.manager.write().add_closed(&segref);
+            self.manager.add_closed(&segref);
         }
     }
 
@@ -222,7 +222,7 @@ pub struct Log {
 impl Log {
 
     pub fn new(manager: SegmentManagerRef) -> Self {
-        let seginfo = manager.read().seginfo();
+        let seginfo = manager.seginfo();
         let mut heads: Vec<LogHeadRef>;
         heads = Vec::with_capacity(NUM_LOG_HEADS as usize);
         for _ in 0..NUM_LOG_HEADS {
@@ -252,29 +252,28 @@ impl Log {
         };
         // 3. update segment info table
         // FIXME shouldn't have to lock for this
-        let idx = self.manager.read().segment_of(va);
-        debug_assert_eq!(idx.is_some(), true);
+        let idx = self.manager.segment_of(va);
         let len = buf.len_with_header();
         debug_assert!(len < SEGMENT_SIZE);
-        self.seginfo.incr_live(idx.unwrap(), len);
+        self.seginfo.incr_live(idx, len);
         // 4. return virtual address of new object
         Ok(va)
     }
 
     /// Pull out the value for an entry within the log (not the entire
     /// object).
-    pub fn get_entry(&self, va: usize) -> Option<Buffer> {
-        // XXX avoid lock
-        let entry: EntryReference =
-            match self.manager.read().get_entry_ref(va) {
-                None => return None,
-                Some(e) => e,
-        };
+    pub fn get_entry(&self, va: usize) -> Buffer {
+        let block: Block = self.manager.block_of(va);
+        debug_assert_eq!(block.list().ptr().is_null(), false);
+        let usl = block.list();
+        debug_assert!(block.blk_idx() < usl.len(),
+            "block idx {} out of bounds for uslice {}",
+            block.blk_idx(), usl.len());
+        let list: &[BlockRef] = unsafe { usl.slice() };
+        let entry = get_ref(list, block.blk_idx(), va);
         let mut buf = Buffer::new(entry.datalen as usize);
-        unsafe {
-            entry.get_data(buf.as_mut_ptr());
-        }
-        Some(buf)
+        unsafe { entry.get_data(buf.as_mut_ptr()); }
+        buf
     }
 
     //
@@ -295,27 +294,28 @@ impl Log {
 /// each time a reference is passed around; we lazily copy the object
 /// from the log only when a client asks for it
 #[derive(Debug)]
-pub struct EntryReference {
+pub struct EntryReference<'a> {
     pub offset: usize, // into first block
     pub len: usize, /// header + key + data
     pub keylen: u32,
     pub datalen: u32,
     /// TODO can we avoid cloning the Arcs?
-    pub blocks: Vec<BlockRef>,
+    pub blocks: &'a [BlockRef]
 }
 
 // TODO optimize for cases where the blocks are contiguous
 // copying directly, or avoid copying (provide reference to it)
-impl EntryReference {
+impl<'a> EntryReference<'a> {
 
     pub fn get_loc(&self) -> usize {
-        self.offset + self.blocks[0].addr
+        self.offset + self.blocks[0].addr()
     }
 
     /// Copy out the key
     pub unsafe fn get_key(&self) -> u64 {
         let mut offset = self.offset + size_of::<EntryHeader>();
         let mut key: u64 = 0;
+        // TODO optimize if contiguous
         // hm, lots of overhead for copying 8 bytes
         segment::copy_out(&self.blocks, offset,
                           &mut key as *mut u64 as *mut u8,
@@ -327,10 +327,50 @@ impl EntryReference {
     pub unsafe fn get_data(&self, out: *mut u8) {
         let mut offset = self.offset + self.len
                             - self.datalen as usize;
+        // TODO optimize if contiguous
         segment::copy_out(&self.blocks, offset,
                           out, self.datalen as usize);
     }
 
+}
+
+/// Construct an EntryReference given a VA and a set of Blocks.
+pub fn get_ref(list: &[BlockRef], idx: usize, va: usize) -> EntryReference {
+    let mut header: EntryHeader;
+    let offset = va & BLOCK_OFF_MASK;
+    let blk_tail = BLOCK_SIZE - offset;
+    let len = size_of::<EntryHeader>();
+
+    // if header is contiguous, just read it directly here
+    if blk_tail >= len {
+        let head_addr = va as *const usize as *const EntryHeader;
+        header = unsafe { ptr::read(head_addr) };
+    } else { unsafe {
+        // slow path
+        header = EntryHeader::empty();
+        copy_out(&list[idx..], offset, header.as_mut_ptr(), len);
+    }}
+
+    debug_assert_eq!(header.getkeylen() as usize, size_of::<u64>());
+    debug_assert!(header.getdatalen() > 0);
+    // https://github.com/rust-lang/rust/issues/22644
+    debug_assert!( (header.getdatalen() as usize) < SEGMENT_SIZE);
+
+    // determine which blocks belong
+    let mut nblks = 1;
+    let entry_len = header.len_with_header();
+    if entry_len > blk_tail {
+        nblks += ((entry_len - blk_tail) / BLOCK_SIZE) + 1;
+    }
+    debug_assert!( (idx + nblks - 1) < list.len() );
+
+    EntryReference {
+        offset: offset,
+        len: entry_len,
+        keylen: header.getkeylen(),
+        datalen: header.getdatalen(),
+        blocks: &list[idx..(idx + nblks)],
+    }
 }
 
 //==----------------------------------------------------==//

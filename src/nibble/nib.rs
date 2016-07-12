@@ -85,7 +85,7 @@ impl Nibble {
                     let s = SEGMENT_SIZE;
                     let manager = SegmentManager::numa(s,persock,n);
                     let seginfo = manager.seginfo();
-                    let mref = Arc::new(pl::RwLock::new(manager));
+                    let mref = Arc::new(manager);
                     let per = NibblePerNode {
                         socket: node,
                         manager: mref.clone(),
@@ -185,8 +185,7 @@ impl Nibble {
             let (socket,old) = extract(old_ientry);
             // FIXME this shouldn't need a lock..
             let idx: usize = self.nodes[socket as usize]
-                                 .manager.read()
-                                 .segment_of(old as usize).unwrap();
+                                 .manager.segment_of(old as usize);
             self.nodes[socket as usize].seginfo
                 .decr_live(idx, obj.len_with_header());
         }
@@ -230,11 +229,8 @@ impl Nibble {
                key, ientry, socket, va);
 
         // 2. ask Log to give us the object
-        let buf = match self.nodes[socket as usize]
-                            .log.get_entry(va as usize) {
-            None => panic!("VA has no entry?"),
-            Some(b) => b,
-        };
+        let buf = self.nodes[socket as usize]
+                            .log.get_entry(va as usize);
 
         epoch::quiesce();
         (Ok(1),Some(buf))
@@ -263,9 +259,8 @@ impl Nibble {
         // get segment this object belongs to
         // XXX need to make sure delete and object cleaning don't
         // result in decrementing twice!
-        let idx: usize = self.nodes[0].manager.read()
-                                      .segment_of(va as usize)
-                                      .unwrap();
+        let idx: usize = self.nodes[0].manager
+                                      .segment_of(va as usize);
 
         // update epoch table
         self.nodes[0].seginfo.decr_live(idx, header.len_with_header());

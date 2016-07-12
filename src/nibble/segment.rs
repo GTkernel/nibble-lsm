@@ -17,21 +17,26 @@ use std::sync::{atomic, Arc, Mutex, RwLock};
 use crossbeam::sync::SegQueue;
 use parking_lot as pl;
 
-pub const BLOCK_SHIFT:   usize = 18;
-pub const BLOCK_SIZE:    usize = 1 << BLOCK_SHIFT;
-pub const SEGMENT_SHIFT: usize = 25;
-pub const SEGMENT_SIZE:  usize = 1 << SEGMENT_SHIFT;
+pub const BLOCK_SHIFT:      usize = 18;
+pub const BLOCK_SIZE:       usize = 1 << BLOCK_SHIFT;
+pub const BLOCK_OFF_MASK:   usize = BLOCK_SIZE - 1;
+pub const SEGMENT_SHIFT:    usize = 25;
+pub const SEGMENT_SIZE:     usize = 1 << SEGMENT_SHIFT;
 
 //==----------------------------------------------------==//
 //      Utility functions
 //==----------------------------------------------------==//
 
-/// Read out data from the log.
+/// Read out data from the log. The caller should check if data can be
+/// directly copied out (contiguously) before invoking this.
 /// blocks: the set of containing blocks
 /// offset: logical from start of first block, but may refer to beyond
 /// the first block (e.g. large key or object starts very near the end
 /// of the first block)
 /// Similar implementation as in Segment::append_entry
+/// TODO benchmark this?
+/// TODO merge with read_safe?
+#[cold]
 pub unsafe fn copy_out(blocks: &[BlockRef], offset: usize,
                        out: *mut u8, len: usize) {
     let mut remaining = len as isize;
@@ -73,35 +78,73 @@ pub unsafe fn copy_out(blocks: &[BlockRef], offset: usize,
 
 
 /// A contiguous region of virtual memory.
-/// FIXME seg may alias others across NUMA domains
-/// TODO store within each Block its Segment-specific slot to avoid
-/// having to scan the block list?
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct Block {
-    pub addr: usize,
-    pub len: usize,
-    pub slot: usize,
-    pub seg: Option<usize>,
+    /// Base address of this memory region. Immutable after creation.
+    addr: usize,
+    /// Length of this block in bytes. Immutable after creation.
+    len: usize,
+    /// Index within BlockAllocator::pool. Immutable after creation.
+    slot: usize,
+    /// When associated with a Segment, this is the slot (index) of
+    /// the containing Segment within the SegmentManager. Only load or
+    /// store this.
+    seg_slot: usize,
+    /// When associated with a Segment, this is our index within the
+    /// Segment's block set. Only load or store this.
+    blk_idx: usize,
+    /// Cache of the containing Segment's block list as a slice.
+    /// Cannot go stale if epochs are used appropriately, and Segment
+    /// data isn't mutated while an epoch is valid, and a Copy of
+    /// Block does not exist outside of an epoch window.  This is an
+    /// optimization to avoid locks. If this is null, then this Block
+    /// does not belong to any Segment (and thus seg_slot and blk_idx
+    /// are also invalid). Only load or store this.
+    list: uslice<BlockRef>,
 }
 
 impl Block {
 
     pub fn new(addr: usize, slot: usize, len: usize) -> Self {
         trace!("new Block 0x{:x} slot {} len {}", addr, slot, len);
-        Block { addr: addr, len: len, slot: slot, seg: None }
+        Block {
+            addr: addr, len: len, slot: slot,
+            seg_slot: 0, blk_idx: 0,
+            list: uslice::null(),
+        }
     }
 
-    pub unsafe fn set_segment(&self, seg: usize) {
-        let p: *mut Option<usize> = mem::transmute(&self.seg);
-        ptr::write(p, Some(seg));
+    pub unsafe fn set_segment(&self, seg_slot: usize,
+                              blk_idx: usize, list: uslice<BlockRef>) {
+        trace!("adding Block {} to Segment {} blk_idx {} list {:?}",
+               self.slot, seg_slot, blk_idx, list);
+        // XXX potential UB
+        let myself = &mut *(self as *const Self as *mut Self);
+        myself.seg_slot = seg_slot;
+        myself.blk_idx  = blk_idx;
+        myself.list     = list;
         atomic::fence(atomic::Ordering::SeqCst);
     }
 
     pub unsafe fn clear_segment(&self) {
-        let p: *mut Option<usize> = mem::transmute(&self.seg);
-        ptr::write(p, None);
+        trace!("removing Block {} from Segment", self.slot);
+        // XXX potential UB
+        let myself = &mut *(self as *const Self as *mut Self);
+        myself.list = uslice::null();
         atomic::fence(atomic::Ordering::SeqCst);
     }
+
+    // We offer these methods and perform the transmute+fence to allow
+    // Block to be copied (AtomicUsize doesn't implement Copy).
+    // Methods are here to prevent someone from doing an increment.
+    // You can only load or store.
+
+    pub fn addr(&self)       -> usize { self.addr }
+    pub fn len(&self)        -> usize { self.len }
+    pub fn slot(&self)       -> usize { self.slot }
+    pub fn seg_slot(&self)   -> usize { self.seg_slot }
+    pub fn blk_idx(&self)    -> usize { self.blk_idx }
+    pub fn list(&self) -> uslice<BlockRef> { self.list.clone() }
 }
 
 pub type BlockRef = Arc<Block>;
@@ -113,8 +156,8 @@ pub type BlockRefPool = Vec<BlockRef>;
 
 pub struct BlockAllocator {
     pool: BlockRefPool,
-    freepool: BlockRefPool,
     mmap: MemMap,
+    freepool: pl::RwLock<BlockRefPool>,
 }
 
 impl BlockAllocator {
@@ -129,7 +172,11 @@ impl BlockAllocator {
             pool.push(b.clone());
             freepool.push(b.clone());
         }
-        BlockAllocator { pool: pool, freepool: freepool, mmap: mmap, }
+        BlockAllocator {
+            pool: pool,
+            mmap: mmap,
+            freepool: pl::RwLock::new(freepool)
+        }
     }
 
     pub fn numa(bytes: usize, node: NodeId) -> Self {
@@ -142,41 +189,58 @@ impl BlockAllocator {
         Self::__new(bytes, mmap)
     }
 
-    pub fn alloc(&mut self, count: usize) -> Option<BlockRefPool> {
-        // TODO lock
-        match self.freepool.len() {
+    pub fn alloc(&self, count: usize) -> Option<BlockRefPool> {
+        let mut guard = self.freepool.write();
+        let len = guard.len();
+        match len {
             0 => {
                 warn!("freepool is empty");
                 None
             },
             len =>
                 if count <= len {
-                    Some(self.freepool.split_off(len-count))
+                    Some(guard.split_off(len-count))
                 } else { None },
         }
     }
 
-    pub fn free(&mut self, pool: &mut BlockRefPool) {
-        self.freepool.append(pool);
+    pub fn free(&self, pool: &mut BlockRefPool) {
+        self.freepool.write().append(pool);
     }
 
-    pub fn len(&self) -> usize { self.pool.len() }
-    pub fn freelen(&self) -> usize { self.freepool.len() }
+    pub fn len(&self) -> usize {
+        self.pool.len()
+    }
+
+    pub fn freelen(&self) -> usize {
+        self.freepool.read().len()
+    }
+
     pub fn freesz(&self) -> usize {
-        self.freepool.len() * BLOCK_SIZE
+        self.freelen() * BLOCK_SIZE
     }
 
     /// Convert virtual address to containing block.
-    pub fn block_of(&self, addr: usize) -> Option<BlockRef> {
+    /// We don't check if the index is valid because this function is
+    /// meant only for internal use. Any addr that isn't within a
+    /// block should never be passed in. Invalid index to pool will
+    /// result in a runtime error and halt.
+    #[inline(always)]
+    pub fn block_of(&self, addr: usize) -> Block {
         let idx: usize = (addr - self.mmap.addr()) >> BLOCK_SHIFT;
-        if idx < self.pool.len() {
-            let b = self.pool[idx].clone();
-            assert!(addr >= b.addr);
-            assert!(addr < (b.addr + BLOCK_SIZE));
-            Some(self.pool[idx].clone())
-        } else {
-            None
-        }
+        let b: &BlockRef = &self.pool[idx];
+        debug_assert!(addr >= b.addr);
+        debug_assert!(addr < (b.addr + BLOCK_SIZE));
+        (**b).clone()
+    }
+
+    #[inline(always)]
+    pub fn segment_of(&self, addr: usize) -> usize {
+        let idx: usize = (addr - self.mmap.addr()) >> BLOCK_SHIFT;
+        let b: &BlockRef = &self.pool[idx];
+        debug_assert!(addr >= b.addr);
+        debug_assert!(addr < (b.addr + BLOCK_SIZE));
+        b.seg_slot()
     }
 }
 
@@ -191,7 +255,7 @@ impl BlockAllocator {
 #[derive(Debug)]
 pub struct ObjDesc {
     key: u64,
-    value: Pointer,
+    value: Pointer<u8>,
     vlen: u32,
 }
 
@@ -199,7 +263,7 @@ pub struct ObjDesc {
 impl ObjDesc {
 
     /// Create ObjDesc where key is str and value is arbitrary memory.
-    pub fn new(key: u64, value: Pointer, vlen: u32) -> Self {
+    pub fn new(key: u64, value: Pointer<u8>, vlen: u32) -> Self {
         ObjDesc { key: key, value: value, vlen: vlen }
     }
 
@@ -207,7 +271,7 @@ impl ObjDesc {
     pub fn new2(key: u64, value: &String) -> Self {
         ObjDesc {
             key: key,
-            value: Some(value.as_ptr()),
+            value: Pointer(value.as_ptr()),
             vlen: value.len() as u32,
         }
     }
@@ -234,7 +298,7 @@ impl ObjDesc {
     //pub fn getkey(&self) -> &'a str { self.key }
     pub fn getkey(&self) -> u64 { self.key }
     pub fn keylen(&self) -> usize { mem::size_of::<u64>() }
-    pub fn getvalue(&self) -> Pointer { self.value }
+    pub fn getvalue(&self) -> Pointer<u8> { self.value }
     pub fn valuelen(&self) -> u32 { self.vlen }
 }
 
@@ -265,7 +329,7 @@ impl SegmentHeader {
 //==----------------------------------------------------==//
 
 pub type SegmentRef = Arc<RwLock<Segment>>;
-pub type SegmentManagerRef = Arc<pl::RwLock<SegmentManager>>;
+pub type SegmentManagerRef = Arc<SegmentManager>;
 
 /// A Segment of data in the log, composed of many underlying
 /// non-contiguous blocks.
@@ -300,7 +364,8 @@ pub struct Segment {
 impl Segment {
 
     // TODO make blocks a ref
-    pub fn new(id: usize, slot: usize, blocks: BlockRefPool) -> Self {
+    pub fn new(id: usize, slot: usize, mut blocks: BlockRefPool) -> Self {
+        blocks.reserve(8); // avoid resizing in the future
         debug!("new segment: slot {} #blks {}", slot, blocks.len());
         let mut len: usize = 0;
         assert!(blocks.len() > 0);
@@ -333,14 +398,25 @@ impl Segment {
             self.head = Some(blocks[0].addr);
             self.front = Some(blocks[0].addr);
         }
+
+        let list = uslice::make(&self.blocks);
+
         let mut len = 0 as usize;
-        for b in blocks.iter() {
-            len += b.len;
-            unsafe { b.set_segment(self.slot); }
+        for t in blocks.iter().zip(0..) {
+            len += t.0 .len;
+            let idx = self.blocks.len() + t.1;
+            unsafe {
+                t.0 .set_segment(self.slot, idx, list.clone());
+            }
         }
         self.len += len;
         self.rem += len;
         self.blocks.append(blocks);
+
+        // Check we are not resizing, to avoid updating the
+        // Block::list pointer when we add new elements
+        assert_eq!(list.ptr(), self.blocks.as_ptr(),
+            "segment {} block list resized!", self.slot);
     }
 
     /// Append an object with header to the log. Let append_safe
@@ -352,11 +428,6 @@ impl Segment {
         assert_eq!(self.head.is_some(), true);
         if !self.closed {
             if self.can_hold(buf) {
-                let val: *const u8;
-                match buf.value {
-                    None => return Err(ErrorCode::EmptyObject),
-                    Some(va) => { val = va; },
-                }
                 if 0 == buf.vlen {
                     return Err(ErrorCode::EmptyObject);
                 }
@@ -368,7 +439,7 @@ impl Segment {
                     let v: *const u8 = mem::transmute(&buf.key);
                     self.append_safe(v, mem::size_of::<u64>());
                 }
-                self.append_safe(val, buf.vlen as usize);
+                self.append_safe(buf.value.0 as *const u8, buf.vlen as usize);
                 self.nobj += 1;
                 self.update_header(1);
                 Ok(va)
@@ -422,28 +493,15 @@ impl Segment {
         Some(new_va)
     }
 
-    pub fn close(&mut self) {
-        self.closed = true;
-    }
-
-    pub fn nobjects(&self) -> usize {
-        self.nobj
-    }
-
-    pub fn nblocks(&self) -> usize {
-        self.blocks.len()
-    }
-
-    pub fn slot(&self) -> usize {
-        self.slot
-    }
-
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn remaining(&self) -> usize {
-        self.rem
+    pub fn close(&mut self) { self.closed = true; }
+    pub fn nobjects(&self) -> usize { self.nobj }
+    pub fn nblocks(&self) -> usize { self.blocks.len() }
+    pub fn slot(&self) -> usize { self.slot }
+    pub fn len(&self) -> usize { self.len }
+    pub fn remaining(&self) -> usize { self.rem }
+    pub fn can_hold_amt(&self, len: usize) -> bool { self.rem >= len }
+    pub fn can_hold(&self, buf: &ObjDesc) -> bool {
+        self.can_hold_amt(buf.len_with_header())
     }
 
     /// Increment values in header by specified amount
@@ -479,55 +537,10 @@ impl Segment {
         }
     }
 
-    pub fn can_hold_amt(&self, len: usize) -> bool {
-        self.rem >= len
-    }
-
-    pub fn can_hold(&self, buf: &ObjDesc) -> bool {
-        self.can_hold_amt(buf.len_with_header())
-    }
-
     pub fn headref(&mut self) -> *mut u8 {
         match self.head {
             Some(va) => va as *mut u8,
             None => panic!("taking head ref but head not set"),
-        }
-    }
-
-    pub fn get_entry_ref(&self, va: usize) -> EntryReference {
-        let blk_idx = match self.block_of(va) {
-            None => panic!("unmatched va in segment"),
-            Some(i) => i,
-        };
-        let mut header = EntryHeader::empty();
-        let offset = va & (BLOCK_SIZE - 1);
-        unsafe {
-            self.read_safe(blk_idx, offset,
-                header.as_mut_ptr(),
-                mem::size_of::<EntryHeader>());
-        }
-
-        debug_assert_eq!(header.getkeylen() as usize,
-                         mem::size_of::<u64>());
-        debug_assert!(header.getdatalen() > 0);
-        // https://github.com/rust-lang/rust/issues/22644
-        debug_assert!( (header.getdatalen() as usize) < SEGMENT_SIZE);
-
-        // determine which blocks belong
-        let mut nblks = 1;
-        let blk_tail = BLOCK_SIZE - (offset % BLOCK_SIZE);
-        let entry_len = header.len_with_header();
-        if entry_len > blk_tail {
-            nblks += ((entry_len - blk_tail) / BLOCK_SIZE) + 1;
-        }
-        debug_assert!(blk_idx+nblks-1 < self.blocks.len());
-
-        EntryReference {
-            offset: offset,
-            len: entry_len,
-            keylen: header.getkeylen(),
-            datalen: header.getdatalen(),
-            blocks: self.blocks[blk_idx..(blk_idx+nblks)].to_vec(),
         }
     }
 
@@ -539,13 +552,14 @@ impl Segment {
     /// Same as append_safe but copies out, instead. Returns the VA
     /// just past the data we copied out (in case we traveled to a
     /// subsequent block, it returns its starting address).
+    /// TODO merge into copy_out? or replace it?
     unsafe fn read_safe(&self, blk_idx: usize, offset: usize,
                             dst: *mut u8, len: usize) -> usize {
         // Perform 2+ copies across blocks if needed
         let mut curblk = blk_idx;
         let mut loc = (self.blocks[blk_idx].addr+offset) as *const u8;
         let mut copied = 0_usize;
-        let mut amt = 0_usize;
+        let mut amt: usize;
         loop {
             let in_blk = BLOCK_SIZE - (loc as usize & (BLOCK_SIZE-1));
             amt = cmp::min(in_blk, len - copied);
@@ -572,6 +586,7 @@ impl Segment {
 
     /// Determine which block holds this address.
     /// TODO optimize with an address range to block mapping
+    #[cfg(IGNORE)]
     fn block_of(&self, va: usize) -> Option<usize> {
         for tuple in self.blocks.iter().zip(0..) {
             let start = tuple.0 .addr;
@@ -670,7 +685,7 @@ impl Drop for Segment {
 }
 
 impl<'a> IntoIterator for &'a Segment {
-    type Item = EntryReference;
+    type Item = EntryReference<'a>;
     type IntoIter = SegmentIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -710,9 +725,9 @@ impl<'a> SegmentIter<'a> {
 }
 
 impl<'a> Iterator for SegmentIter<'a> {
-    type Item = EntryReference;
+    type Item = EntryReference<'a>;
 
-    fn next(&mut self) -> Option<EntryReference> {
+    fn next(&mut self) -> Option<EntryReference<'a>> {
         if self.next_obj >= self.n_obj {
             return None;
         }
@@ -773,7 +788,7 @@ impl<'a> Iterator for SegmentIter<'a> {
             len: entry_len,
             keylen: entry.getkeylen(),
             datalen: entry.getdatalen(),
-            blocks: self.blocks[self.cur_blk..last_blk].to_vec(),
+            blocks: &self.blocks[self.cur_blk..last_blk],
         };
         trace!("entry {:?}", entry);
         Some(entry)
@@ -784,19 +799,34 @@ impl<'a> Iterator for SegmentIter<'a> {
 //      Segment manager
 //==----------------------------------------------------==//
 
+/// Any members which require locking to access (they can be mutated).
+#[allow(dead_code)]
+struct SegmentMgrInner {
+    /// The set of Segments. Any entry which is None is available to
+    /// allocate from.
+    segments: Vec<Option<SegmentRef>>,
+    /// Segments the LogHead recently closed. Compaction code will
+    /// drain this periodically.
+    closed: Vec<SegmentRef>,
+}
+
+/// Per-socket manager of segments and blocks.
 #[allow(dead_code)]
 pub struct SegmentManager {
     /// Socket we are bound to.
     socket: Option<NodeId>,
     /// Total memory
     size: usize,
+    /// Each segment gets a new ID (but slots are reused).
     next_seg_id: atomic::AtomicUsize,
-    allocator: BlockAllocator,
-    segments: Vec<Option<SegmentRef>>,
     seginfo: SegmentInfoTableRef,
+    /// The lower-level memory allocator we use.
+    allocator: BlockAllocator,
+    /// Segment slots that are unused.
     free_slots: Arc<SegQueue<u32>>,
-    // TODO lock these
-    closed: Vec<SegmentRef>,
+    /// Variables which change over the lifetime of this object and
+    /// are not atomic-capable.
+    inner: pl::RwLock<SegmentMgrInner>,
 }
 
 // TODO reclaim segments function and thread
@@ -819,10 +849,12 @@ impl SegmentManager {
             size: len,
             next_seg_id: atomic::AtomicUsize::new(0),
             allocator: b,
-            segments: segments,
             seginfo: Arc::new(SegmentInfoTable::new(num)),
             free_slots: Arc::new(free_slots),
-            closed: Vec::new(),
+            inner: pl::RwLock::new( SegmentMgrInner {
+                segments: segments,
+                closed: Vec::new()
+            }),
         }
     }
 
@@ -836,10 +868,17 @@ impl SegmentManager {
         Self::__new(None,segsz,len,b)
     }
 
+    /// Make a Copy of the Block containing this VA (not cloning the
+    /// Arc holding the Block).
+    #[inline(always)]
+    pub fn block_of(&self, va: usize) -> Block {
+        self.allocator.block_of(va)
+    }
+
     /// Allocate a segment with a specific number of blocks. Used by
     /// compaction code.
     /// TODO wait/return if blocks aren't available (not panic)
-    pub fn alloc_size(&mut self, nblks: usize) -> Option<SegmentRef> {
+    pub fn alloc_size(&self, nblks: usize) -> Option<SegmentRef> {
         // TODO lock, unlock
         let mut ret: Option<SegmentRef> = None;
         // XXX check allocator has enough blocks
@@ -847,38 +886,53 @@ impl SegmentManager {
         // or we only use a fixed amount of segment slots and
         // compactor always tries to fill exactly to SEGMENT_SIZE?
         if let Some(s) = self.free_slots.try_pop() {
+            let mut inner = self.inner.write();
             let slot = s as usize;
-            assert!(self.segments[slot].is_none());
-            let blocks = match self.allocator.alloc(nblks) {
+            assert!(inner.segments[slot].is_none());
+            let mut blocks = match self.allocator.alloc(nblks) {
                 None => panic!("Could not allocate blocks"),
                 Some(b) => b,
             };
-            for block in &blocks {
-                unsafe { block.set_segment(slot); }
+
+            // some extra in case of overflow
+            blocks.reserve(8);
+
+            let list = uslice::make(&blocks);
+            for t in (0..).zip(&blocks) {
+                unsafe {
+                    t.1 .set_segment(slot, t.0, list.clone());
+                }
             }
             let id = self.next_seg_id.fetch_add(1,
                                      atomic::Ordering::Relaxed);
-            self.segments[slot] = Some(seg_ref!(id, slot, blocks));
-            ret = self.segments[slot].clone();
+            // Check we are not resizing, to avoid updating the
+            // Block::list pointer when we add new elements
+            assert_eq!(list.ptr(), blocks.as_ptr(),
+                "segment {} block list resized!", slot);
+
+            inner.segments[slot] = Some(seg_ref!(id, slot, blocks));
+            ret = inner.segments[slot].clone();
+
         }
+
         ret
     }
 
     /// Allocate a segment with default size.
-    pub fn alloc(&mut self) -> Option<SegmentRef> {
+    pub fn alloc(&self) -> Option<SegmentRef> {
         // TODO use config obj
         let nblks = (SEGMENT_SIZE - 1) / BLOCK_SIZE + 1;
         self.alloc_size(nblks)
     }
 
     // Consume the reference and release its blocks
-    pub fn free(&mut self, segref: SegmentRef) {
+    pub fn free(&self, segref: SegmentRef) {
 
         // drop only other known ref to segment
         // and extract slot#
         let slot = {
             let seg = segref.read().unwrap(); // FIXME don't lock
-            self.segments[seg.slot] = None;
+            self.inner.write().segments[seg.slot] = None;
             seg.slot
         };
 
@@ -893,6 +947,10 @@ impl SegmentManager {
 
         // TODO memset the segment? or the header?
 
+        for b in &seg.blocks {
+            unsafe { b.clear_segment(); }
+        }
+
         // release the blocks
         self.allocator.free(&mut seg.blocks);
 
@@ -902,32 +960,27 @@ impl SegmentManager {
     }
 
     /// Directly allocate raw blocks without a containing segment.
-    pub fn alloc_blocks(&mut self, count: usize)
+    pub fn alloc_blocks(&self, count: usize)
         -> Option<BlockRefPool> {
         debug!("allocating {} blocks out-of-band", count);
         self.allocator.alloc(count)
     }
 
-    pub fn segment_of(&self, va: usize) -> Option<usize> {
-        let mut ret: Option<usize> = None;
-        if let Some(block) = self.allocator.block_of(va) {
-            if let Some(idx) = block.seg {
-                assert!(idx < self.segments.len());
-                ret = Some(idx);
-            }
-        }
-        ret
+    #[inline(always)]
+    pub fn segment_of(&self, va: usize) -> usize {
+        self.allocator.segment_of(va)
     }
 
     /// Construct an EntryReference to the object pointed to by 'va'.
     /// If va is bogus, return None. Remember to pin your epoch, else
     /// your location may be updated underneath you by compaction.
+    #[cfg(IGNORE)]
     pub fn get_entry_ref(&self, va: usize) -> Option<EntryReference> {
         let idx = match self.segment_of(va) {
             None => return None,
             Some(idx) => idx,
         };
-        debug_assert_eq!(self.segments[idx].is_some(), true);
+        //debug_assert_eq!(self.segments[idx].is_some(), true);
         let seg = self.segments[idx].as_ref().unwrap();
         // XXX avoid locking!!
         let guard = seg.read().unwrap();
@@ -938,15 +991,17 @@ impl SegmentManager {
     /// Log heads pass segments here when it rolls over. Compaction
     /// threads will periodically query this queue for new segments to
     /// add to its candidate list.
-    pub fn add_closed(&mut self, seg: &SegmentRef) {
-        self.closed.push(seg.clone());
+    pub fn add_closed(&self, seg: &SegmentRef) {
+        let mut inner = self.inner.write();
+        inner.closed.push(seg.clone());
     }
 
     // TODO if using SegQueue, perhaps add max to pop off
-    pub fn grab_closed(&mut self,
+    pub fn grab_closed(&self,
                        to: &mut Vec<SegmentRef>) -> usize {
-        let n: usize = self.closed.len();
-        to.append(&mut self.closed);
+        let mut inner = self.inner.write();
+        let n: usize = inner.closed.len();
+        to.append(&mut inner.closed);
         n
     }
 
