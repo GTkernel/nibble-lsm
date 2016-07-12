@@ -14,7 +14,7 @@ extern crate nibble;
 
 use clap::{Arg, App, SubCommand};
 use log::LogLevel;
-use nibble::common::{ErrorCode,rdrand};
+use nibble::common::{Pointer,ErrorCode,rdrand};
 use nibble::epoch;
 use nibble::logger;
 use nibble::memory;
@@ -128,7 +128,7 @@ fn run(config: &Config) {
             let arc = nib.clone();
             handles.push( thread::spawn( move || {
                 let value = memory::allocate::<u8>(size);
-                let v = Some(value as *const u8);
+                let v = Pointer(value as *const u8);
                 info!("range [{},{}) on socket {}",
                     start_key, end_key, sock);
                 for key in start_key..end_key {
@@ -157,13 +157,14 @@ fn run(config: &Config) {
 
     let mut threadcount: Vec<usize>;
     // power of 2   1, 2, 4, 8, 16, 32, 64, 128, 256
-    threadcount = (0usize..9).map(|e|1usize<<e).collect();
+    //threadcount = (0usize..9).map(|e|1usize<<e).collect();
     // incr of 4    1, 4, 8, 12, 16, ...
     //threadcount = (0usize..65).map(|e|if e==0 {1} else {4*e}).collect();
     // incr of 2    1, 2, 4, 6, 8, ...
-    //threadcount = (0usize..130).map(|e|if e==0 {1} else {2*e}).collect();
+    threadcount = (0usize..130).map(|e|if e==0 {1} else {2*e}).collect();
     // incr of 1    1, 2, 3, 4, 5, ...
     //threadcount = (1usize..261).collect();
+    //threadcount = vec![6];
 
     println!("# tid ntid kops");
 
@@ -232,6 +233,7 @@ fn run(config: &Config) {
                 // main loop (do warmup first)
                 let mut n: usize = 7877 * (t+1); // offset all threads
                 for x in 0..2 {
+                //let x = 1;
                 //loop {
                     let mut ops = 0usize;
                     let now = Instant::now();
@@ -247,7 +249,7 @@ fn run(config: &Config) {
                                 for _ in 0..1000usize {
                                     let key = sock.0*pernode + (n % pernode);
                                     let _ = nib.get_object(key as u64);
-                                    n *= offset; // skip some
+                                    n = n.wrapping_mul(offset); // skip some
                                     ops += 1;
                                 }
                             },
@@ -256,7 +258,7 @@ fn run(config: &Config) {
                                     let key = n % nobj;
                                     //let key = ((n % nsockets)*pernode)+(n % pernode);
                                     let _ = nib.get_object(key as u64);
-                                    n *= offset;
+                                    n = n.wrapping_mul(offset); // skip some
                                     ops += 1;
                                 }
                             },

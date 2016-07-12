@@ -17,7 +17,7 @@ extern crate nibble;
 use clap::{Arg, App, SubCommand};
 use log::LogLevel;
 use nibble::clock;
-use nibble::common::{ErrorCode,rdrand,rdrandq};
+use nibble::common::{Pointer,ErrorCode,rdrand,rdrandq};
 use nibble::cuckoo;
 use nibble::epoch;
 use nibble::logger;
@@ -154,14 +154,17 @@ struct WorkloadGenerator {
     nibble: Nibble,
     config: Config,
     gen: Box<DistGenerator>,
+    sockets: usize,
 }
 
 impl WorkloadGenerator {
 
     pub fn new(config: Config) -> Self {
         let n = config.records;
-        let mut nibble = Nibble::new( 1usize << 30 );
-        nibble.enable_compaction(NodeId(0));
+        let mut nibble = Nibble::new(config.mem);
+        for node in 0..numa::NODE_MAP.sockets() {
+            nibble.enable_compaction(NodeId(node));
+        }
         info!("WorkloadGenerator {:?}", config);
         WorkloadGenerator {
             nibble: nibble,
@@ -172,23 +175,28 @@ impl WorkloadGenerator {
                 Dist::Uniform => Box::new(
                     Uniform::new(n as u64)),
             },
+            sockets: numa::NODE_MAP.sockets(),
         }
     }
 
     pub fn setup(&mut self) {
         let size = self.config.size;
         let value = memory::allocate::<u8>(size);
-        let v = Some(value as *const u8);
+        let v = value as *const u8;
 
-        // FIXME change this if we scale up?
-        let policy = PutPolicy::Specific(0);
 
         info!("Inserting {} objects of size {}",
               self.config.records, self.config.size);
+        let persock = self.config.records / self.sockets;
+        let mut node: u64 = 0;
         for record in 0..(self.config.records as u64) {
-            let obj = ObjDesc::new(record, v, size as u32);
-            if let Err(e) = self.nibble.put_where(&obj, policy) {
+            let obj = ObjDesc::new(record, Pointer(v), size as u32);
+            if let Err(e) = self.nibble.put_where(&obj,
+                                 PutPolicy::Specific(node as usize)) {
                 panic!("Error {:?}", e);
+            }
+            if ((record+1) % persock as u64) == 0 {
+                node += 1;
             }
         }
         unsafe { memory::deallocate(value, size); }
@@ -202,7 +210,7 @@ impl WorkloadGenerator {
 
         let size = self.config.size;
         let value = memory::allocate::<u8>(size);
-        let v = Some(value as *const u8);
+        let v = value as *const u8;
 
         // each op should have this latency (in nsec) or less
         let nspo: u64 = match self.config.ops {
@@ -234,7 +242,7 @@ impl WorkloadGenerator {
                     panic!("Error: {:?}", e);
                 }
             } else {
-                let obj = ObjDesc::new(key, v, size as u32);
+                let obj = ObjDesc::new(key, Pointer(v), size as u32);
                 // We know (in this workload) we aren't filling up the
                 // system beyond its capacity, so OOM errors are due
                 // to not compacting. Spin until it works and keep
