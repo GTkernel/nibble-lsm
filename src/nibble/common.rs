@@ -1,5 +1,6 @@
 use libc;
 use std::ptr;
+use std::slice;
 
 //==----------------------------------------------------==//
 //      General types
@@ -8,8 +9,31 @@ use std::ptr;
 /// Size of a cache line in bytes.
 pub const CACHE_LINE: usize = 64;
 
-pub type Pointer = Option<*const u8>;
-pub type PointerMut = Option<*mut u8>;
+/// An unsafe type to share pointers across threads >:)
+#[derive(Copy,Clone,Debug)]
+pub struct Pointer<T>(pub *const T);
+unsafe impl<T> Send for Pointer<T> {}
+unsafe impl<T> Sync for Pointer<T> {}
+
+/// A 'slice' skirting the borrow-checker (until I can find a sane
+/// design to avoid the need for this).
+#[derive(Copy,Clone,Debug)]
+pub struct uslice<T>( usize, Pointer<T> );
+impl<T> uslice<T> {
+    pub fn null() -> Self {
+        uslice( 0, Pointer(ptr::null::<T>()) )
+    }
+    pub fn make(v: &Vec<T>) -> Self {
+        uslice( v.len(), Pointer(v.as_ptr()) )
+    }
+    pub fn ptr(&self) -> *const T { self.1 .0 }
+    pub fn len(&self) -> usize { self.0 }
+    pub unsafe fn slice(&self) -> &[T] {
+        slice::from_raw_parts(self.1 .0, self.0)
+    }
+}
+unsafe impl<T> Send for uslice<T> {}
+unsafe impl<T> Sync for uslice<T> {}
 
 //==----------------------------------------------------==//
 //      Random stuff
