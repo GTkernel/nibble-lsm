@@ -337,28 +337,28 @@ impl<'a> EntryReference<'a> {
 /// Construct an EntryReference given a VA and a set of Blocks.
 pub fn get_ref(list: &[BlockRef], idx: usize, va: usize) -> EntryReference {
     let mut header: EntryHeader;
+    let mut href: &EntryHeader;
     let offset = va & BLOCK_OFF_MASK;
     let blk_tail = BLOCK_SIZE - offset;
     let len = size_of::<EntryHeader>();
 
-    // if header is contiguous, just read it directly here
     if blk_tail >= len {
         let head_addr = va as *const usize as *const EntryHeader;
-        header = unsafe { ptr::read(head_addr) };
+        href = unsafe { &*head_addr };
     } else { unsafe {
-        // slow path
         header = EntryHeader::empty();
         copy_out(&list[idx..], offset, header.as_mut_ptr(), len);
+        href = &header;
     }}
 
-    debug_assert_eq!(header.getkeylen() as usize, size_of::<u64>());
-    debug_assert!(header.getdatalen() > 0);
+    debug_assert_eq!(href.getkeylen() as usize, size_of::<u64>());
+    debug_assert!(href.getdatalen() > 0);
     // https://github.com/rust-lang/rust/issues/22644
-    debug_assert!( (header.getdatalen() as usize) < SEGMENT_SIZE);
+    debug_assert!( (href.getdatalen() as usize) < SEGMENT_SIZE);
 
     // determine which blocks belong
     let mut nblks = 1;
-    let entry_len = header.len_with_header();
+    let entry_len = href.len_with_header();
     if entry_len > blk_tail {
         nblks += ((entry_len - blk_tail) / BLOCK_SIZE) + 1;
     }
@@ -367,8 +367,8 @@ pub fn get_ref(list: &[BlockRef], idx: usize, va: usize) -> EntryReference {
     EntryReference {
         offset: offset,
         len: entry_len,
-        keylen: header.getkeylen(),
-        datalen: header.getdatalen(),
+        keylen: href.getkeylen(),
+        datalen: href.getdatalen(),
         blocks: &list[idx..(idx + nblks)],
     }
 }
