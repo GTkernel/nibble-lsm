@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use numa::{self,NodeId};
 use sched;
-use common::errno;
+use common::{Pointer,errno};
 
 //==----------------------------------------------------==//
 //      Alignment
@@ -46,24 +46,29 @@ pub unsafe fn deallocate<T>(ptr: *mut T, count: usize) {
 /// to back Buffers with a slab allocator to avoid object sizes
 /// becoming exposed to the heap allocator.
 pub struct Buffer {
-    addr: usize,
+    addr: Pointer<u8>,
     len: usize,
 }
 
 impl Buffer {
 
     pub fn new(len: usize) -> Self {
-        let va: usize = unsafe { libc::malloc(len) as usize };
-        assert!(va != 0);
-        Buffer { addr: va, len: len }
+        Buffer {
+            addr: Pointer(allocate::<u8>(len)),
+            len: len
+        }
     }
 
-    pub fn getaddr(&self) -> usize { self.addr }
-    pub fn getlen(&self) -> usize { self.len }
+    pub fn getaddr(&self) -> usize {
+        self.addr.0 as usize
+    }
 
+    pub fn getlen(&self) -> usize {
+        self.len
+    }
 
     pub fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.addr as *mut usize as *mut u8
+        self.addr.0 as *mut u8
     }
 
     // TODO append()
@@ -71,8 +76,8 @@ impl Buffer {
 
 impl Drop for Buffer {
     fn drop (&mut self) {
-        if self.addr > 0 {
-            unsafe { libc::free(self.addr as *mut libc::c_void); }
+        if !self.addr.0 .is_null() {
+            unsafe { deallocate(self.addr.0 as *mut u8, self.len); }
         }
     }
 }
