@@ -93,6 +93,8 @@ pub struct MemMap {
 }
 
 /// Create anonymous private memory mapped region.
+/// This needs to be aligned on BLOCK_SIZE boundary as we mask virtual
+/// addresses within this map to test for contiguity of objects.
 impl MemMap {
 
     pub fn new(len: usize) -> Self {
@@ -112,25 +114,37 @@ impl MemMap {
 
     // map and allocate anon memory, bound to a socket
     // shm segments + hugepg + numa on Linux asinine to get working
-    // FIXME until mbind is available, we change the cpu mask before
-    // faulting in all pages, then restore mask
-    pub fn numa(len: usize, node: NodeId) -> Self {
-        debug!("len {} node {}", len, node.0);
+    // alignment must be power of two
+    pub fn numa(len: usize, node: NodeId, align: usize) -> Self {
+        assert!(align.is_power_of_two());
+        assert!(align >= 4096);
+        assert!(align < len);
+
+        debug!("len {} node {} align {}", len, node.0, align);
         let prot: libc::c_int = libc::PROT_READ | libc::PROT_WRITE;
         let flags: libc::c_int = libc::MAP_ANON |
             libc::MAP_PRIVATE | libc::MAP_NORESERVE |
             libc::MAP_HUGETLB;
-        let addr: usize = unsafe {
+        let mut addr: usize = unsafe {
             let p = 0 as *mut libc::c_void;
-            libc::mmap(p, len, prot, flags, -1, 0) as usize
+            libc::mmap(p, len + align, prot, flags, -1, 0) as usize
         };
         if addr == libc::MAP_FAILED as usize {
             panic!("mmap: {}", unsafe{errno()});
         }
-        info!("mmap 0x{:x}-0x{:x} {} MiB",
+        info!("mmap    0x{:x}-0x{:x} {} MiB",
               addr, (addr+len), len>>20);
 
+        // fix the alignment
+        // TODO release unused memory
+        if addr & (align - 1)  > 0 {
+            addr = (addr + align) & !(align-1);
+        }
+        info!("aligned 0x{:x}-0x{:x} to {}",
+              addr, (addr+len), align);
+
         // bind the memory to a socket
+        // mbind has no wrapper, currently
         let nnodes = numa::NODE_MAP.sockets();
         let mask = 1usize << node.0;
         unsafe {
@@ -146,7 +160,7 @@ impl MemMap {
         unsafe {
             for pg in 0..(len>>12) {
                 let pos: usize = addr + (pg<<12);
-                ptr::write(pos as *mut usize, 42usize);
+                ptr::write(pos as *mut usize, 0_usize);
             }
         }
         info!("alloc node {}: {} sec", node, now.elapsed().as_secs());

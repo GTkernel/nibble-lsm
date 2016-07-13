@@ -180,7 +180,7 @@ impl BlockAllocator {
     }
 
     pub fn numa(bytes: usize, node: NodeId) -> Self {
-        let mmap = MemMap::numa(bytes, node);
+        let mmap = MemMap::numa(bytes, node, BLOCK_SIZE);
         Self::__new(bytes, mmap)
     }
 
