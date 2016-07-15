@@ -151,9 +151,8 @@ enum YCSB {
 }
 
 struct WorkloadGenerator {
-    nibble: Nibble,
+    nibble: Arc<Nibble>,
     config: Config,
-    gen: Box<DistGenerator>,
     sockets: usize,
 }
 
@@ -161,56 +160,63 @@ impl WorkloadGenerator {
 
     pub fn new(config: Config) -> Self {
         let n = config.records;
-        let mut nibble = Nibble::new(config.mem);
+        let mut nibble = Nibble::new(config.total);
         for node in 0..numa::NODE_MAP.sockets() {
             nibble.enable_compaction(NodeId(node));
         }
         info!("WorkloadGenerator {:?}", config);
         WorkloadGenerator {
-            nibble: nibble,
+            nibble: Arc::new(nibble),
             config: config,
-            gen: match config.dist {
-                Dist::Zipfian(s) => Box::new(
-                    ZipfianArray::new(n as u64,s)),
-                Dist::Uniform => Box::new(
-                    Uniform::new(n as u64)),
-            },
             sockets: numa::NODE_MAP.sockets(),
         }
     }
 
     pub fn setup(&mut self) {
         let size = self.config.size;
-        let value = memory::allocate::<u8>(size);
-        let v = value as *const u8;
-
 
         info!("Inserting {} objects of size {}",
               self.config.records, self.config.size);
-        let persock = self.config.records / self.sockets;
-        let mut node: u64 = 0;
-        for record in 0..(self.config.records as u64) {
-            let obj = ObjDesc::new(record, Pointer(v), size as u32);
-            if let Err(e) = self.nibble.put_where(&obj,
-                                 PutPolicy::Specific(node as usize)) {
-                panic!("Error {:?}", e);
-            }
-            if ((record+1) % persock as u64) == 0 {
-                node += 1;
-            }
+
+        let now = Instant::now();
+        let pernode = self.config.records / self.sockets;
+        let mut handles: Vec<JoinHandle<()>> =
+            Vec::with_capacity(self.sockets);
+        for sock in 0..self.sockets {
+            let start_key: u64 = (sock*pernode) as u64;
+            let end_key: u64   = start_key + (pernode as u64);
+            let arc = self.nibble.clone();
+            handles.push( thread::spawn( move || {
+                let value = memory::allocate::<u8>(size);
+                let v = Pointer(value as *const u8);
+                info!("range [{},{}) on socket {}",
+                start_key, end_key, sock);
+                for key in start_key..end_key {
+                    let obj = ObjDesc::new(key, v, size as u32);
+                    if let Err(code) = arc.put_where(&obj,
+                                                     PutPolicy::Specific(sock)) {
+                        panic!("{:?}", code)
+                    }
+                }
+                unsafe { memory::deallocate(value, size); }
+            }));
         }
-        unsafe { memory::deallocate(value, size); }
+        for handle in handles {
+            let _ = handle.join();
+        }
+
+        let sec = now.elapsed().as_secs();
+        info!("insertion took {} seconds", sec);
     }
 
     /// Run at specified op per second (ops).
     /// Zero means no throttling.
     pub fn run(&mut self) {
-        let read_threshold =
-            (std::u64::MAX / 100u64) * (self.config.read_pct as u64);
+        let read_threshold = self.config.read_pct;
+        assert!(read_threshold <= 100);
 
+        let pernode = self.config.records / self.sockets;
         let size = self.config.size;
-        let value = memory::allocate::<u8>(size);
-        let v = value as *const u8;
 
         // each op should have this latency (in nsec) or less
         let nspo: u64 = match self.config.ops {
@@ -221,9 +227,6 @@ impl WorkloadGenerator {
         let cpo = clock::from_nano(nspo);
         debug!("nspo {} cpo {}", nspo, cpo);
 
-        // FIXME change this if we scale up?
-        let policy = PutPolicy::Specific(0);
-
         info!("Starting experiment");
         let mut counter = 0u64;
         let start = unsafe { clock::rdtsc() }; // for throttling
@@ -231,232 +234,446 @@ impl WorkloadGenerator {
         let mut tic = unsafe { clock::rdtsc() }; // report performance
         let mut per_loop = 0u64; // ops performed per report
 
-        loop {
-            // since we don't delete, all reads will hit
-            let key = self.gen.next() %
-                (self.config.records as u64);
-            let rd = unsafe { rdrandq() };
+        let accum = Arc::new(AtomicUsize::new(0));
+        let mut threadcount: Vec<usize>;
 
-            if rd < read_threshold {
-                if let (Err(e),_) = self.nibble.get_object(key) {
-                    panic!("Error: {:?}", e);
-                }
-            } else {
-                let obj = ObjDesc::new(key, Pointer(v), size as u32);
-                // We know (in this workload) we aren't filling up the
-                // system beyond its capacity, so OOM errors are due
-                // to not compacting. Spin until it works and keep
-                // going.
-                while let Err(e) = self.nibble.put_where(&obj, policy) {
-                    match e {
-                        ErrorCode::OutOfMemory => {},
-                        _ => panic!("Error: {:?}", e),
+        // specific number of threads only
+        //threadcount = vec![1];
+        // power of 2   1, 2, 4, 8, 16, 32, 64, 128, 256
+        //threadcount = (0usize..9).map(|e|1usize<<e).collect();
+        // incr of 4    1, 4, 8, 12, 16, ...
+        //threadcount = (0usize..65).map(|e|if e==0 {1} else {4*e}).collect();
+        // incr of 2    1, 2, 4, 6, 8, ...
+        //threadcount = (0usize..130).map(|e|if e==0 {1} else {2*e}).collect();
+        // incr of 1    1, 2, 3, 4, 5, ...
+        //threadcount = (1usize..261).collect();
+
+
+        // Run the experiment multiple times using different sets of
+        // threads
+        for nthreads in threadcount {
+
+            let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(nthreads);
+            info!("running with {} threads ---------", nthreads);
+            accum.store(nthreads, Ordering::Relaxed);
+
+            // Create CPU binding strategy
+            let cpus_pernode = numa::NODE_MAP.cpus_in(NodeId(0));
+            let sockets = 1;//numa::NODE_MAP.sockets();
+            let ncpus = cpus_pernode * sockets;
+            let mut cpus: VecDeque<usize> = VecDeque::with_capacity(ncpus);
+            match self.config.cpu {
+                CPUPolicy::Random => {
+                    for i in 0..ncpus {
+                        cpus.push_back(i);
                     }
+                    // Knuth shuffle
+                    let mut rng = rand::thread_rng();
+                    for i in 0..ncpus {
+                        let o = (rng.next_u32() as usize % (ncpus-i)) + i;
+                        cpus.swap(i, o);
+                    }
+                },
+                CPUPolicy::SocketRR => {
+                    for i in 0..cpus_pernode {
+                        for sock in 0..sockets {
+                            let r = numa::NODE_MAP.cpus_of(NodeId(sock));
+                            cpus.push_back(r.start + i);
+                        }
+                    }
+                },
+                CPUPolicy::Incremental => {
+                    for i in 0..ncpus {
+                        cpus.push_back(i);
+                    }
+                },
+            }
+
+            // Spawn each of the threads in this set
+            for t in 0..nthreads {
+                let accum = accum.clone();
+                let cpu = cpus.pop_front().unwrap();
+                let config = self.config.clone();
+                let nibble = self.nibble.clone();
+
+                handles.push( thread::spawn( move || {
+                    accum.fetch_sub(1, Ordering::Relaxed);
+                    unsafe { pin_cpu(cpu); }
+
+                    let value = memory::allocate::<u8>(size);
+                    let v = Pointer(value as *const u8);
+
+                    let sock = numa::NODE_MAP.sock_of(cpu);
+                    info!("thread {} on cpu {} sock {:?}", t, cpu, sock);
+
+                    // make your own generator for key accesses
+                    let mut gen: Box<DistGenerator> =
+                        match config.dist {
+                            Dist::Zipfian(s) => Box::new(
+                                ZipfianArray::new(config.records as u64,s)),
+                                Dist::Uniform => Box::new(
+                                    Uniform::new(config.records as u64)),
+                        };
+                    // make one for determining read/writes
+                    // don't want rdrand in the critical path.. slow
+                    let mut rw: Box<DistGenerator> =
+                        Box::new(Uniform::new(100));
+
+                    // wait for all other threads to spawn
+                    // after this, accum is zero
+                    while accum.load(Ordering::Relaxed) > 0 { ; }
+
+                    // main loop (do warmup first)
+                    //for x in 0..2 {
+                    let x = 1;
+                    loop {
+                        let mut ops = 0usize;
+                        let now = Instant::now();
+
+                        while now.elapsed().as_secs() < 5 {
+
+                            match config.mem {
+
+                                // 
+                                // LOCAL
+                                //
+                                s @ MemPolicy::Local => {
+                                    let policy = PutPolicy::Specific(sock.0);
+                                    for _ in 0..1000usize {
+                                        let key = sock.0*pernode +
+                                            (gen.next() as usize % pernode);
+                                        let obj = ObjDesc::new(key as u64, v,
+                                                               config.size as u32);
+                                        if rw.next() < read_threshold as u64 {
+                                            if let (Err(e),_) = nibble.get_object(key as u64) {
+                                                panic!("Error: {:?}", e);
+                                            }
+                                        } else {
+                                            while let Err(e) = nibble.put_where(&obj, policy) {
+                                                match e {
+                                                    ErrorCode::OutOfMemory => {},
+                                                    _ => panic!("Error: {:?}", e),
+                                                }
+                                            }
+                                        } // r or w
+                                        ops += 1;
+                                    } // do 1000
+                                },
+
+                                // 
+                                // GLOBAL
+                                //
+                                s @ MemPolicy::Random => {
+                                    for _ in 0..1000usize {
+                                        let key = gen.next() as usize;
+                                        let obj = ObjDesc::new(key as u64, v,
+                                                               config.size as u32);
+                                        if rw.next() < read_threshold as u64 {
+                                            if let (Err(e),_) = nibble.get_object(key as u64) {
+                                                panic!("Error: {:?}", e);
+                                            }
+                                        } else {
+                                            let policy = PutPolicy::Specific(rw.next() as usize % sockets);
+                                            while let Err(e) = nibble.put_where(&obj, policy) {
+                                                match e {
+                                                    ErrorCode::OutOfMemory => {},
+                                                    _ => panic!("Error: {:?}", e),
+                                                }
+                                            }
+                                        } // r or w
+                                        ops += 1;
+                                    }
+                                },
+                            }
+
+                        }
+                        if x == 1 {
+                            let dur = now.elapsed();
+                            let nsec = dur.as_secs() * 1000000000u64
+                                + dur.subsec_nanos() as u64;
+                            let kops = ((ops as f64)/1e3)/((nsec as f64)/1e9);
+                            println!("# {} {} {:.3}", t, nthreads, kops);
+                            // aggregate the performance
+                            accum.fetch_add(kops as usize, Ordering::Relaxed);
+                        }
+                    }
+                }));
                 }
+                for handle in handles {
+                    let _ = handle.join();
+                }
+                println!("# total kops {}",
+                         accum.load(Ordering::Relaxed));
+                cuckoo::print_conflicts(0usize);
             }
 
-            counter += 1;
-            per_loop += 1;
 
-            // throttle
-            if cpo > 0 {
-                let next = start + counter * cpo;
-                while unsafe { clock::rdtsc() } < next { ; }
-            }
+        } // run()
 
-            let toc = unsafe { clock::rdtsc() };
-            if clock::to_seconds(toc - tic) > 1 {
-                let tim = clock::to_secondsf(toc-tic);
-                let kops = (per_loop as f64 / 1000f64) / tim;
-                println!("{:.3} kops/sec", kops);
-                // reset
-                tic = unsafe { clock::rdtsc() };
-                per_loop = 0u64;
+    }
+
+#[derive(Clone,Copy,Debug)]
+    enum CPUPolicy {
+        Random,
+        SocketRR, // round-robin among sockets
+        Incremental, // fill each socket
+    }
+
+#[derive(Clone,Copy,Debug)]
+    enum MemPolicy {
+        Random,
+        Local, // access only keys local to socket
+    }
+
+#[derive(Debug,Clone,Copy)]
+    enum Dist {
+        /// Contained value is s (exponent modifier)
+        Zipfian(f64),
+        Uniform,
+    }
+
+    // TODO: setup configuration, how to allocate objects across sockets
+#[derive(Debug,Clone,Copy)]
+    struct Config {
+        /// Amount of memory to use for nibble
+        total: usize,
+        /// if None, custom workload
+        ycsb: Option<YCSB>,
+        /// number of objects
+        records: usize,
+        /// size of each object
+        size: usize,
+        dist: Dist,
+        /// 0-100 (1-read_pct = write pct)
+        read_pct: usize,
+        /// operations per second to sustain. 0 = unthrottled
+        ops: u64,
+        cpu: CPUPolicy,
+        mem: MemPolicy,
+    }
+
+    impl Config {
+
+        pub fn ycsb(total: usize, ops: u64, w: YCSB,
+                    cpu: CPUPolicy, mem: MemPolicy) -> Self {
+            let rc: usize = 1000;
+            Self::ycsb_more(total, ops, w, rc, cpu, mem)
+        }
+
+        // more records
+        pub fn ycsb_more(total: usize, ops: u64, w: YCSB,
+                         records: usize,
+                         cpu: CPUPolicy, mem: MemPolicy) -> Self {
+            let rs: usize = 100;
+            let rp: usize = match w {
+                YCSB::A => 50,
+                YCSB::B => 95,
+                YCSB::C => 100,
+                YCSB::WR => 0,
+            };
+            Config {
+                total: total,
+                ycsb: Some(w),
+                records: records,
+                size: rs,
+                dist: Dist::Zipfian(0.99f64),
+                read_pct: rp,
+                ops: ops,
+                cpu: cpu,
+                mem: mem,
             }
         }
 
-        //unsafe { memory::deallocate(value, size); }
-    }
-}
-
-#[derive(Debug,Clone,Copy)]
-enum Dist {
-    /// Contained value is s (exponent modifier)
-    Zipfian(f64),
-    Uniform,
-}
-
-// TODO: setup configuration, how to allocate objects across sockets
-#[derive(Debug,Clone,Copy)]
-struct Config {
-    /// Amount of memory to use for nibble
-    mem: usize,
-    /// if None, custom workload
-    ycsb: Option<YCSB>,
-    /// number of objects
-    records: usize,
-    /// size of each object
-    size: usize,
-    dist: Dist,
-    /// 0-100 (1-read_pct = write pct)
-    read_pct: usize,
-    /// operations per second to sustain. 0 = unthrottled
-    ops: u64,
-}
-
-impl Config {
-
-    pub fn ycsb(mem: usize, ops: u64, w: YCSB) -> Self {
-        let rc: usize = 1000; // default
-        Self::ycsb_more(mem, ops, w, rc)
+        // directly construct it
+        pub fn custom(total: usize, ops: u64, records: usize,
+                      size: usize, dist: Dist,
+                      read_pct: usize,
+                      cpu: CPUPolicy, mem: MemPolicy) -> Self {
+            Config {
+                total: total,
+                ycsb: None,
+                records: records,
+                size: size,
+                dist: dist,
+                read_pct: read_pct,
+                ops: ops,
+                cpu: cpu,
+                mem: mem,
+            }
+        }
     }
 
-    // more records
-    pub fn ycsb_more(mem: usize, ops: u64, w: YCSB,
-                     records: usize) -> Self {
-        let rs: usize = 100;
-        let rp: usize = match w {
-            YCSB::A => 50,
-            YCSB::B => 95,
-            YCSB::C => 100,
-            YCSB::WR => 0,
+    /// Convert an argument as number.
+    fn arg_as_num<T: num::Integer>(args: &clap::ArgMatches,
+                                   name: &str) -> T {
+        match args.value_of(name) {
+            None => panic!("Specify {}", name),
+            Some(s) => match T::from_str_radix(s,10) {
+                Err(_) => panic!("size NaN"),
+                Ok(s) => s,
+            },
+        }
+    }
+
+    fn main() {
+        logger::enable();
+
+        let matches = App::new("ycsb")
+            .arg(Arg::with_name("ycsb")
+                 .long("ycsb")
+                 .takes_value(true))
+            .arg(Arg::with_name("size")
+                 .long("size")
+                 .takes_value(true))
+            .arg(Arg::with_name("capacity")
+                 .long("capacity")
+                 .takes_value(true))
+            .arg(Arg::with_name("records")
+                 .long("records")
+                 .takes_value(true))
+            .arg(Arg::with_name("readpct")
+                 .long("readpct")
+                 .takes_value(true))
+            .arg(Arg::with_name("dist")
+                 .long("dist")
+                 .takes_value(true))
+            .arg(Arg::with_name("ops")
+                 .long("ops")
+                 .takes_value(true))
+            .arg(Arg::with_name("mem")
+                 .long("mem")
+                 .takes_value(true))
+            .arg(Arg::with_name("cpu")
+                 .long("cpu")
+                 .takes_value(true))
+            .get_matches();
+
+        let config = match matches.value_of("ycsb") {
+
+            // Custom Configuration
+            None => {
+                let size     = arg_as_num::<usize>(&matches, "size");
+                let capacity = arg_as_num::<usize>(&matches, "capacity");
+                let ops      = arg_as_num::<u64>(&matches, "ops");
+                let records  = arg_as_num::<usize>(&matches, "records");
+                let readpct  = arg_as_num::<usize>(&matches, "readpct");
+
+                let mem = match matches.value_of("mem") {
+                    None => panic!("Specify memory policy"),
+                    Some(s) => {
+                        if s == "random" {
+                            MemPolicy::Random
+                        } else if s == "local" {
+                            MemPolicy::Local
+                        } else {
+                            panic!("invalid memory policy");
+                        }
+                    },
+                };
+
+                let cpu = match matches.value_of("cpu") {
+                    None => panic!("Specify CPU policy"),
+                    Some(s) => {
+                        if s == "random" {
+                            CPUPolicy::Random
+                        } else if s == "rr" {
+                            CPUPolicy::SocketRR
+                        } else if s == "incr" {
+                            CPUPolicy::Incremental
+                        } else {
+                            panic!("invalid CPU policy");
+                        }
+                    },
+                };
+
+                let dist = match matches.value_of("dist") {
+                    None => panic!("Specify dist"),
+                    Some(s) => {
+                        if s == "zipfian" {
+                            // s value from YCSB itself
+                            Dist::Zipfian(0.99_f64)
+                        } else if s == "uniform" {
+                            Dist::Uniform
+                        } else {
+                            panic!("unknown distribution");
+                        }
+                    },
+                };
+
+                Config::custom(capacity, ops, records,
+                               size, dist, readpct, cpu,mem)
+            },
+
+            // YCSB-Specific Configuration
+            Some(s) => {
+                let ycsb = match s {
+                    "A" => YCSB::A,
+                    "B" => YCSB::B,
+                    "C" => YCSB::C,
+                    "WR" => YCSB::WR,
+                    _ => panic!("unknown YCSB configuration"),
+                };
+
+                let capacity = arg_as_num::<usize>(&matches, "capacity");
+                let ops      = arg_as_num::<u64>(&matches, "ops");
+
+                let mem = match matches.value_of("mem") {
+                    None => panic!("Specify memory policy"),
+                    Some(s) => {
+                        if s == "random" {
+                            MemPolicy::Random
+                        } else if s == "local" {
+                            MemPolicy::Local
+                        } else {
+                            panic!("invalid memory policy");
+                        }
+                    },
+                };
+
+                let cpu = match matches.value_of("cpu") {
+                    None => panic!("Specify CPU policy"),
+                    Some(s) => {
+                        if s == "random" {
+                            CPUPolicy::Random
+                        } else if s == "rr" {
+                            CPUPolicy::SocketRR
+                        } else if s == "incr" {
+                            CPUPolicy::Incremental
+                        } else {
+                            panic!("invalid CPU policy");
+                        }
+                    },
+                };
+
+                // optional argument
+                let records = match matches.value_of("records") {
+                    None => None,
+                    Some(s) => match usize::from_str_radix(s,10) {
+                        Err(_) => panic!("records NaN"),
+                        Ok(s) => Some(s),
+                    },
+                };
+
+                match records {
+                    None => Config::ycsb(capacity, ops, ycsb, cpu,mem),
+                    Some(r) => Config::ycsb_more(capacity,
+                                                 ops, ycsb, r, cpu,mem),
+                }
+            },
         };
-        Config {
-            mem: mem,
-            ycsb: Some(w),
-            records: records,
-            size: rs,
-            dist: Dist::Zipfian(0.99f64),
-            read_pct: rp,
-            ops: ops,
-        }
+
+        // default size 1KiB
+
+        // A rc=1000 size=1kb 50:50 zipfian
+        // B rc=1000 size=1kb 95:05 zipfian
+        // C rc=1000 size=1kb  1:0  zipfian
+
+        // W rc=1000 size=1kb  0:1  zipfian
+
+        // or user-defined if you omit --ycsb
+        // --records --size --readpct --dist --capacity --ops
+
+        let mut gen = WorkloadGenerator::new(config);
+        gen.setup();
+        gen.run();
     }
-
-    // directly construct it
-    pub fn custom(mem: usize, ops: u64, records: usize,
-                  size: usize, dist: Dist,
-                  read_pct: usize) -> Self {
-        Config {
-            mem: mem,
-            ycsb: None,
-            records: records,
-            size: size,
-            dist: dist,
-            read_pct: read_pct,
-            ops: ops,
-        }
-    }
-}
-
-/// Convert an argument as number.
-fn arg_as_num<T: num::Integer>(args: &clap::ArgMatches,
-                               name: &str) -> T {
-    match args.value_of(name) {
-        None => panic!("Specify {}", name),
-        Some(s) => match T::from_str_radix(s,10) {
-            Err(_) => panic!("size NaN"),
-            Ok(s) => s,
-        },
-    }
-}
-
-fn main() {
-    logger::enable();
-
-    let matches = App::new("ycsb")
-        .arg(Arg::with_name("ycsb")
-             .long("ycsb")
-             .takes_value(true))
-        .arg(Arg::with_name("size")
-             .long("size")
-             .takes_value(true))
-        .arg(Arg::with_name("capacity")
-             .long("capacity")
-             .takes_value(true))
-        .arg(Arg::with_name("records")
-             .long("records")
-             .takes_value(true))
-        .arg(Arg::with_name("readpct")
-             .long("readpct")
-             .takes_value(true))
-        .arg(Arg::with_name("dist")
-             .long("dist")
-             .takes_value(true))
-        .arg(Arg::with_name("ops")
-             .long("ops")
-             .takes_value(true))
-        .get_matches();
-
-    let config = match matches.value_of("ycsb") {
-
-        // Custom Configuration
-        None => {
-            let size     = arg_as_num::<usize>(&matches, "size");
-            let capacity = arg_as_num::<usize>(&matches, "capacity");
-            let ops      = arg_as_num::<u64>(&matches, "ops");
-            let records  = arg_as_num::<usize>(&matches, "records");
-            let readpct  = arg_as_num::<usize>(&matches, "readpct");
-
-            let dist = match matches.value_of("dist") {
-                None => panic!("Specify dist"),
-                Some(s) => {
-                    if s == "zipfian" {
-                        // s value from YCSB itself
-                        Dist::Zipfian(0.99_f64)
-                    } else if s == "uniform" {
-                        Dist::Uniform
-                    } else {
-                        panic!("unknown distribution");
-                    }
-                },
-            };
-
-            Config::custom(capacity, ops, records,
-                           size, dist, readpct)
-        },
-
-        // YCSB-Specific Configuration
-        Some(s) => {
-            let ycsb = match s {
-                "A" => YCSB::A,
-                "B" => YCSB::B,
-                "C" => YCSB::C,
-                "WR" => YCSB::WR,
-                _ => panic!("unknown YCSB configuration"),
-            };
-
-            let capacity = arg_as_num::<usize>(&matches, "capacity");
-            let ops      = arg_as_num::<u64>(&matches, "ops");
-
-            // optional argument
-            let records = match matches.value_of("records") {
-                None => None,
-                Some(s) => match usize::from_str_radix(s,10) {
-                    Err(_) => panic!("records NaN"),
-                    Ok(s) => Some(s),
-                },
-            };
-
-            match records {
-                None => Config::ycsb(capacity, ops, ycsb),
-                Some(r) => Config::ycsb_more(capacity,
-                                          ops, ycsb, r),
-            }
-        },
-    };
-
-    // default size 1KiB
-
-    // A rc=1000 size=1kb 50:50 zipfian
-    // B rc=1000 size=1kb 95:05 zipfian
-    // C rc=1000 size=1kb  1:0  zipfian
-
-    // W rc=1000 size=1kb  0:1  zipfian
-
-    // or user-defined if you omit --ycsb
-    // --records --size --readpct --dist --capacity --ops
-
-    let mut gen = WorkloadGenerator::new(config);
-    gen.setup();
-    gen.run();
-}
