@@ -504,6 +504,8 @@ impl Worker {
                new: &SegmentRef) -> Status
     {
         let status: Status = Ok(1);
+        let socket = self.manager.socket().unwrap().0;
+
         let mut new = new.write().unwrap();
 
         assert_eq!(self.seginfo.get_live(new.slot()), 0usize);
@@ -519,13 +521,18 @@ impl Worker {
             let mut live_count = 0usize;
             for entry in dirt.into_iter() {
                 let key: u64 = unsafe { entry.get_key() };
+
                 let va = new.headref() as u64;
+                let ientry_new = merge(socket as u16, va as u64);
 
                 // Lock the object while we relocate.  If object
                 // doesn't exist or it points to another location
                 // (i.e. it is stale), we skip it.
                 let old = entry.get_loc() as u64;
-                if let Some(lock) = cuckoo::update_hold_ifeq(key,va,old) {
+                let ientry_old = merge(socket as u16, old as u64);
+
+                if let Some(lock) =
+                    cuckoo::update_hold_ifeq(key,ientry_new,ientry_old) {
                     live_count += 1;
 
                     // try append; if fail, extend, try again
