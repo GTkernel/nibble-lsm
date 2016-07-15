@@ -234,11 +234,14 @@ impl WorkloadGenerator {
         let mut tic = unsafe { clock::rdtsc() }; // report performance
         let mut per_loop = 0u64; // ops performed per report
 
+        let duration = self.config.dur;
+
         let accum = Arc::new(AtomicUsize::new(0));
         let mut threadcount: Vec<usize>;
 
+        threadcount = vec![self.config.threads];
         // specific number of threads only
-        threadcount = vec![6];
+        //threadcount = vec![6];
         // power of 2   1, 2, 4, 8, 16, 32, 64, 128, 256
         //threadcount = (0usize..9).map(|e|1usize<<e).collect();
         // incr of 4    1, 4, 8, 12, 16, ...
@@ -259,7 +262,7 @@ impl WorkloadGenerator {
 
             // Create CPU binding strategy
             let cpus_pernode = numa::NODE_MAP.cpus_in(NodeId(0));
-            let sockets = 1;//numa::NODE_MAP.sockets();
+            let sockets = numa::NODE_MAP.sockets();
             let ncpus = cpus_pernode * sockets;
             let mut cpus: VecDeque<usize> = VecDeque::with_capacity(ncpus);
             match self.config.cpu {
@@ -324,13 +327,14 @@ impl WorkloadGenerator {
                     while accum.load(Ordering::Relaxed) > 0 { ; }
 
                     // main loop (do warmup first)
-                    //for x in 0..2 {
-                    let x = 1;
-                    loop {
+                    for x in 0..2 {
+                    //let x = 1;
+                    //loop {
                         let mut ops = 0usize;
                         let now = Instant::now();
 
-                        while now.elapsed().as_secs() < 5 {
+                        while (now.elapsed().as_secs() as usize)
+                            < duration {
 
                             match config.mem {
 
@@ -450,20 +454,26 @@ impl WorkloadGenerator {
         ops: u64,
         cpu: CPUPolicy,
         mem: MemPolicy,
+        /// Number of threads to run experiment with
+        threads: usize,
+        /// How long to run the experiment in seconds
+        dur: usize,
     }
 
     impl Config {
 
         pub fn ycsb(total: usize, ops: u64, w: YCSB,
-                    cpu: CPUPolicy, mem: MemPolicy) -> Self {
+                    cpu: CPUPolicy, mem: MemPolicy,
+                    time: usize, threads: usize) -> Self {
             let rc: usize = 1000;
-            Self::ycsb_more(total, ops, w, rc, cpu, mem)
+            Self::ycsb_more(total, ops, w, rc, cpu, mem,time,threads)
         }
 
         // more records
         pub fn ycsb_more(total: usize, ops: u64, w: YCSB,
                          records: usize,
-                         cpu: CPUPolicy, mem: MemPolicy) -> Self {
+                         cpu: CPUPolicy, mem: MemPolicy,
+                         time: usize, threads: usize) -> Self {
             let rs: usize = 100;
             let rp: usize = match w {
                 YCSB::A => 50,
@@ -481,6 +491,8 @@ impl WorkloadGenerator {
                 ops: ops,
                 cpu: cpu,
                 mem: mem,
+                threads: threads,
+                dur: time,
             }
         }
 
@@ -488,7 +500,8 @@ impl WorkloadGenerator {
         pub fn custom(total: usize, ops: u64, records: usize,
                       size: usize, dist: Dist,
                       read_pct: usize,
-                      cpu: CPUPolicy, mem: MemPolicy) -> Self {
+                      cpu: CPUPolicy, mem: MemPolicy,
+                      time: usize, threads: usize) -> Self {
             Config {
                 total: total,
                 ycsb: None,
@@ -499,6 +512,8 @@ impl WorkloadGenerator {
                 ops: ops,
                 cpu: cpu,
                 mem: mem,
+                threads: threads,
+                dur: time,
             }
         }
     }
@@ -546,6 +561,12 @@ impl WorkloadGenerator {
             .arg(Arg::with_name("cpu")
                  .long("cpu")
                  .takes_value(true))
+            .arg(Arg::with_name("time")
+                 .long("time")
+                 .takes_value(true))
+            .arg(Arg::with_name("threads")
+                 .long("threads")
+                 .takes_value(true))
             .get_matches();
 
         let config = match matches.value_of("ycsb") {
@@ -557,6 +578,8 @@ impl WorkloadGenerator {
                 let ops      = arg_as_num::<u64>(&matches, "ops");
                 let records  = arg_as_num::<usize>(&matches, "records");
                 let readpct  = arg_as_num::<usize>(&matches, "readpct");
+                let threads  = arg_as_num::<usize>(&matches, "threads");
+                let time     = arg_as_num::<usize>(&matches, "time");
 
                 let mem = match matches.value_of("mem") {
                     None => panic!("Specify memory policy"),
@@ -601,7 +624,8 @@ impl WorkloadGenerator {
                 };
 
                 Config::custom(capacity, ops, records,
-                               size, dist, readpct, cpu,mem)
+                               size, dist, readpct, cpu,mem,
+                               time, threads)
             },
 
             // YCSB-Specific Configuration
@@ -616,6 +640,8 @@ impl WorkloadGenerator {
 
                 let capacity = arg_as_num::<usize>(&matches, "capacity");
                 let ops      = arg_as_num::<u64>(&matches, "ops");
+                let threads  = arg_as_num::<usize>(&matches, "threads");
+                let time     = arg_as_num::<usize>(&matches, "time");
 
                 let mem = match matches.value_of("mem") {
                     None => panic!("Specify memory policy"),
@@ -655,9 +681,11 @@ impl WorkloadGenerator {
                 };
 
                 match records {
-                    None => Config::ycsb(capacity, ops, ycsb, cpu,mem),
+                    None => Config::ycsb(capacity, ops, ycsb, cpu,mem,
+                                         time,threads),
                     Some(r) => Config::ycsb_more(capacity,
-                                                 ops, ycsb, r, cpu,mem),
+                                                 ops, ycsb, r, cpu,mem,
+                                                 time,threads),
                 }
             },
         };
