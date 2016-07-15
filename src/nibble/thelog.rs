@@ -107,6 +107,7 @@ impl EntryHeader {
 //      Log head
 //==----------------------------------------------------==//
 
+// XXX replace with pl::Mutex or RwLock
 pub type LogHeadRef = Arc<Mutex<LogHead>>;
 
 macro_rules! loghead_ref {
@@ -166,6 +167,7 @@ impl LogHead {
             }
         }
 
+        // XXX clone then lock.. yuck
         let segref = self.segment.clone().unwrap();
         let mut seg = segref.write().unwrap();
         match seg.append(buf) {
@@ -239,7 +241,7 @@ impl Log {
     /// virtual address within the log inside Ok().
     /// FIXME check key is valid UTF-8
     pub fn append(&self, buf: &ObjDesc) -> Status {
-        // 1. pick a log head
+        // 1. pick a log head XXX
         let x = unsafe { rdrand() } % NUM_LOG_HEADS;
         let head = &self.heads[x as usize];
         // 2. call append on the log head
