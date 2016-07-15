@@ -238,13 +238,13 @@ impl WorkloadGenerator {
         let mut threadcount: Vec<usize>;
 
         // specific number of threads only
-        //threadcount = vec![1];
+        threadcount = vec![6];
         // power of 2   1, 2, 4, 8, 16, 32, 64, 128, 256
         //threadcount = (0usize..9).map(|e|1usize<<e).collect();
         // incr of 4    1, 4, 8, 12, 16, ...
         //threadcount = (0usize..65).map(|e|if e==0 {1} else {4*e}).collect();
         // incr of 2    1, 2, 4, 6, 8, ...
-        threadcount = (0usize..130).map(|e|if e==0 {1} else {2*e}).collect();
+        //threadcount = (0usize..130).map(|e|if e==0 {1} else {2*e}).collect();
         // incr of 1    1, 2, 3, 4, 5, ...
         //threadcount = (1usize..261).collect();
 
@@ -263,7 +263,7 @@ impl WorkloadGenerator {
             let ncpus = cpus_pernode * sockets;
             let mut cpus: VecDeque<usize> = VecDeque::with_capacity(ncpus);
             match self.config.cpu {
-                CPUPolicy::Random => {
+                CPUPolicy::Global => {
                     for i in 0..ncpus {
                         cpus.push_back(i);
                     }
@@ -363,7 +363,7 @@ impl WorkloadGenerator {
                                 // 
                                 // GLOBAL
                                 //
-                                s @ MemPolicy::Random => {
+                                s @ MemPolicy::Global => {
                                     for _ in 0..1000usize {
                                         let key = gen.next() as usize;
                                         let obj = ObjDesc::new(key as u64, v,
@@ -414,14 +414,14 @@ impl WorkloadGenerator {
 
 #[derive(Clone,Copy,Debug)]
     enum CPUPolicy {
-        Random,
+        Global,
         SocketRR, // round-robin among sockets
         Incremental, // fill each socket
     }
 
 #[derive(Clone,Copy,Debug)]
     enum MemPolicy {
-        Random,
+        Global,
         Local, // access only keys local to socket
     }
 
@@ -561,8 +561,8 @@ impl WorkloadGenerator {
                 let mem = match matches.value_of("mem") {
                     None => panic!("Specify memory policy"),
                     Some(s) => {
-                        if s == "random" {
-                            MemPolicy::Random
+                        if s == "global" {
+                            MemPolicy::Global
                         } else if s == "local" {
                             MemPolicy::Local
                         } else {
@@ -574,8 +574,8 @@ impl WorkloadGenerator {
                 let cpu = match matches.value_of("cpu") {
                     None => panic!("Specify CPU policy"),
                     Some(s) => {
-                        if s == "random" {
-                            CPUPolicy::Random
+                        if s == "global" {
+                            CPUPolicy::Global
                         } else if s == "rr" {
                             CPUPolicy::SocketRR
                         } else if s == "incr" {
@@ -620,8 +620,8 @@ impl WorkloadGenerator {
                 let mem = match matches.value_of("mem") {
                     None => panic!("Specify memory policy"),
                     Some(s) => {
-                        if s == "random" {
-                            MemPolicy::Random
+                        if s == "global" {
+                            MemPolicy::Global
                         } else if s == "local" {
                             MemPolicy::Local
                         } else {
@@ -633,8 +633,8 @@ impl WorkloadGenerator {
                 let cpu = match matches.value_of("cpu") {
                     None => panic!("Specify CPU policy"),
                     Some(s) => {
-                        if s == "random" {
-                            CPUPolicy::Random
+                        if s == "global" {
+                            CPUPolicy::Global
                         } else if s == "rr" {
                             CPUPolicy::SocketRR
                         } else if s == "incr" {
