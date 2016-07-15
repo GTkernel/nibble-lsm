@@ -148,11 +148,12 @@ impl MemMap {
         let nnodes = numa::NODE_MAP.sockets();
         let mask = 1usize << node.0;
         unsafe {
-            let maskaddr: usize = mem::transmute(&mask);
-            assert!(0usize == syscall::syscall6(syscall::nr::MBIND,
+            let maskaddr = &mask as *const usize as usize;
+            // syscall returns usize, but it's really an i32
+            let ret: i32 = syscall::syscall6(syscall::nr::MBIND,
                 addr, len, numa::MPOL_BIND,
-                maskaddr, nnodes+1, numa::MPOL_MF_STRICT),
-                "mbind failed");
+                maskaddr, nnodes+1, numa::MPOL_MF_STRICT) as i32;
+            assert_eq!(ret, 0, "mbind: {}", ret);
         }
 
         // allocate pages by faulting
