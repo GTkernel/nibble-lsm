@@ -158,7 +158,7 @@ impl Nibble {
             PutPolicy::Interleave =>
                 (unsafe { rdrand() } % self.nnodes) as usize,
         };
-        trace!("PUT socket {:?}", socket);
+        trace!("PUT key {} socket {:?}", obj.getkey(),socket);
 
         if socket >= self.nodes.len() {
             return Err(ErrorCode::InvalidSocket);
@@ -178,15 +178,17 @@ impl Nibble {
         let ientry = merge(socket as u16, va as u64);
         trace!("key {} va 0x{:x} ientry 0x{:x}",
                obj.getkey(), va, ientry);
+
         // 2. update reference to object
         let opt = self.index.update(obj.getkey(), ientry);
+
         // 3. decrement live size of segment if we overwrite object
         if let Some(old_ientry) = opt {
-            let (socket,old) = extract(old_ientry);
-            // FIXME this shouldn't need a lock..
-            let idx: usize = self.nodes[socket as usize]
-                                 .manager.segment_of(old as usize);
-            self.nodes[socket as usize].seginfo
+            let (old_sock,old_va) = extract(old_ientry);
+            let idx: usize = self.nodes[old_sock as usize]
+                                 .manager.segment_of(old_va as usize);
+            // XXX is this working?? XXX
+            self.nodes[old_sock as usize].seginfo
                 .decr_live(idx, obj.len_with_header());
         }
         epoch::quiesce();
@@ -220,7 +222,9 @@ impl Nibble {
 
         // 1. lookup the key and get the entry
         let ientry: IndexEntry = match self.index.get(key) {
-            None => return (Err(ErrorCode::KeyNotExist),None),
+            None => {
+                return (Err(ErrorCode::KeyNotExist),None);
+            },
             Some(entry) => entry,
         };
         let (socket,va) = extract(ientry);

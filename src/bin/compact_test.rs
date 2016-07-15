@@ -12,7 +12,7 @@ extern crate nibble;
 
 use clap::{Arg, App, SubCommand};
 use log::LogLevel;
-use nibble::common::{ErrorCode,rdrand};
+use nibble::common::{Pointer,ErrorCode,rdrand};
 use nibble::epoch;
 use nibble::logger;
 use nibble::memory;
@@ -46,7 +46,7 @@ fn run() {
 
     let size: usize = 1000;
     let value = memory::allocate::<u8>(size);
-    let v = Some(value as *const u8);
+    let v = Pointer(value as *const u8);
 
     let mut counter: usize = 0;
     let mut inserted: usize = 0;

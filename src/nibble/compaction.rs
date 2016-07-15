@@ -218,7 +218,8 @@ fn __compact(state: &Arc<RwLock<Worker>>) {
         let remaining = s.manager.freesz() as f64;
         let total: f64 = s.mgrsize as f64;
         let ratio = remaining/total;
-        debug!("rem. {} total {} ratio {:.2} run: {:?}",
+        debug!("node-{:?} rem. {} total {} ratio {:.2} run: {:?}",
+               s.manager.socket().unwrap(),
                remaining, total, ratio, ratio<0.2);
         ratio < 0.2
     };
@@ -228,6 +229,8 @@ fn __compact(state: &Arc<RwLock<Worker>>) {
         //let short = Duration::from_millis(100);
         //thread::sleep(dur);
     } else {
+        //let l = s.candidates.lock().unwrap();
+        //s.__dump_candidates(&l);
         trace!("sleeping");
         thread::sleep(dur);
     }
@@ -307,14 +310,16 @@ impl Worker {
     }
 
     //#[cfg(IGNORE)]
-    fn __dump_candidates(&self, guard: &MutexGuard<Vec<SegmentRef>>) {
-        debug!("sorted candidates:");
+    pub fn __dump_candidates(&self, guard: &MutexGuard<Vec<SegmentRef>>) {
+        debug!("node-{:?} candidates:", self.manager.socket().unwrap());
         let mut i: usize = 0;
         for entry in &**guard {
             let g = entry.read().unwrap();
             let slot = g.slot();
             let live = self.seginfo.get_live(slot);
-            debug!("[{}] slot {} live {}", i, slot, live);
+            debug!("node-{:2?} [{:2}] slot {:4} sock {:4} live {}",
+                   self.manager.socket().unwrap(),
+                   i, slot, g.socket(), live);
             i += 1;
         }
     }
@@ -432,26 +437,29 @@ impl Worker {
 
             // filter out segments that cannot be compacted
             if live == 0 {
-                debug!("slot {} zero bytes -> reclamation", slot);
+                debug!("node-{:?} slot {} zero bytes -> reclamation",
+                       self.manager.socket().unwrap(), slot);
                 //assert_eq!(self.nlive(&seg), 0usize);
                 //self.reclaim_glob.push( (epoch::next(), seg) );
                 empties.push_back( (epoch::next(),seg) );
             }
             // skip if it has no free space
             else if too_full {
-                debug!("slot {} not enough free space: {}",
-                       slot, len-live);
+                debug!("node-{:?} slot {} not enough free space: {}",
+                       self.manager.socket().unwrap(), slot, len-live);
                 nc.push(seg);
             }
             // too much, put it back
             else if (tally + live) > SEGMENT_SIZE {
-                debug!("slot {} would cause overflow, skipping", slot);
+                debug!("node-{:?} slot {} would cause overflow, skipping",
+                       self.manager.socket().unwrap(), slot);
                 nc.push(seg);
                 break;
             }
             // viable candidate to compact
             else {
-                debug!("slot {} is good candidate", slot);
+                debug!("node-{:?} slot {} is good candidate",
+                       self.manager.socket().unwrap(), slot);
                 tally += live;
                 segs.push(seg);
             }
@@ -477,18 +485,22 @@ impl Worker {
             }
             let end = unsafe { clock::rdtsc() };
             let tim = clock::to_nano(end-start);
-            debug!("consumed {} nsec to release empties", tim);
+            debug!("node-{:?} consumed {} nsec to release empties",
+                   self.manager.socket().unwrap(), tim);
         }
 
         if segs.len() == 0 {
-            debug!("No candidates to return");
+            debug!("node-{:?} No candidates to return",
+                   self.manager.socket().unwrap());
             None
         } else if segs.len() == 1 {
-            debug!("Only 1 candidate, putting back");
+            debug!("node-{:?} Only 1 candidate, putting back",
+                   self.manager.socket().unwrap());
             candidates.push(segs.remove(0));
             None
         } else {
-            debug!("Found {} candidates", segs.len());
+            debug!("node-{:?} Found {} candidates",
+                   self.manager.socket().unwrap(), segs.len());
             Some( (segs,tally) )
         }
     }
@@ -537,7 +549,8 @@ impl Worker {
 
                     // try append; if fail, extend, try again
                     if let None = new.append_entry(&entry) {
-                        debug!("extending segment; entry {}",n);
+                        debug!("node-{:?} extending segment; entry {}",
+                               self.manager.socket().unwrap(), n);
                         match self.manager.alloc_blocks(1) {
                             Some(mut blocks) =>
                                 new.extend(&mut blocks),

@@ -21,9 +21,9 @@ macro_rules! incr {
 /// Instantiate new Segment as a SegmentRef
 #[macro_export]
 macro_rules! seg_ref {
-    ( $id:expr, $slot:expr, $blocks:expr ) => {
+    ( $id:expr, $sock:expr, $slot:expr, $blocks:expr ) => {
         Arc::new( RwLock::new(
-                Segment::new($id, $slot, $blocks)
+                Segment::new($id, $sock, $slot, $blocks)
                 ))
     }
 }

@@ -142,9 +142,24 @@ impl Block {
     pub fn addr(&self)       -> usize { self.addr }
     pub fn len(&self)        -> usize { self.len }
     pub fn slot(&self)       -> usize { self.slot }
-    pub fn seg_slot(&self)   -> usize { self.seg_slot }
-    pub fn blk_idx(&self)    -> usize { self.blk_idx }
-    pub fn list(&self) -> uslice<BlockRef> { self.list.clone() }
+
+    pub fn seg_slot(&self) -> usize {
+        assert_eq!(self.list.ptr().is_null(), false,
+                    " block seg ({}) asked but ptr is null: {:?}",
+                    self.seg_slot, self);
+        self.seg_slot
+    }
+
+    pub fn blk_idx(&self) -> usize {
+        assert_eq!(self.list.ptr().is_null(), false,
+                    " block idx ({}) asked but ptr is null: {:?}",
+                    self.blk_idx, self);
+        self.blk_idx
+    }
+
+    pub fn list(&self) -> uslice<BlockRef> {
+        self.list.clone()
+    }
 }
 
 pub type BlockRef = Arc<Block>;
@@ -328,6 +343,7 @@ impl SegmentHeader {
 //      Segment
 //==----------------------------------------------------==//
 
+// XXX change this to pl::RwLock
 pub type SegmentRef = Arc<RwLock<Segment>>;
 pub type SegmentManagerRef = Arc<SegmentManager>;
 
@@ -341,12 +357,19 @@ pub type SegmentManagerRef = Arc<SegmentManager>;
 #[allow(dead_code)]
 pub struct Segment {
     id: usize,
-    slot: usize, /// index into segment table TODO add unit test?
+    /// The socket this segment is allocated on
+    socket: NodeId,
+    /// index into segment table TODO add unit test?
+    slot: usize,
     closed: bool,
-    head: Option<usize>, /// Virtual address of head TODO atomic
-    len: usize, /// Total capacity TODO atomic
-    rem: usize, /// Remaining capacity TODO atomic
-    nobj: usize, /// Objects (live or not) appended
+    /// Virtual address of head TODO atomic
+    head: Option<usize>,
+    /// Total capacity TODO atomic
+    len: usize,
+    /// Remaining capacity TODO atomic
+    rem: usize,
+    /// Objects (live or not) appended
+    nobj: usize,
     curblk: Option<usize>,
     /// A *mut SegmentHeader, but kept as usize because the Rust
     /// compiler does not allow sharing of raw pointers.
@@ -364,9 +387,11 @@ pub struct Segment {
 impl Segment {
 
     // TODO make blocks a ref
-    pub fn new(id: usize, slot: usize, mut blocks: BlockRefPool) -> Self {
+    pub fn new(id: usize, sock: NodeId, slot: usize,
+               mut blocks: BlockRefPool) -> Self {
         blocks.reserve(8); // avoid resizing in the future
-        debug!("new segment: slot {} #blks {}", slot, blocks.len());
+        debug!("new segment: slot {} #blks {} socket {}",
+               slot, blocks.len(), sock);
         let mut len: usize = 0;
         assert!(blocks.len() > 0);
         for b in blocks.iter() {
@@ -379,7 +404,7 @@ impl Segment {
         let header = SegmentHeader::new(0);
         unsafe { ptr::write(start as *mut SegmentHeader, header); }
         Segment {
-            id: id, slot: slot, closed: false,
+            id: id, socket: sock, slot: slot, closed: false,
             head: Some(start + SegmentHeader::len()),
             len: len, rem: len - SegmentHeader::len(),
             nobj: 0, curblk: Some(blk),
@@ -471,8 +496,8 @@ impl Segment {
         // append by-block since entry may not be virtually contiguous
         let mut va = entry.blocks[0].addr + entry.offset;
         let mut amt = cmp::min(BLOCK_SIZE - entry.offset, entry.len);
-        trace!("append_entry len {} #blks {} amt {}",
-               entry.len, entry.blocks.len(), amt);
+        trace!("append_entry len {} #blks {} amt {} va 0x{:x}",
+               entry.len, entry.blocks.len(), amt, va);
         self.append_safe(va as *const u8, amt);
 
         // go for the rest
@@ -498,6 +523,7 @@ impl Segment {
     pub fn nblocks(&self) -> usize { self.blocks.len() }
     pub fn slot(&self) -> usize { self.slot }
     pub fn len(&self) -> usize { self.len }
+    pub fn socket(&self) -> NodeId { self.socket }
     pub fn remaining(&self) -> usize { self.rem }
     pub fn can_hold_amt(&self, len: usize) -> bool { self.rem >= len }
     pub fn can_hold(&self, buf: &ObjDesc) -> bool {
@@ -743,7 +769,11 @@ impl<'a> Iterator for SegmentIter<'a> {
                          mem::size_of::<EntryHeader>());
             }
 
-            assert_eq!(entry.getkeylen(), 8);
+            debug_assert_eq!(entry.getkeylen() as usize,
+                             size_of::<u64>());
+            debug_assert!(entry.getdatalen() > 0);
+            // https://github.com/rust-lang/rust/issues/22644
+            debug_assert!( (entry.getdatalen() as usize) < SEGMENT_SIZE);
 
             // advance to next
             self.seg_offset += entry.len();
@@ -764,6 +794,13 @@ impl<'a> Iterator for SegmentIter<'a> {
                      entry.as_mut_ptr(),
                      mem::size_of::<EntryHeader>());
         }
+
+        debug_assert_eq!(entry.getkeylen() as usize,
+                         size_of::<u64>());
+        debug_assert!(entry.getdatalen() > 0);
+        // https://github.com/rust-lang/rust/issues/22644
+        debug_assert!( (entry.getdatalen() as usize) < SEGMENT_SIZE);
+
         let entry_len = entry.len_with_header();
         trace!("read {:?}", entry);
         assert_eq!(entry.getkeylen(), 8);
@@ -910,7 +947,8 @@ impl SegmentManager {
             assert_eq!(list.ptr(), blocks.as_ptr(),
                 "segment {} block list resized!", slot);
 
-            inner.segments[slot] = Some(seg_ref!(id, slot, blocks));
+            inner.segments[slot] =
+                Some(seg_ref!(id, self.socket.unwrap(), slot,blocks));
             ret = inner.segments[slot].clone();
 
         }
@@ -1038,11 +1076,7 @@ impl SegmentManager {
     // --- Internal methods used for testing only ---
     //
 
-    #[cfg(test)]
-    pub fn n_closed(&self) -> usize {
-        self.closed.len()
-    }
-
+    #[cfg(IGNORE)]
     #[cfg(test)]
     pub fn test_all_segrefs_allocated(&mut self) -> bool {
         for i in 0..self.segments.len() {
@@ -1054,6 +1088,7 @@ impl SegmentManager {
         true
     }
 
+    #[cfg(IGNORE)]
     #[cfg(test)]
     pub fn test_scan_objects(&self) -> usize {
         let mut count: usize = 0;
