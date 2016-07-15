@@ -10,10 +10,16 @@ pub const MPOL_INTERLEAVE: usize = 3;
 pub const MPOL_MF_STRICT: usize  = (1usize<<0);
 
 /// Special type to represent a NUMA socket.
-#[derive(Copy,Clone,Debug)]
+#[derive(Copy,Clone)]
 pub struct NodeId(pub usize);
 
 impl fmt::Display for NodeId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Debug for NodeId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0)
     }
