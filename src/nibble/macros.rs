@@ -44,7 +44,7 @@ macro_rules! seg_ref_empty {
 #[macro_export]
 macro_rules! segmgr_ref {
     ( $segsz:expr, $bytes:expr ) => {
-        Arc::new( Mutex::new(
+        Arc::new( pl::Mutex::new(
                 SegmentManager::new( $segsz, $bytes)
                 ))
     }
@@ -70,7 +70,7 @@ macro_rules! index_ref {
 #[macro_export]
 macro_rules! comp_ref {
     ( $manager:expr, $index:expr ) => {
-        Arc::new( Mutex::new(
+        Arc::new( pl::Mutex::new(
                 Compactor::new( $manager, $index )
                 ))
     }

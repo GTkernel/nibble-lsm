@@ -12,7 +12,7 @@ use std::mem;
 use std::mem::size_of;
 use std::os::raw::c_void;
 use std::ptr;
-use std::sync::{atomic, Arc, Mutex, RwLock};
+use std::sync::{atomic, Arc};
 
 use crossbeam::sync::SegQueue;
 use parking_lot as pl;

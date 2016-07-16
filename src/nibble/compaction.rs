@@ -61,7 +61,7 @@ use epoch;
 
 use std::collections::VecDeque;
 use std::mem;
-use std::sync::{Arc,Mutex,MutexGuard,RwLockWriteGuard,RwLock};
+use std::sync::Arc;
 use std::sync::atomic::{self,AtomicBool};
 use std::thread;
 use std::time::{Duration,Instant};
@@ -69,6 +69,7 @@ use std::time::{Duration,Instant};
 use crossbeam::sync::SegQueue;
 use itertools;
 use quicksort;
+use parking_lot as pl;
 
 //==----------------------------------------------------==//
 //      Constants
@@ -85,7 +86,7 @@ pub const COMPACTION_RESERVE_SEGMENTS: usize = 0;
 /// Performing an update means the object is live in the log.
 //pub type UpdateFn = Box<Fn(&EntryReference, Arc<Index>, usize) -> bool>;
 
-pub type CompactorRef = Arc<Mutex< Compactor >>;
+pub type CompactorRef = Arc<pl::Mutex< Compactor >>;
 type EpochSegment = (epoch::EpochRaw, SegmentRef);
 type ReclaimQueue = SegQueue<EpochSegment>;
 type ReclaimQueueRef = Arc<ReclaimQueue>;
@@ -99,12 +100,12 @@ type ReclaimQueueRef = Arc<ReclaimQueue>;
 type Handle = thread::JoinHandle<()>;
 
 pub struct Compactor {
-    candidates: Arc<Mutex<Vec<SegmentRef>>>,
+    candidates: Arc<pl::Mutex<Vec<SegmentRef>>>,
     manager: SegmentManagerRef,
     index: IndexRef,
     seginfo: epoch::SegmentInfoTableRef,
     /// The set of worker threads doing compaction.
-    workers: SegQueue<(Arc<RwLock<Worker>>,Handle)>,
+    workers: SegQueue<(Arc<pl::RwLock<Worker>>,Handle)>,
     /// Global reclamation queue
     reclaim: ReclaimQueueRef,
     /// Reserve segments
@@ -135,7 +136,7 @@ impl Compactor {
             }
         }
         Compactor {
-            candidates: Arc::new(Mutex::new(Vec::new())),
+            candidates: Arc::new(pl::Mutex::new(Vec::new())),
             manager: manager.clone(),
             index: index.clone(),
             seginfo: seginfo,
@@ -153,7 +154,7 @@ impl Compactor {
     // segment then added back to the log.
 
     pub fn spawn(&mut self, role: WorkerRole) {
-        let state = Arc::new(RwLock::new(Worker::new(&role, self)));
+        let state = Arc::new(pl::RwLock::new(Worker::new(&role, self)));
         let give = state.clone();
         let name = format!("compaction::worker::{:?}", role);
         let handle = match thread::Builder::new()
@@ -193,8 +194,8 @@ macro_rules! park_or_sleep {
     }
 }
 
-fn __reclaim(state: &Arc<RwLock<Worker>>) {
-    let mut s = state.write().unwrap();
+fn __reclaim(state: &Arc<pl::RwLock<Worker>>) {
+    let mut s = state.write();
     //s.do_reclaim();
     let nr = s.do_reclaim_blocking();
     if nr > 0 {
@@ -207,9 +208,9 @@ fn __reclaim(state: &Arc<RwLock<Worker>>) {
     }
 }
 
-fn __compact(state: &Arc<RwLock<Worker>>) {
+fn __compact(state: &Arc<pl::RwLock<Worker>>) {
     let dur = Duration::from_secs(1);
-    let mut s = state.write().unwrap();
+    let mut s = state.write();
     let new = s.check_new();
     debug!("{} new candidates", new);
     let run: bool = {
@@ -236,9 +237,9 @@ fn __compact(state: &Arc<RwLock<Worker>>) {
     }
 }
 
-fn worker(state: Arc<RwLock<Worker>>) {
+fn worker(state: Arc<pl::RwLock<Worker>>) {
     info!("thread awake");
-    let role = { state.read().unwrap().role };
+    let role = { state.read().role };
     loop {
         match role {
             WorkerRole::Reclaim => __reclaim(&state),
@@ -262,7 +263,7 @@ struct Worker {
     role: WorkerRole,
     // FIXME Vec is not efficient as a candidates list
     // popping first element is slow; shifts N-1 left
-    candidates: Arc<Mutex<Vec<SegmentRef>>>,
+    candidates: Arc<pl::Mutex<Vec<SegmentRef>>>,
     manager: SegmentManagerRef,
     /// cache of SegmentManager.size
     mgrsize: usize,
@@ -303,14 +304,11 @@ impl Worker {
     }
 
     pub fn add_candidate(&mut self, seg: &SegmentRef) {
-        match self.candidates.lock() {
-            Ok(ref mut cand) => cand.push(seg.clone()),
-            Err(_) => panic!("lock poison"),
-        }
+        self.candidates.lock().push(seg.clone());
     }
 
     //#[cfg(IGNORE)]
-    pub fn __dump_candidates(&self, guard: &MutexGuard<Vec<SegmentRef>>) {
+    pub fn __dump_candidates(&self, guard: &pl::MutexGuard<Vec<SegmentRef>>) {
         debug!("node-{:?} candidates:", self.manager.socket().unwrap());
         let mut i: usize = 0;
         for entry in &**guard {
@@ -324,11 +322,11 @@ impl Worker {
         }
     }
     #[cfg(IGNORE)]
-    fn __dump_candidates(&self, guard: &MutexGuard<Vec<SegmentRef>>) { ; }
+    fn __dump_candidates(&self, guard: &pl::MutexGuard<Vec<SegmentRef>>) { ; }
 
     #[cfg(IGNORE)]
     fn nlive(&self, seg: &SegmentRef) -> usize {
-        let seg = seg.read().unwrap();
+        let seg = seg.read();
         debug!("verifying seg {}", seg.slot());
         let mut live: usize = 0;
         for entry in &*seg {
@@ -379,7 +377,7 @@ impl Worker {
     pub fn next_candidates(&mut self)
         -> Option<(Vec<SegmentRef>,usize)> {
 
-        let mut candidates = self.candidates.lock().unwrap();
+        let mut candidates = self.candidates.lock();
 
         // this if-stmt shouldn't actually execute if compaction
         // thread only runs when we have lots of dirty segments
@@ -772,11 +770,8 @@ impl Worker {
     /// Look in segment manager for newly closed segments. If any,
     /// move to our candidates list. Returns number of segments moved.
     pub fn check_new(&mut self) -> usize {
-        match self.candidates.lock() {
-            Err(_) => panic!("lock poison"),
-            Ok(ref mut cand) =>
-                self.manager.grab_closed(cand),
-        }
+        let mut cand = self.candidates.lock();
+        self.manager.grab_closed(&mut *cand)
     }
 
     #[cfg(IGNORE)]

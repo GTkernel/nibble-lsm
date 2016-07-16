@@ -7,9 +7,10 @@ use memory::*;
 use std::cmp;
 use std::mem::{size_of,transmute};
 use std::ptr;
-use std::sync::{Arc,Mutex,RwLockReadGuard};
+use std::sync::Arc;
 
 use rand::{self,Rng};
+use parking_lot as pl;
 
 /// Acquire read lock on SegmentRef
 macro_rules! rlock {
@@ -107,12 +108,11 @@ impl EntryHeader {
 //      Log head
 //==----------------------------------------------------==//
 
-// XXX replace with pl::Mutex or RwLock
-pub type LogHeadRef = Arc<Mutex<LogHead>>;
+pub type LogHeadRef = Arc<pl::Mutex<LogHead>>;
 
 macro_rules! loghead_ref {
     ( $manager:expr ) => {
-        Arc::new( Mutex::new(
+        Arc::new( pl::Mutex::new(
                 LogHead::new($manager)
                 ))
     }
@@ -245,12 +245,9 @@ impl Log {
         let x = unsafe { rdrand() } % NUM_LOG_HEADS;
         let head = &self.heads[x as usize];
         // 2. call append on the log head
-        let va: usize = {
-            let mut guard = head.lock().unwrap();
-            match guard.append(buf) {
-                e @ Err(_) => return e,
-                Ok(va) => va,
-            }
+        let va: usize = match head.lock().append(buf) {
+            e @ Err(_) => return e,
+            Ok(va) => va,
         };
         // 3. update segment info table
         // FIXME shouldn't have to lock for this

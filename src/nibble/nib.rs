@@ -8,7 +8,7 @@ use numa::{self,NodeId};
 use epoch;
 
 use std::ptr;
-use std::sync::{Arc,Mutex};
+use std::sync::Arc;
 use std::thread::{self,JoinHandle};
 use rand::{self,Rng};
 use parking_lot as pl;
@@ -72,9 +72,9 @@ impl Nibble {
               (persock as f64)/(2f64.powi(30)));
 
         // Create all per-socket elements with threads.
-        let nodes: Arc<Mutex<Vec<NibblePerNode>>>;
+        let nodes: Arc<pl::Mutex<Vec<NibblePerNode>>>;
         let index = index_ref!();
-        nodes = Arc::new(Mutex::new(Vec::with_capacity(nnodes)));
+        nodes = Arc::new(pl::Mutex::new(Vec::with_capacity(nnodes)));
         {
             let mut handles: Vec<JoinHandle<()>> = Vec::new();
             for node in 0..nnodes {
@@ -93,8 +93,7 @@ impl Nibble {
                         seginfo: seginfo,
                         compactor: comp_ref!(&mref, &i),
                     };
-                    let mut guard = nodes.lock().unwrap();
-                    guard.push(per);
+                    nodes.lock().push(per);
                 }));
             }
             for handle in handles {
@@ -104,10 +103,7 @@ impl Nibble {
         // consume the Arc and Mutex, then put back into order
         let mut nodes = match Arc::try_unwrap(nodes) {
             Err(_) => panic!("glug glug glug"),
-            Ok(lock) => match lock.into_inner() {
-                Err(_) => panic!("glug glug glug"),
-                Ok(n) => n,
-            },
+            Ok(lock) => lock.into_inner(),
         };
         nodes.sort_by( | a, b | {
             a.socket.cmp(&b.socket)
@@ -138,7 +134,7 @@ impl Nibble {
     }
 
     pub fn enable_compaction(&mut self, node: NodeId) {
-        let mut comp = self.nodes[node.0].compactor.lock().unwrap();
+        let mut comp = self.nodes[node.0].compactor.lock();
         comp.spawn(WorkerRole::Reclaim);
         comp.spawn(WorkerRole::Compact);
     }
