@@ -32,3 +32,4 @@ x Replace all use of Mutex/RwLock with those in parking_lot
 - verify all uses of transmute
 - have compaction turn on imeediately when data is low, not wait 1sec
 - don't forget writes are bottlenecked by locks on LogHead
+- don't use rdrand or other rand generator in a critical path
