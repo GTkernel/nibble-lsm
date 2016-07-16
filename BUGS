@@ -28,7 +28,7 @@ x put_object might need to handle decr/incr live_bytes correctly
 
 ===================== Performance/Other Issues =======================
 
-- Replace all use of Mutex/RwLock with those in parking_lot
+x Replace all use of Mutex/RwLock with those in parking_lot
 - verify all uses of transmute
 - have compaction turn on imeediately when data is low, not wait 1sec
 - don't forget writes are bottlenecked by locks on LogHead
