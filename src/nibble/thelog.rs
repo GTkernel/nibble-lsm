@@ -4,12 +4,9 @@ use segment::*;
 use epoch::*;
 use memory::*;
 
-use std::cmp;
 use std::mem::size_of;
-use std::ptr;
 use std::sync::Arc;
 
-use rand::{self,Rng};
 use parking_lot as pl;
 
 /// Acquire read lock on SegmentRef

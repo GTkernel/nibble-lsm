@@ -6,7 +6,6 @@ use std::ptr;
 use std::time::Instant;
 
 use numa::{self,NodeId};
-use sched;
 use common::{Pointer,errno};
 
 //==----------------------------------------------------==//

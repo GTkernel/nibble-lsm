@@ -1,8 +1,6 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::super::cuckoo;
-use parking_lot as pl;
 use numa;
 
 //==----------------------------------------------------==//

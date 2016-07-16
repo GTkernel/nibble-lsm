@@ -5,12 +5,10 @@ use thelog::*;
 use memory::*;
 use epoch::*;
 use numa::{NodeId};
-use std::slice;
 
 use std::cmp;
 use std::mem;
 use std::mem::size_of;
-use std::os::raw::c_void;
 use std::ptr;
 use std::sync::{atomic, Arc};
 

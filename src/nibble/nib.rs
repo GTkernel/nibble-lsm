@@ -10,7 +10,6 @@ use epoch;
 use std::ptr;
 use std::sync::Arc;
 use std::thread::{self,JoinHandle};
-use rand::{self,Rng};
 use parking_lot as pl;
 
 //==----------------------------------------------------==//

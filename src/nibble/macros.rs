@@ -1,5 +1,3 @@
-use parking_lot as pl;
-
 // Macros go in separate module to satisfy circular dependencies
 
 //==----------------------------------------------------==//
