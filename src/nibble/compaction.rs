@@ -631,10 +631,10 @@ impl Worker {
         // if significant, we may TODO free more blocks after
         // compaction
 
-        let mut used_reserve = false;
+        //let mut used_reserve = false;
         if livebytes > 0  {
             // allocate new segment
-            let mut newseg: SegmentRef;
+            let newseg: SegmentRef;
             let nblks = (livebytes+(BLOCK_SIZE-1))/BLOCK_SIZE;
             debug!("allocating new segment #blks {}",nblks);
             let mut retries = 0;

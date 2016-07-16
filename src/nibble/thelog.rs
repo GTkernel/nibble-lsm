@@ -309,7 +309,7 @@ impl<'a> EntryReference<'a> {
 
     /// Copy out the key
     pub unsafe fn get_key(&self) -> u64 {
-        let mut offset = self.offset + size_of::<EntryHeader>();
+        let offset = self.offset + size_of::<EntryHeader>();
         let mut key: u64 = 0;
         // TODO optimize if contiguous
         // hm, lots of overhead for copying 8 bytes
@@ -321,7 +321,7 @@ impl<'a> EntryReference<'a> {
 
     /// Copy out the value
     pub unsafe fn get_data(&self, out: *mut u8) {
-        let mut offset = self.offset + self.len
+        let offset = self.offset + self.len
                             - self.datalen as usize;
         // TODO optimize if contiguous
         segment::copy_out(&self.blocks, offset,
@@ -333,7 +333,7 @@ impl<'a> EntryReference<'a> {
 /// Construct an EntryReference given a VA and a set of Blocks.
 pub fn get_ref(list: &[BlockRef], idx: usize, va: usize) -> EntryReference {
     let mut header: EntryHeader;
-    let mut href: &EntryHeader;
+    let href: &EntryHeader;
     let offset = va & BLOCK_OFF_MASK;
     let blk_tail = BLOCK_SIZE - offset;
     let len = size_of::<EntryHeader>();

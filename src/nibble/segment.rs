@@ -41,7 +41,7 @@ pub unsafe fn copy_out(blocks: &[BlockRef], offset: usize,
 
     // which block does offset put us in?
     let mut idx = offset / BLOCK_SIZE;
-    let mut offset = (offset % BLOCK_SIZE) as isize;
+    let offset = (offset % BLOCK_SIZE) as isize;
 
     // Logical offset into new buffer
     let mut poffset: isize = 0;
