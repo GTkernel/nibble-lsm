@@ -623,6 +623,12 @@ impl WorkloadGenerator {
                     },
                 };
 
+                if let Dist::Zipfian(_) = dist {
+                    if let MemPolicy::Local = mem {
+                        panic!("Cannot combine Zipfian and Local.");
+                    }
+                }
+
                 Config::custom(capacity, ops, records,
                                size, dist, readpct, cpu,mem,
                                time, threads)
