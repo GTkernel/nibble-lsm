@@ -343,8 +343,7 @@ impl SegmentHeader {
 //      Segment
 //==----------------------------------------------------==//
 
-// XXX change this to pl::RwLock
-pub type SegmentRef = Arc<RwLock<Segment>>;
+pub type SegmentRef = Arc<pl::RwLock<Segment>>;
 pub type SegmentManagerRef = Arc<SegmentManager>;
 
 /// A Segment of data in the log, composed of many underlying
@@ -969,7 +968,7 @@ impl SegmentManager {
         // drop only other known ref to segment
         // and extract slot#
         let slot = {
-            let seg = segref.read().unwrap(); // FIXME don't lock
+            let seg = segref.read(); // FIXME don't lock
             self.inner.write().segments[seg.slot] = None;
             seg.slot
         };
@@ -977,10 +976,7 @@ impl SegmentManager {
         // extract the segment (should only be one ref remaining)
         let mut seg = match Arc::try_unwrap(segref) {
             Err(_) => panic!("another ref to seg exists"),
-            Ok(seglock) => { match seglock.into_inner() {
-                Err(_) => panic!("lock held without arc??"),
-                Ok(seg) => seg,
-            }},
+            Ok(seglock) => seglock.into_inner(),
         };
 
         // TODO memset the segment? or the header?
@@ -1021,7 +1017,7 @@ impl SegmentManager {
         //debug_assert_eq!(self.segments[idx].is_some(), true);
         let seg = self.segments[idx].as_ref().unwrap();
         // XXX avoid locking!!
-        let guard = seg.read().unwrap();
+        let guard = seg.read();
         let mut entry = guard.get_entry_ref(va);
         Some(entry)
     }
@@ -1064,7 +1060,7 @@ impl SegmentManager {
     pub fn dump_seg_info(&self) {
         for opt in self.segments.iter() {
             if let Some(ref segref) = *opt {
-                let seg = segref.read().unwrap();
+                let seg = segref.read();
                 println!("socket {:?} seg {} rem {} len {}",
                          self.socket, seg.slot(),
                          seg.remaining(), seg.len());
@@ -1096,7 +1092,7 @@ impl SegmentManager {
             match *opt {
                 None => {},
                 Some(ref segref) => {
-                    let seg = segref.read().unwrap();
+                    let seg = segref.read();
                     count += seg.nobjects();
                 },
             }
@@ -1255,7 +1251,7 @@ mod tests {
         let mut mgr = SegmentManager::numa(SEGMENT_SIZE, memlen, NodeId(0));
 
         let segref = mgr.alloc().unwrap();
-        let mut seg = segref.write().unwrap();
+        let mut seg = segref.write();
 
         // TODO generate sizes randomly
         // TODO export rand str generation

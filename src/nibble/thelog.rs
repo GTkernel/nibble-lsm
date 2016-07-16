@@ -152,7 +152,7 @@ impl LogHead {
         else {
             let segref = self.segment.clone().unwrap();
             roll = {
-                let seg = segref.read().unwrap();
+                let seg = segref.read();
                 !seg.can_hold(buf)
             };
             if roll {
@@ -169,7 +169,7 @@ impl LogHead {
 
         // XXX clone then lock.. yuck
         let segref = self.segment.clone().unwrap();
-        let mut seg = segref.write().unwrap();
+        let mut seg = segref.write();
         match seg.append(buf) {
             Err(s) => panic!("has space but append failed: {:?}",s),
             va @ Ok(_) => va,
@@ -202,7 +202,7 @@ impl LogHead {
     fn roll(&mut self) -> Status {
         let segref = self.segment.clone();
         if let Some(seg) = segref {
-            seg.write().unwrap().close();
+            seg.write().close();
             self.add_closed();
         }
         self.replace()

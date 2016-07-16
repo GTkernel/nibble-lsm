@@ -127,7 +127,7 @@ impl Compactor {
                     "cannot allocate reserve segment");
                 let segref = opt.unwrap();
                 let slot = {
-                    let manager = segref.read().unwrap();
+                    let manager = segref.read();
                     manager.slot()
                 };
                 debug!("have reserve seg {}", slot);
@@ -314,7 +314,7 @@ impl Worker {
         debug!("node-{:?} candidates:", self.manager.socket().unwrap());
         let mut i: usize = 0;
         for entry in &**guard {
-            let g = entry.read().unwrap();
+            let g = entry.read();
             let slot = g.slot();
             let live = self.seginfo.get_live(slot);
             debug!("node-{:2?} [{:2}] slot {:4} sock {:4} live {}",
@@ -392,8 +392,8 @@ impl Worker {
         // integer values instead?
         let pred = | a: &SegmentRef, b: &SegmentRef | {
             let (sa,sb) = {
-                let guarda = a.read().unwrap();
-                let guardb = b.read().unwrap();
+                let guarda = a.read();
+                let guardb = b.read();
                 (guarda.slot(),guardb.slot())
             };
             // descending sort so we can use pop instead of remove(0)
@@ -426,7 +426,7 @@ impl Worker {
                 Some(s) => s,
             };
             let (slot,len) = {
-                let guard = seg.read().unwrap();
+                let guard = seg.read();
                 (guard.slot(),guard.len())
             };
 
@@ -518,13 +518,13 @@ impl Worker {
         let status: Status = Ok(1);
         let socket = self.manager.socket().unwrap().0;
 
-        let mut new = new.write().unwrap();
+        let mut new = new.write();
 
         assert_eq!(self.seginfo.get_live(new.slot()), 0usize);
 
         let mut bytes_appended = 0usize;
         for segref in dirty {
-            let dirt = segref.read().unwrap();
+            let dirt = segref.read();
             debug!("compaction {} (live {} total {} entries {}) -> {}",
                    dirt.slot(), self.seginfo.get_live(dirt.slot()),
                    dirt.len(), dirt.nobjects(), new.slot());
@@ -594,7 +594,7 @@ impl Worker {
     #[cfg(IGNORE)]
     fn verify(&mut self, segref: &SegmentRef,
               slot: usize, isLive: &LiveFn) {
-        let mut seg = segref.write().unwrap();
+        let mut seg = segref.write();
         let mut size: usize = 0;
         // read first then iterate and measure
         let live = self.seginfo.get_live(slot);
@@ -688,7 +688,7 @@ impl Worker {
             if ret.is_err() { panic!("compact failed"); }
 
             // monitor the new segment, too
-            let newslot = newseg.read().unwrap().slot();
+            let newslot = newseg.read().slot();
             debug!("adding slot {} to candidates", newslot);
             self.add_candidate(&newseg);
         }
@@ -699,7 +699,7 @@ impl Worker {
         let ep = epoch::next();
         for segref in segs {
             let slot = {
-                let guard = segref.read().unwrap();
+                let guard = segref.read();
                 guard.slot()
             };
             debug!("adding slot {} to reclamation", slot);

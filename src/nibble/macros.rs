@@ -1,3 +1,5 @@
+use parking_lot as pl;
+
 // Macros go in separate module to satisfy circular dependencies
 
 //==----------------------------------------------------==//
@@ -22,7 +24,7 @@ macro_rules! incr {
 #[macro_export]
 macro_rules! seg_ref {
     ( $id:expr, $sock:expr, $slot:expr, $blocks:expr ) => {
-        Arc::new( RwLock::new(
+        Arc::new( pl::RwLock::new(
                 Segment::new($id, $sock, $slot, $blocks)
                 ))
     }
