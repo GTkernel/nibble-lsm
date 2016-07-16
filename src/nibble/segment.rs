@@ -134,8 +134,6 @@ impl Block {
         atomic::fence(atomic::Ordering::SeqCst);
     }
 
-    // We offer these methods and perform the transmute+fence to allow
-    // Block to be copied (AtomicUsize doesn't implement Copy).
     // Methods are here to prevent someone from doing an increment.
     // You can only load or store.
 
@@ -459,10 +457,8 @@ impl Segment {
                 let header = EntryHeader::new(buf);
                 let hlen = size_of::<EntryHeader>();
                 self.append_safe(header.as_ptr(), hlen);
-                unsafe {
-                    let v: *const u8 = mem::transmute(&buf.key);
-                    self.append_safe(v, mem::size_of::<u64>());
-                }
+                let v = &buf.key as *const _ as *const u8;
+                self.append_safe(v, mem::size_of::<u64>());
                 self.append_safe(buf.value.0 as *const u8, buf.vlen as usize);
                 self.nobj += 1;
                 self.update_header(1);

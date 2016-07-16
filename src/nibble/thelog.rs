@@ -5,7 +5,7 @@ use epoch::*;
 use memory::*;
 
 use std::cmp;
-use std::mem::{size_of,transmute};
+use std::mem::size_of;
 use std::ptr;
 use std::sync::Arc;
 

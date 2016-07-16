@@ -11,7 +11,6 @@ use std::cell::UnsafeCell;
 use std::sync::atomic;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
-use std::mem::transmute;
 use std::mem;
 use std::u64;
 
@@ -214,9 +213,7 @@ pub fn pin() {
 
 pub fn slot_addr() -> usize {
     EPOCH_SLOT.with( |slotptr| {
-        unsafe {
-            transmute::<*mut EpochSlot,usize>(*slotptr.get())
-        }
+        unsafe { *slotptr.get() as *const _ as usize }
     })
 }
 
@@ -331,12 +328,9 @@ impl EpochTable {
     /// Register new thread, allocating one slot to it.
     fn register(&self) -> *mut EpochSlot {
         let slot = self.freeslots.try_pop().unwrap() as usize;
-        let p: *mut EpochSlot = unsafe {
-            mem::transmute(&self.table[slot])
-        };
         let sl = &self.table[slot];
         debug!("new slot: epoch {} slot {}", sl.epoch, sl.slot);
-        p
+        sl as *const _ as *mut _
     }
 }
 
