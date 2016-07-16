@@ -7,7 +7,6 @@ use compaction::*;
 use numa::{self,NodeId};
 use epoch;
 
-use std::ptr;
 use std::sync::Arc;
 use std::thread::{self,JoinHandle};
 use parking_lot as pl;
@@ -235,37 +234,10 @@ impl Nibble {
         (Ok(1),Some(buf))
     }
 
+    #[cfg(IGNORE)]
     #[inline(always)]
     pub fn del_object(&mut self, key: u64) -> Status {
-        epoch::pin();
-        let ientry = match self.index.remove(key) {
-            None => return Err(ErrorCode::KeyNotExist),
-            Some(v) => v,
-        };
-        let (socket,va) = extract(ientry);
-
-        //
-        // XXX XXX use EntryReference to copy out data!! XXX XXX
-        //
-
-        // determine object size (to decr epoch table)
-        // TODO maybe keep this in the index?
-        let header: EntryHeader;
-        unsafe {
-            header = ptr::read(va as *const EntryHeader);
-        }
-
-        // get segment this object belongs to
-        // XXX need to make sure delete and object cleaning don't
-        // result in decrementing twice!
-        let idx: usize = self.nodes[0].manager
-                                      .segment_of(va as usize);
-
-        // update epoch table
-        self.nodes[0].seginfo.decr_live(idx, header.len_with_header());
-
-        epoch::quiesce();
-        Ok(1)
+        unimplemented!();
     }
 
     #[cfg(test)]

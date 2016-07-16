@@ -12,7 +12,6 @@
 
 // Remove these XXX
 #![allow(dead_code)]
-#![allow(unused_variables)]
 #![allow(unreachable_code)]
 
 #[macro_use]

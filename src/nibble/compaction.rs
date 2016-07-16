@@ -528,7 +528,6 @@ impl Worker {
                    dirt.len(), dirt.nobjects(), new.slot());
 
             let mut n = 0usize;
-            let mut live_count = 0usize;
             for entry in dirt.into_iter() {
                 let key: u64 = unsafe { entry.get_key() };
 
@@ -543,7 +542,6 @@ impl Worker {
 
                 if let Some(lock) =
                     cuckoo::update_hold_ifeq(key,ientry_new,ientry_old) {
-                    live_count += 1;
 
                     // try append; if fail, extend, try again
                     if let None = new.append_entry(&entry) {

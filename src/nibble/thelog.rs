@@ -85,14 +85,6 @@ impl EntryHeader {
         self as *mut Self as *mut u8
     }
 
-    /// Give the starting address of the object in the log, provided
-    /// the address of this EntryHeader within the log. Implementation
-    /// is non-trivial, as we must consider the non-contiguity of
-    /// blocks.
-    pub fn data_address(&self, entry: usize) -> *const u8 {
-        unimplemented!();
-    }
-
     #[cfg(test)]
     pub fn set_key_len(&mut self, l: u32) { self.keylen = l; }
 
