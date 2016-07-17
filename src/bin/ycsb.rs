@@ -161,8 +161,11 @@ impl WorkloadGenerator {
     pub fn new(config: Config) -> Self {
         let n = config.records;
         let mut nibble = Nibble::new(config.total);
-        for node in 0..numa::NODE_MAP.sockets() {
-            nibble.enable_compaction(NodeId(node));
+        if config.comp {
+            info!("Enabling compaction");
+            for node in 0..numa::NODE_MAP.sockets() {
+                nibble.enable_compaction(NodeId(node));
+            }
         }
         info!("WorkloadGenerator {:?}", config);
         WorkloadGenerator {
@@ -514,6 +517,8 @@ struct Config {
     threads: usize,
     /// How long to run the experiment in seconds
     dur: usize,
+    /// Whether to enable compaction
+    comp: bool,
 }
 
 impl Config {
@@ -521,10 +526,11 @@ impl Config {
     pub fn ycsb(total: usize, ops: u64, w: YCSB,
                 cpu: CPUPolicy, puts: PutPolicy,
                 keyp: KeyPolicy,
-                time: usize, threads: usize) -> Self {
+                time: usize, threads: usize,
+                comp: bool) -> Self {
         let rc: usize = 1000;
         Self::ycsb_more(total, ops, w, rc, cpu,
-                        puts,keyp,time,threads)
+                        puts,keyp,time,threads, comp)
     }
 
     // more records
@@ -532,7 +538,8 @@ impl Config {
                      records: usize,
                      cpu: CPUPolicy, puts: PutPolicy,
                      keyp: KeyPolicy,
-                     time: usize, threads: usize) -> Self {
+                     time: usize, threads: usize,
+                     comp: bool) -> Self {
         let rs: usize = 100;
         let rp: usize = match w {
             YCSB::A => 50,
@@ -553,6 +560,7 @@ impl Config {
             keyp: keyp,
             threads: threads,
             dur: time,
+            comp: comp,
         }
     }
 
@@ -562,7 +570,8 @@ impl Config {
                   read_pct: usize,
                   cpu: CPUPolicy, puts: PutPolicy,
                   keyp: KeyPolicy,
-                  time: usize, threads: usize) -> Self {
+                  time: usize, threads: usize,
+                  comp: bool) -> Self {
         Config {
             total: total,
             ycsb: None,
@@ -576,6 +585,7 @@ impl Config {
             keyp: keyp,
             threads: threads,
             dur: time,
+            comp: comp,
         }
     }
 }
@@ -620,6 +630,8 @@ fn main() {
              .long("time").takes_value(true))
         .arg(Arg::with_name("threads")
              .long("threads").takes_value(true))
+        .arg(Arg::with_name("compaction")
+             .long("compaction"))
         .get_matches();
 
     let config = match matches.value_of("ycsb") {
@@ -654,10 +666,12 @@ fn main() {
                 }
             }
 
+            let comp = matches.is_present("compaction");
+
             Config::custom(capacity, ops, records,
                            size, dist, readpct, cpu,
                            puts, keyp,
-                           time, threads)
+                           time, threads, comp)
         },
 
         // YCSB-Specific Configuration
@@ -690,12 +704,14 @@ fn main() {
                 },
             };
 
+            let comp = matches.is_present("compaction");
+
             match records {
                 None => Config::ycsb(capacity, ops, ycsb,
-                                     cpu, puts, keyp, time,threads),
+                                     cpu, puts, keyp, time,threads,comp),
                 Some(r) => Config::ycsb_more(capacity,
                                              ops, ycsb, r, cpu,
-                                             puts,keyp,time,threads),
+                                             puts,keyp,time,threads,comp),
             }
         },
     };
