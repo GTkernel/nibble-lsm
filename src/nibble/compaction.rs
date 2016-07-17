@@ -225,8 +225,12 @@ fn __compact(state: &Arc<pl::RwLock<Worker>>) {
         ratio < 0.2
     };
     if run {
-        debug!("compaction initiated");
+        info!("compaction initiated");
+        let now = clock::now();
         s.do_compact();
+        info!("node-{} compaction: {} ms",
+              s.manager.socket().unwrap(),
+              clock::to_msec(clock::now()-now));
         //let short = Duration::from_millis(100);
         //thread::sleep(dur);
     } else {
@@ -694,10 +698,7 @@ impl Worker {
         //let epoch = EPOCH.fetch_add(1, atomic::Ordering::Relaxed);
         let ep = epoch::next();
         for segref in segs {
-            let slot = {
-                let guard = segref.read();
-                guard.slot()
-            };
+            let slot = segref.read().slot();
             debug!("adding slot {} to reclamation", slot);
             self.reclaim_glob.push( (ep, segref) );
         }

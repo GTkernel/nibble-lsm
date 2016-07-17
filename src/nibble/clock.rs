@@ -17,6 +17,12 @@ pub unsafe fn rdtsc() -> u64 {
     ((high as u64) << 32) | (low as u64)
 }
 
+/// Same as calling rdtsc but we internalize the unsafe block
+#[inline(always)]
+pub fn now() -> u64 {
+    unsafe { rdtsc() }
+}
+
 fn init() {
     let now = Instant::now();
     let start = unsafe { rdtsc() };
@@ -71,6 +77,18 @@ pub fn to_seconds(cycles: u64) -> u64 {
 pub fn to_secondsf(cycles: u64) -> f64 {
     do_init!();
     cycles as f64 / unsafe { CYCLES_PER_SECOND as f64 }
+}
+
+#[inline(always)]
+pub fn to_msec(cycles: u64) -> u64 {
+    do_init!();
+    cycles / unsafe { CYCLES_PER_SECOND / 1_000u64 }
+}
+
+#[inline(always)]
+pub fn to_usec(cycles: u64) -> u64 {
+    do_init!();
+    cycles / unsafe { CYCLES_PER_SECOND / 1_000_000u64 }
 }
 
 #[inline(always)]
