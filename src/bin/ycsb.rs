@@ -623,6 +623,7 @@ impl WorkloadGenerator {
                     },
                 };
 
+                // TODO enable correct Local + Zipfian
                 if let Dist::Zipfian(_) = dist {
                     if let MemPolicy::Local = mem {
                         panic!("Cannot combine Zipfian and Local.");
@@ -649,19 +650,6 @@ impl WorkloadGenerator {
                 let threads  = arg_as_num::<usize>(&matches, "threads");
                 let time     = arg_as_num::<usize>(&matches, "time");
 
-                let mem = match matches.value_of("mem") {
-                    None => panic!("Specify memory policy"),
-                    Some(s) => {
-                        if s == "global" {
-                            MemPolicy::Global
-                        } else if s == "local" {
-                            MemPolicy::Local
-                        } else {
-                            panic!("invalid memory policy");
-                        }
-                    },
-                };
-
                 let cpu = match matches.value_of("cpu") {
                     None => panic!("Specify CPU policy"),
                     Some(s) => {
@@ -685,6 +673,9 @@ impl WorkloadGenerator {
                         Ok(s) => Some(s),
                     },
                 };
+
+                // TODO enable correct Local + Zipfian
+                let mem = MemPolicy::Global;
 
                 match records {
                     None => Config::ycsb(capacity, ops, ycsb, cpu,mem,
