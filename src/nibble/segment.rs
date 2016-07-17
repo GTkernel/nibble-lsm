@@ -796,7 +796,7 @@ impl<'a> Iterator for SegmentIter<'a> {
 
         let entry_len = entry.len_with_header();
         trace!("read {:?}", entry);
-        assert_eq!(entry.getkeylen(), 8);
+        debug_assert_eq!(entry.getkeylen(), 8);
 
 
         // determine which blocks belong
