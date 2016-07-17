@@ -22,7 +22,7 @@ use nibble::cuckoo;
 use nibble::epoch;
 use nibble::logger;
 use nibble::memory;
-use nibble::nib::{PutPolicy,Nibble};
+use nibble::nib::{self,Nibble};
 use nibble::numa::{self,NodeId};
 use nibble::sched::*;
 use nibble::segment::{ObjDesc,SEGMENT_SIZE};
@@ -82,7 +82,7 @@ impl DistGenerator for Zipfian {
         else if uz < (1f64 + 0.5f64.powf(self.theta)) { 1u64 }
         else {
             ((self.eta*u - self.eta + 1f64).powf(self.alpha)
-                * (self.n as f64)) as u64
+             * (self.n as f64)) as u64
         }
     }
 }
@@ -194,7 +194,7 @@ impl WorkloadGenerator {
                 for key in start_key..end_key {
                     let obj = ObjDesc::new(key, v, size as u32);
                     if let Err(code) = arc.put_where(&obj,
-                                                     PutPolicy::Specific(sock)) {
+                                          nib::PutPolicy::Specific(sock)) {
                         panic!("{:?}", code)
                     }
                 }
@@ -310,7 +310,7 @@ impl WorkloadGenerator {
                     info!("thread {} on cpu {} sock {:?}", t, cpu, sock);
 
                     // make your own generator for key accesses
-                    let mut gen: Box<DistGenerator> =
+                    let mut keygen: Box<DistGenerator> =
                         match config.dist {
                             Dist::Zipfian(s) => Box::new(
                                 ZipfianArray::new(config.records as u64,s)),
@@ -319,78 +319,59 @@ impl WorkloadGenerator {
                         };
                     // make one for determining read/writes
                     // don't want rdrand in the critical path.. slow
-                    let mut rw: Box<DistGenerator> =
+                    let mut rwgen: Box<DistGenerator> =
                         Box::new(Uniform::new(100));
 
                     // wait for all other threads to spawn
                     // after this, accum is zero
                     while accum.load(Ordering::Relaxed) > 0 { ; }
 
+                    // socket to apply PUT
+                    let mut sockn = 0_usize;
+
                     // main loop (do warmup first)
                     for x in 0..2 {
-                    //let x = 1;
-                    //loop {
+                        //let x = 1;
+                        //loop {
                         let mut ops = 0usize;
                         let now = Instant::now();
 
-                        while (now.elapsed().as_secs() as usize)
-                            < duration {
-
-                            match config.mem {
-
-                                // 
-                                // LOCAL
-                                //
-                                s @ MemPolicy::Local => {
-                                    let policy = PutPolicy::Specific(sock.0);
-                                    for _ in 0..1000usize {
-                                        let key = sock.0*pernode +
-                                            (gen.next() as usize % pernode);
-                                        let obj = ObjDesc::new(key as u64, v,
-                                                               config.size as u32);
-                                        if rw.next() < read_threshold as u64 {
-                                            if let (Err(e),_) = nibble.get_object(key as u64) {
-                                                panic!("Error: {:?}", e);
-                                            }
-                                        } else {
-                                            while let Err(e) = nibble.put_where(&obj, policy) {
-                                                match e {
-                                                    ErrorCode::OutOfMemory => {},
-                                                    _ => panic!("Error: {:?}", e),
-                                                }
-                                            }
-                                        } // r or w
-                                        ops += 1;
-                                    } // do 1000
-                                },
-
-                                // 
-                                // GLOBAL
-                                //
-                                s @ MemPolicy::Global => {
-                                    for _ in 0..1000usize {
-                                        let key = gen.next() as usize;
-                                        let obj = ObjDesc::new(key as u64, v,
-                                                               config.size as u32);
-                                        if rw.next() < read_threshold as u64 {
-                                            if let (Err(e),_) = nibble.get_object(key as u64) {
-                                                panic!("Error: {:?}", e);
-                                            }
-                                        } else {
-                                            let policy = PutPolicy::Specific(rw.next() as usize % sockets);
-                                            while let Err(e) = nibble.put_where(&obj, policy) {
-                                                match e {
-                                                    ErrorCode::OutOfMemory => {},
-                                                    _ => panic!("Error: {:?}", e),
-                                                }
-                                            }
-                                        } // r or w
-                                        ops += 1;
+                        while (now.elapsed().as_secs() as usize) < duration {
+                            for _ in 0..1000usize {
+                                let isread = rwgen.next() < read_threshold as u64;
+                                let gkey = keygen.next() as usize;
+                                // NOTE local GET assumes PUT is local
+                                // (and that threads don't move), else
+                                // objects move and this no longer
+                                // works
+                                let key = if let KeyPolicy::Local = config.keyp {
+                                    sock.0*pernode + (gkey % pernode)
+                                } else { gkey };
+                                if isread {
+                                    if let (Err(e),_) = nibble.get_object(key as u64) {
+                                        panic!("Error: {:?}", e);
                                     }
-                                },
-                            }
+                                } else {
+                                    let put_sock = match config.puts {
+                                        PutPolicy::GlobalRR => {
+                                            sockn = (sockn + 1) % sockets; sockn
+                                        },
+                                        PutPolicy::Local => sock.0,
+                                    };
+                                    let obj = ObjDesc::new(key as u64, v,
+                                                           config.size as u32);
+                                    let nibnode = nib::PutPolicy::Specific(put_sock);
+                                    while let Err(e) = nibble.put_where(&obj, nibnode) {
+                                        match e {
+                                            ErrorCode::OutOfMemory => {},
+                                            _ => panic!("Error: {:?}", e),
+                                        }
+                                    }
+                                } // put or get
+                                ops += 1;
+                            } // for 1000
+                        } // while some time
 
-                        }
                         if x == 1 {
                             let dur = now.elapsed();
                             let nsec = dur.as_secs() * 1000000000u64
@@ -400,305 +381,337 @@ impl WorkloadGenerator {
                             // aggregate the performance
                             accum.fetch_add(kops as usize, Ordering::Relaxed);
                         }
-                    }
-                }));
-                }
-                for handle in handles {
-                    let _ = handle.join();
-                }
-                println!("# total kops {}",
-                         accum.load(Ordering::Relaxed));
-                cuckoo::print_conflicts(0usize);
+                }}));
             }
+            for handle in handles {
+                let _ = handle.join();
+            }
+            println!("# total kops {}",
+                     accum.load(Ordering::Relaxed));
+            cuckoo::print_conflicts(0usize);
+        }
 
-
-        } // run()
-
-    }
+    } // run()
+}
 
 #[derive(Clone,Copy,Debug)]
-    enum CPUPolicy {
-        Global,
-        SocketRR, // round-robin among sockets
-        Incremental, // fill each socket
-    }
+enum CPUPolicy {
+    Global,
+    SocketRR, // round-robin among sockets
+    Incremental, // fill each socket
+}
 
 #[derive(Clone,Copy,Debug)]
-    enum MemPolicy {
-        Global,
-        Local, // access only keys local to socket
-    }
+enum PutPolicy {
+    /// Puts append to heads on each socket in RR fashion
+    GlobalRR,
+    /// Puts only append to heads on local socket
+    Local,
+}
+
+#[derive(Clone,Copy,Debug)]
+enum KeyPolicy {
+    /// GETs access objects on all sockets according to Dist
+    Global,
+    /// Restrict GETs to objects local to the socket
+    /// (using same Dist if possible)
+    /// Currently this is implemented using modulus. Whether this is
+    /// appropriate for a given distribution, depends on the
+    /// distribution
+    Local,
+}
 
 #[derive(Debug,Clone,Copy)]
-    enum Dist {
-        /// Contained value is s (exponent modifier)
-        Zipfian(f64),
-        Uniform,
-    }
+enum Dist {
+    /// Contained value is s (exponent modifier)
+    Zipfian(f64),
+    Uniform,
+}
 
-    // TODO: setup configuration, how to allocate objects across sockets
+fn extract_dist(args: &clap::ArgMatches) -> Dist {
+    match args.value_of("dist") {
+        None => panic!("Specify dist"),
+        Some(s) => {
+            if s == "zipfian" {
+                // s value from YCSB itself
+                Dist::Zipfian(0.99_f64)
+            } else if s == "uniform" {
+                Dist::Uniform
+            } else {
+                panic!("unknown distribution");
+            }
+        },
+    }
+}
+
+fn extract_cpu(args: &clap::ArgMatches) -> CPUPolicy {
+    match args.value_of("cpu") {
+        None => panic!("Specify CPU policy"),
+        Some(s) => {
+            if s == "global" {
+                CPUPolicy::Global
+            } else if s == "rr" {
+                CPUPolicy::SocketRR
+            } else if s == "incr" {
+                CPUPolicy::Incremental
+            } else {
+                panic!("invalid CPU policy");
+            }
+        },
+    }
+}
+
+fn extract_puts(args: &clap::ArgMatches) -> PutPolicy {
+    match args.value_of("put") {
+        None => panic!("Specify PUT policy"),
+        Some(s) => {
+            if s == "globalrr" {
+                PutPolicy::GlobalRR
+            } else if s == "local" {
+                PutPolicy::Local
+            } else {
+                panic!("invalid PUT policy");
+            }
+        },
+    }
+}
+
+fn extract_keyp(args: &clap::ArgMatches) -> KeyPolicy {
+    match args.value_of("keyp") {
+        None => panic!("Specify key gen policy"),
+        Some(s) => {
+            if s == "global" {
+                KeyPolicy::Global
+            } else if s == "local" {
+                KeyPolicy::Local
+            } else {
+                panic!("invalid key gen policy");
+            }
+        },
+    }
+}
+
+// TODO: setup configuration, how to allocate objects across sockets
 #[derive(Debug,Clone,Copy)]
-    struct Config {
-        /// Amount of memory to use for nibble
-        total: usize,
-        /// if None, custom workload
-        ycsb: Option<YCSB>,
-        /// number of objects
-        records: usize,
-        /// size of each object
-        size: usize,
-        dist: Dist,
-        /// 0-100 (1-read_pct = write pct)
-        read_pct: usize,
-        /// operations per second to sustain. 0 = unthrottled
-        ops: u64,
-        cpu: CPUPolicy,
-        mem: MemPolicy,
-        /// Number of threads to run experiment with
-        threads: usize,
-        /// How long to run the experiment in seconds
-        dur: usize,
+struct Config {
+    /// Amount of memory to use for nibble
+    total: usize,
+    /// if None, custom workload
+    ycsb: Option<YCSB>,
+    /// number of objects
+    records: usize,
+    /// size of each object
+    size: usize,
+    dist: Dist,
+    /// 0-100 (1-read_pct = write pct)
+    read_pct: usize,
+    /// operations per second to sustain. 0 = unthrottled
+    ops: u64,
+    cpu: CPUPolicy,
+    puts: PutPolicy,
+    keyp: KeyPolicy,
+    /// Number of threads to run experiment with
+    threads: usize,
+    /// How long to run the experiment in seconds
+    dur: usize,
+}
+
+impl Config {
+
+    pub fn ycsb(total: usize, ops: u64, w: YCSB,
+                cpu: CPUPolicy, puts: PutPolicy,
+                keyp: KeyPolicy,
+                time: usize, threads: usize) -> Self {
+        let rc: usize = 1000;
+        Self::ycsb_more(total, ops, w, rc, cpu,
+                        puts,keyp,time,threads)
     }
 
-    impl Config {
-
-        pub fn ycsb(total: usize, ops: u64, w: YCSB,
-                    cpu: CPUPolicy, mem: MemPolicy,
-                    time: usize, threads: usize) -> Self {
-            let rc: usize = 1000;
-            Self::ycsb_more(total, ops, w, rc, cpu, mem,time,threads)
-        }
-
-        // more records
-        pub fn ycsb_more(total: usize, ops: u64, w: YCSB,
-                         records: usize,
-                         cpu: CPUPolicy, mem: MemPolicy,
-                         time: usize, threads: usize) -> Self {
-            let rs: usize = 100;
-            let rp: usize = match w {
-                YCSB::A => 50,
-                YCSB::B => 95,
-                YCSB::C => 100,
-                YCSB::WR => 0,
-            };
-            Config {
-                total: total,
-                ycsb: Some(w),
-                records: records,
-                size: rs,
-                dist: Dist::Zipfian(0.99f64),
-                read_pct: rp,
-                ops: ops,
-                cpu: cpu,
-                mem: mem,
-                threads: threads,
-                dur: time,
-            }
-        }
-
-        // directly construct it
-        pub fn custom(total: usize, ops: u64, records: usize,
-                      size: usize, dist: Dist,
-                      read_pct: usize,
-                      cpu: CPUPolicy, mem: MemPolicy,
-                      time: usize, threads: usize) -> Self {
-            Config {
-                total: total,
-                ycsb: None,
-                records: records,
-                size: size,
-                dist: dist,
-                read_pct: read_pct,
-                ops: ops,
-                cpu: cpu,
-                mem: mem,
-                threads: threads,
-                dur: time,
-            }
-        }
-    }
-
-    /// Convert an argument as number.
-    fn arg_as_num<T: num::Integer>(args: &clap::ArgMatches,
-                                   name: &str) -> T {
-        match args.value_of(name) {
-            None => panic!("Specify {}", name),
-            Some(s) => match T::from_str_radix(s,10) {
-                Err(_) => panic!("size NaN"),
-                Ok(s) => s,
-            },
-        }
-    }
-
-    fn main() {
-        logger::enable();
-
-        let matches = App::new("ycsb")
-            .arg(Arg::with_name("ycsb")
-                 .long("ycsb")
-                 .takes_value(true))
-            .arg(Arg::with_name("size")
-                 .long("size")
-                 .takes_value(true))
-            .arg(Arg::with_name("capacity")
-                 .long("capacity")
-                 .takes_value(true))
-            .arg(Arg::with_name("records")
-                 .long("records")
-                 .takes_value(true))
-            .arg(Arg::with_name("readpct")
-                 .long("readpct")
-                 .takes_value(true))
-            .arg(Arg::with_name("dist")
-                 .long("dist")
-                 .takes_value(true))
-            .arg(Arg::with_name("ops")
-                 .long("ops")
-                 .takes_value(true))
-            .arg(Arg::with_name("mem")
-                 .long("mem")
-                 .takes_value(true))
-            .arg(Arg::with_name("cpu")
-                 .long("cpu")
-                 .takes_value(true))
-            .arg(Arg::with_name("time")
-                 .long("time")
-                 .takes_value(true))
-            .arg(Arg::with_name("threads")
-                 .long("threads")
-                 .takes_value(true))
-            .get_matches();
-
-        let config = match matches.value_of("ycsb") {
-
-            // Custom Configuration
-            None => {
-                let size     = arg_as_num::<usize>(&matches, "size");
-                let capacity = arg_as_num::<usize>(&matches, "capacity");
-                let ops      = arg_as_num::<u64>(&matches, "ops");
-                let records  = arg_as_num::<usize>(&matches, "records");
-                let readpct  = arg_as_num::<usize>(&matches, "readpct");
-                let threads  = arg_as_num::<usize>(&matches, "threads");
-                let time     = arg_as_num::<usize>(&matches, "time");
-
-                let mem = match matches.value_of("mem") {
-                    None => panic!("Specify memory policy"),
-                    Some(s) => {
-                        if s == "global" {
-                            MemPolicy::Global
-                        } else if s == "local" {
-                            MemPolicy::Local
-                        } else {
-                            panic!("invalid memory policy");
-                        }
-                    },
-                };
-
-                let cpu = match matches.value_of("cpu") {
-                    None => panic!("Specify CPU policy"),
-                    Some(s) => {
-                        if s == "global" {
-                            CPUPolicy::Global
-                        } else if s == "rr" {
-                            CPUPolicy::SocketRR
-                        } else if s == "incr" {
-                            CPUPolicy::Incremental
-                        } else {
-                            panic!("invalid CPU policy");
-                        }
-                    },
-                };
-
-                let dist = match matches.value_of("dist") {
-                    None => panic!("Specify dist"),
-                    Some(s) => {
-                        if s == "zipfian" {
-                            // s value from YCSB itself
-                            Dist::Zipfian(0.99_f64)
-                        } else if s == "uniform" {
-                            Dist::Uniform
-                        } else {
-                            panic!("unknown distribution");
-                        }
-                    },
-                };
-
-                // TODO enable correct Local + Zipfian
-                if let Dist::Zipfian(_) = dist {
-                    if let MemPolicy::Local = mem {
-                        panic!("Cannot combine Zipfian and Local.");
-                    }
-                }
-
-                Config::custom(capacity, ops, records,
-                               size, dist, readpct, cpu,mem,
-                               time, threads)
-            },
-
-            // YCSB-Specific Configuration
-            Some(s) => {
-                let ycsb = match s {
-                    "A" => YCSB::A,
-                    "B" => YCSB::B,
-                    "C" => YCSB::C,
-                    "WR" => YCSB::WR,
-                    _ => panic!("unknown YCSB configuration"),
-                };
-
-                let capacity = arg_as_num::<usize>(&matches, "capacity");
-                let ops      = arg_as_num::<u64>(&matches, "ops");
-                let threads  = arg_as_num::<usize>(&matches, "threads");
-                let time     = arg_as_num::<usize>(&matches, "time");
-
-                let cpu = match matches.value_of("cpu") {
-                    None => panic!("Specify CPU policy"),
-                    Some(s) => {
-                        if s == "global" {
-                            CPUPolicy::Global
-                        } else if s == "rr" {
-                            CPUPolicy::SocketRR
-                        } else if s == "incr" {
-                            CPUPolicy::Incremental
-                        } else {
-                            panic!("invalid CPU policy");
-                        }
-                    },
-                };
-
-                // optional argument
-                let records = match matches.value_of("records") {
-                    None => None,
-                    Some(s) => match usize::from_str_radix(s,10) {
-                        Err(_) => panic!("records NaN"),
-                        Ok(s) => Some(s),
-                    },
-                };
-
-                // TODO enable correct Local + Zipfian
-                let mem = MemPolicy::Global;
-
-                match records {
-                    None => Config::ycsb(capacity, ops, ycsb, cpu,mem,
-                                         time,threads),
-                    Some(r) => Config::ycsb_more(capacity,
-                                                 ops, ycsb, r, cpu,mem,
-                                                 time,threads),
-                }
-            },
+    // more records
+    pub fn ycsb_more(total: usize, ops: u64, w: YCSB,
+                     records: usize,
+                     cpu: CPUPolicy, puts: PutPolicy,
+                     keyp: KeyPolicy,
+                     time: usize, threads: usize) -> Self {
+        let rs: usize = 100;
+        let rp: usize = match w {
+            YCSB::A => 50,
+            YCSB::B => 95,
+            YCSB::C => 100,
+            YCSB::WR => 0,
         };
-
-        // default size 1KiB
-
-        // A rc=1000 size=1kb 50:50 zipfian
-        // B rc=1000 size=1kb 95:05 zipfian
-        // C rc=1000 size=1kb  1:0  zipfian
-
-        // W rc=1000 size=1kb  0:1  zipfian
-
-        // or user-defined if you omit --ycsb
-        // --records --size --readpct --dist --capacity --ops
-
-        let mut gen = WorkloadGenerator::new(config);
-        gen.setup();
-        gen.run();
+        Config {
+            total: total,
+            ycsb: Some(w),
+            records: records,
+            size: rs,
+            dist: Dist::Zipfian(0.99f64),
+            read_pct: rp,
+            ops: ops,
+            cpu: cpu,
+            puts: puts,
+            keyp: keyp,
+            threads: threads,
+            dur: time,
+        }
     }
+
+    // directly construct it
+    pub fn custom(total: usize, ops: u64, records: usize,
+                  size: usize, dist: Dist,
+                  read_pct: usize,
+                  cpu: CPUPolicy, puts: PutPolicy,
+                  keyp: KeyPolicy,
+                  time: usize, threads: usize) -> Self {
+        Config {
+            total: total,
+            ycsb: None,
+            records: records,
+            size: size,
+            dist: dist,
+            read_pct: read_pct,
+            ops: ops,
+            cpu: cpu,
+            puts: puts,
+            keyp: keyp,
+            threads: threads,
+            dur: time,
+        }
+    }
+}
+
+/// Convert an argument as number.
+fn arg_as_num<T: num::Integer>(args: &clap::ArgMatches,
+                               name: &str) -> T {
+    match args.value_of(name) {
+        None => panic!("Specify {}", name),
+        Some(s) => match T::from_str_radix(s,10) {
+            Err(_) => panic!("size NaN"),
+            Ok(s) => s,
+        },
+    }
+}
+
+fn main() {
+    logger::enable();
+
+    let matches = App::new("ycsb")
+        .arg(Arg::with_name("ycsb")
+             .long("ycsb").takes_value(true))
+        .arg(Arg::with_name("size")
+             .long("size").takes_value(true))
+        .arg(Arg::with_name("capacity")
+             .long("capacity").takes_value(true))
+        .arg(Arg::with_name("records")
+             .long("records").takes_value(true))
+        .arg(Arg::with_name("readpct")
+             .long("readpct").takes_value(true))
+        .arg(Arg::with_name("dist")
+             .long("dist").takes_value(true))
+        .arg(Arg::with_name("ops")
+             .long("ops").takes_value(true))
+        .arg(Arg::with_name("put")
+             .long("put").takes_value(true))
+        .arg(Arg::with_name("keyp")
+             .long("keyp").takes_value(true))
+        .arg(Arg::with_name("cpu")
+             .long("cpu").takes_value(true))
+        .arg(Arg::with_name("time")
+             .long("time").takes_value(true))
+        .arg(Arg::with_name("threads")
+             .long("threads").takes_value(true))
+        .get_matches();
+
+    let config = match matches.value_of("ycsb") {
+
+        // Custom Configuration
+        None => {
+            let size     = arg_as_num::<usize>(&matches, "size");
+            let capacity = arg_as_num::<usize>(&matches, "capacity");
+            let ops      = arg_as_num::<u64>(&matches, "ops");
+            let records  = arg_as_num::<usize>(&matches, "records");
+            let readpct  = arg_as_num::<usize>(&matches, "readpct");
+            let threads  = arg_as_num::<usize>(&matches, "threads");
+            let time     = arg_as_num::<usize>(&matches, "time");
+
+            let keyp = extract_keyp(&matches);
+            let puts = extract_puts(&matches);
+            let cpu  = extract_cpu(&matches);
+            let dist = extract_dist(&matches);
+
+            if let PutPolicy::GlobalRR = puts {
+                if let KeyPolicy::Local = keyp {
+                    assert!(false,
+                            "If PUT policy is global, {}",
+                            "KeyGen must not be local");
+                }
+            }
+
+            // TODO enable correct Local + Zipfian
+            if let Dist::Zipfian(_) = dist {
+                if let KeyPolicy::Local = keyp {
+                    panic!("Cannot combine DIST::Zipfian and KeyGen::Local.");
+                }
+            }
+
+            Config::custom(capacity, ops, records,
+                           size, dist, readpct, cpu,
+                           puts, keyp,
+                           time, threads)
+        },
+
+        // YCSB-Specific Configuration
+        Some(s) => {
+            let ycsb = match s {
+                "A" => YCSB::A,
+                "B" => YCSB::B,
+                "C" => YCSB::C,
+                "WR" => YCSB::WR,
+                _ => panic!("unknown YCSB configuration"),
+            };
+
+            let capacity = arg_as_num::<usize>(&matches, "capacity");
+            let ops      = arg_as_num::<u64>(&matches, "ops");
+            let threads  = arg_as_num::<usize>(&matches, "threads");
+            let time     = arg_as_num::<usize>(&matches, "time");
+
+            let cpu = extract_cpu(&matches);
+            let puts = extract_puts(&matches);
+
+            // KeyPolicy is ignored TODO fix this (see above)
+            let keyp = KeyPolicy::Global;
+
+            // optional argument
+            let records = match matches.value_of("records") {
+                None => None,
+                Some(s) => match usize::from_str_radix(s,10) {
+                    Err(_) => panic!("records NaN"),
+                    Ok(s) => Some(s),
+                },
+            };
+
+            match records {
+                None => Config::ycsb(capacity, ops, ycsb,
+                                     cpu, puts, keyp, time,threads),
+                Some(r) => Config::ycsb_more(capacity,
+                                             ops, ycsb, r, cpu,
+                                             puts,keyp,time,threads),
+            }
+        },
+    };
+
+    // default size 1KiB
+
+    // A rc=1000 size=1kb 50:50 zipfian
+    // B rc=1000 size=1kb 95:05 zipfian
+    // C rc=1000 size=1kb  1:0  zipfian
+
+    // W rc=1000 size=1kb  0:1  zipfian
+
+    // or user-defined if you omit --ycsb
+    // --records --size --readpct --dist --capacity --ops
+
+    let mut gen = WorkloadGenerator::new(config);
+    gen.setup();
+    gen.run();
+}
