@@ -864,6 +864,8 @@ impl SegmentManager {
 
     fn __new(sock: Option<NodeId>, segsz: usize, len: usize,
              b: BlockAllocator) -> Self {
+        info!("SEGMENT_SIZE {} BLOCK_SIZE {}",
+              SEGMENT_SIZE, BLOCK_SIZE);
         let num = len / segsz;
         let mut segments: Vec<Option<SegmentRef>>
             = Vec::with_capacity(num);

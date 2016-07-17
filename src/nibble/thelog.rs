@@ -27,7 +27,9 @@ macro_rules! wlock {
 //      Constants
 //==----------------------------------------------------==//
 
-pub const NUM_LOG_HEADS: u32 = 1;
+pub const LOG_HEADS_SHIFT: usize = 3;
+pub const NUM_LOG_HEADS:   usize = 1 << LOG_HEADS_SHIFT;
+pub const LOG_HEADS_MASK:  usize = NUM_LOG_HEADS - 1;
 
 //==----------------------------------------------------==//
 //      Entry header
@@ -213,6 +215,7 @@ pub struct Log {
 impl Log {
 
     pub fn new(manager: SegmentManagerRef) -> Self {
+        info!("NUM_LOG_HEADS {}", NUM_LOG_HEADS);
         let seginfo = manager.seginfo();
         let mut heads: Vec<LogHeadRef>;
         heads = Vec::with_capacity(NUM_LOG_HEADS as usize);
@@ -228,23 +231,38 @@ impl Log {
 
     /// Append an object to the log. If successful, returns the
     /// virtual address within the log inside Ok().
-    /// FIXME check key is valid UTF-8
     pub fn append(&self, buf: &ObjDesc) -> Status {
-        // 1. pick a log head XXX
-        let x = unsafe { rdrand() } % NUM_LOG_HEADS;
-        let head = &self.heads[x as usize];
-        // 2. call append on the log head
-        let va: usize = match head.lock().append(buf) {
-            e @ Err(_) => return e,
-            Ok(va) => va,
-        };
-        // 3. update segment info table
-        // FIXME shouldn't have to lock for this
+        let va: usize;
+
+        // fast quasi-randomness (TODO might always be zero?)
+        let mut i = (buf as *const _ as usize) & LOG_HEADS_MASK;
+
+        // 1. pick a log head and append
+        'again: loop {
+            if let Some(mut h) = self.heads[i].try_lock() {
+                match h.append(buf) {
+                    Err(e) => match e {
+                        // try another log head instead
+                        ErrorCode::OutOfMemory =>  {
+                            i = (i + 1) & LOG_HEADS_MASK;
+                            continue 'again;
+                        },
+                        _ => return Err(e),
+                    },
+                    Ok(v) => va = v,
+                }
+                break;
+            }
+            i = (i + 1) & LOG_HEADS_MASK;
+        }
+
+        // 2. update segment info table
         let idx = self.manager.segment_of(va);
         let len = buf.len_with_header();
         debug_assert!(len < SEGMENT_SIZE);
         self.seginfo.incr_live(idx, len);
-        // 4. return virtual address of new object
+
+        // 3. return virtual address of new object
         Ok(va)
     }
 
