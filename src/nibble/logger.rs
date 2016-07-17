@@ -6,6 +6,7 @@ use std::env;
 use std::sync::{Once, ONCE_INIT};
 
 use common::*;
+use clock;
 
 pub struct SimpleLogger {
     level: LogLevel,
@@ -29,9 +30,9 @@ impl log::Log for SimpleLogger {
                 None => loc.file(),
                 Some(idx) => loc.file().split_at(idx+1).1,
             };
-            println!("<{}-{}> {}/{}:{} [{}] {}",
-                     tid, tname, module, file, loc.line(),
-                     record.level(), record.args());
+            println!("<{} {}-{}> {}/{}:{} [{}] {}",
+                     clock::now(), tid, tname, module, file,
+                     loc.line(), record.level(), record.args());
         }
     }
 }
@@ -78,6 +79,8 @@ pub fn enable() {
                 _ => panic!("{}: must be in range [1,5]", LOGGER_ENV),
             };
             let _ = SimpleLogger::init(level);
+            info!("{} cycles per second",
+                  clock::per_second());
         }
     });
 }
