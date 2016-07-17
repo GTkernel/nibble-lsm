@@ -4,6 +4,7 @@ use syscall;
 use std::mem;
 use std::ptr;
 use std::time::Instant;
+use std::slice;
 
 use numa::{self,NodeId};
 use common::{Pointer,errno};
@@ -68,6 +69,11 @@ impl Buffer {
 
     pub fn as_mut_ptr(&mut self) -> *mut u8 {
         self.addr.0 as *mut u8
+    }
+
+    pub unsafe fn as_slice(&mut self) -> &mut [u8] {
+        slice::from_raw_parts_mut(self.addr.0 as *mut u8,
+                                  self.len)
     }
 
     // TODO append()
