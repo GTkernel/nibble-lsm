@@ -89,6 +89,12 @@ impl DistGenerator for Zipfian {
 
 struct ZipfianArray {
     n: u64,
+    /// Given we execute for short periods in our experiments, we
+    /// won't need to generate all data points. 'n' is the total
+    /// quantity of items we would access given infinite time. 'upto'
+    /// is how many operations we'll realistically perform given the
+    /// duration of the experiment.
+    upto: Option<usize>,
     arr: Vec<u32>,
     next: u32,
 }
@@ -104,7 +110,18 @@ impl ZipfianArray {
         }
         let mut rng = rand::thread_rng();
         rng.shuffle(&mut v);
-        ZipfianArray { n: n, arr: v, next: 0 }
+        ZipfianArray { n: n, upto: None, arr: v, next: 0 }
+    }
+
+    pub fn new_capped(n: u64, s: f64, upto: usize) -> Self {
+        let mut v: Vec<u32> = Vec::with_capacity(upto);
+        let mut zip = Zipfian::new(n, s);
+        for _ in 0..upto {
+            v.push(zip.next() as u32);
+        }
+        let mut rng = rand::thread_rng();
+        rng.shuffle(&mut v);
+        ZipfianArray { n: n, upto: Some(upto), arr: v, next: 0 }
     }
 }
 
@@ -113,6 +130,10 @@ impl DistGenerator for ZipfianArray {
     #[inline(always)]
     fn next(&mut self) -> u64 {
         self.next = (self.next + 1) % self.n as u32;
+        if self.upto.is_some() {
+            assert!(self.next < self.upto.unwrap() as u32,
+                    "upto exceeded. increase, or shorten expmt duration");
+        }
         self.arr[self.next as usize] as u64
     }
 }
@@ -316,7 +337,11 @@ impl WorkloadGenerator {
                     let mut keygen: Box<DistGenerator> =
                         match config.dist {
                             Dist::Zipfian(s) => Box::new(
-                                ZipfianArray::new(config.records as u64,s)),
+                                ZipfianArray::new_capped(
+                                    config.records as u64,s,
+                                    // hard assumption of max 7m op/sec
+                                    // the 2 from the warmup and exec phases
+                                    (config.dur as f64*(2.*7e6)) as usize)),
                                 Dist::Uniform => Box::new(
                                     Uniform::new(config.records as u64)),
                         };
@@ -324,6 +349,7 @@ impl WorkloadGenerator {
                     // don't want rdrand in the critical path.. slow
                     let mut rwgen: Box<DistGenerator> =
                         Box::new(Uniform::new(100));
+                    info!("done with setup; executing now");
 
                     // wait for all other threads to spawn
                     // after this, accum is zero
