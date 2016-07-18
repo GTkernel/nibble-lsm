@@ -35,12 +35,12 @@ use std::thread::{self,JoinHandle};
 use std::time::{Instant,Duration};
 
 trait DistGenerator {
-    fn next(&mut self) -> u64;
+    fn next(&mut self) -> u32;
 }
 
 #[derive(Debug,Clone,Copy)]
 struct Zipfian {
-    n: u64,
+    n: u32,
     theta: f64,
     alpha: f64,
     zetan: f64,
@@ -49,9 +49,9 @@ struct Zipfian {
 
 impl Zipfian {
 
-    pub fn new(n: u64, s: f64) -> Self {
+    pub fn new(n: u32, s: f64) -> Self {
         let theta: f64 = s;
-        let zetan: f64 = Self::zeta(n, theta);
+        let zetan: f64 = Self::zeta(n as u64, theta);
         Zipfian {
             n: n, theta: theta,
             alpha: 1f64 / (1f64 - theta),
@@ -74,53 +74,61 @@ impl Zipfian {
 impl DistGenerator for Zipfian {
 
     #[inline(always)]
-    fn next(&mut self) -> u64 {
+    fn next(&mut self) -> u32 {
         let u: f64 = unsafe { rdrandq() as f64 } / 
-            (std::u64::MAX as f64);
+            (std::u32::MAX as f64);
         let uz: f64 = u * self.zetan;
-        if uz < 1f64 { 0u64 }
-        else if uz < (1f64 + 0.5f64.powf(self.theta)) { 1u64 }
+        if uz < 1f64 { 0u32 }
+        else if uz < (1f64 + 0.5f64.powf(self.theta)) { 1u32 }
         else {
             ((self.eta*u - self.eta + 1f64).powf(self.alpha)
-             * (self.n as f64)) as u64
+             * (self.n as f64)) as u32
         }
     }
 }
 
 struct ZipfianArray {
-    n: u64,
+    n: u32,
     /// Given we execute for short periods in our experiments, we
     /// won't need to generate all data points. 'n' is the total
     /// quantity of items we would access given infinite time. 'upto'
     /// is how many operations we'll realistically perform given the
     /// duration of the experiment.
-    upto: Option<usize>,
+    upto: Option<u32>,
     arr: Vec<u32>,
     next: u32,
 }
 
 impl ZipfianArray {
 
-    pub fn new(n: u64, s: f64) -> Self {
+    pub fn new(n: u32, s: f64) -> Self {
         let many = (n*4) as usize;
         let mut v: Vec<u32> = Vec::with_capacity(many);
         let mut zip = Zipfian::new(n, s);
         for _ in 0..many {
-            v.push(zip.next() as u32);
+            v.push(zip.next());
         }
-        let mut rng = rand::thread_rng();
-        rng.shuffle(&mut v);
+        // Knuth shuffle
+        for i in 0..many {
+            let r = unsafe { rdrand() };
+            let o = (r as usize % (many-i)) + i;
+            v.swap(i as usize, o as usize);
+        }
         ZipfianArray { n: n, upto: None, arr: v, next: 0 }
     }
 
-    pub fn new_capped(n: u64, s: f64, upto: usize) -> Self {
-        let mut v: Vec<u32> = Vec::with_capacity(upto);
+    pub fn new_capped(n: u32, s: f64, upto: u32) -> Self {
+        let mut v: Vec<u32> = Vec::with_capacity(upto as usize);
         let mut zip = Zipfian::new(n, s);
         for _ in 0..upto {
-            v.push(zip.next() as u32);
+            v.push(zip.next());
         }
-        let mut rng = rand::thread_rng();
-        rng.shuffle(&mut v);
+        // Knuth shuffle
+        for i in 0..upto {
+            let r = unsafe { rdrand() };
+            let o = (r % (upto-i)) + i;
+            v.swap(i as usize, o as usize);
+        }
         ZipfianArray { n: n, upto: Some(upto), arr: v, next: 0 }
     }
 }
@@ -128,25 +136,25 @@ impl ZipfianArray {
 impl DistGenerator for ZipfianArray {
 
     #[inline(always)]
-    fn next(&mut self) -> u64 {
-        self.next = (self.next + 1) % self.n as u32;
+    fn next(&mut self) -> u32 {
+        self.next = (self.next + 1) % self.n;
         if self.upto.is_some() {
-            assert!(self.next < self.upto.unwrap() as u32,
+            assert!(self.next < self.upto.unwrap(),
                     "upto exceeded. increase, or shorten expmt duration");
         }
-        self.arr[self.next as usize] as u64
+        self.arr[self.next as usize] as u32
     }
 }
 
 struct Uniform {
-    n: u64,
+    n: u32,
     arr: Vec<u32>,
     next: u32,
 }
 
 impl Uniform {
 
-    pub fn new(n: u64) -> Self {
+    pub fn new(n: u32) -> Self {
         let mut v: Vec<u32> = Vec::with_capacity(n as usize);
         for x in 0..n {
             v.push(x as u32);
@@ -160,9 +168,9 @@ impl Uniform {
 impl DistGenerator for Uniform {
 
     #[inline(always)]
-    fn next(&mut self) -> u64 {
-        self.next = (self.next + 1) % self.n as u32;
-        self.arr[self.next as usize] as u64
+    fn next(&mut self) -> u32 {
+        self.next = (self.next + 1) % self.n;
+        self.arr[self.next as usize]
     }
 }
 
@@ -338,12 +346,12 @@ impl WorkloadGenerator {
                         match config.dist {
                             Dist::Zipfian(s) => Box::new(
                                 ZipfianArray::new_capped(
-                                    config.records as u64,s,
+                                    config.records as u32,s,
                                     // hard assumption of max 7m op/sec
                                     // the 2 from the warmup and exec phases
-                                    (config.dur as f64*(2.*7e6)) as usize)),
+                                    (config.dur as f64*(2.*7e6)) as u32)),
                                 Dist::Uniform => Box::new(
-                                    Uniform::new(config.records as u64)),
+                                    Uniform::new(config.records as u32)),
                         };
                     // make one for determining read/writes
                     // don't want rdrand in the critical path.. slow
@@ -360,14 +368,14 @@ impl WorkloadGenerator {
 
                     // main loop (do warmup first)
                     for x in 0..2 {
-                        //let x = 1;
-                        //loop {
+                    //let x = 1;
+                    //loop {
                         let mut ops = 0usize;
                         let now = Instant::now();
 
                         while (now.elapsed().as_secs() as usize) < duration {
                             for _ in 0..1000usize {
-                                let isread = rwgen.next() < read_threshold as u64;
+                                let isread = rwgen.next() < read_threshold as u32;
                                 let gkey = keygen.next() as usize;
                                 // NOTE local GET assumes PUT is local
                                 // (and that threads don't move), else
