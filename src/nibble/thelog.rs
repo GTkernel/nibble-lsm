@@ -41,7 +41,7 @@ pub const LOG_HEADS_MASK:  usize = NUM_LOG_HEADS - 1;
 #[derive(Debug)]
 #[repr(C)]
 pub struct EntryHeader {
-    keylen: u32,
+    keylen: u32, // TODO don't need this; keys are fixed-size at 8B
     datalen: u32,
 }
 
