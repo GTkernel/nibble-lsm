@@ -12,7 +12,6 @@ use std::sync::atomic::{self, Ordering};
 use std::intrinsics;
 use std::ptr;
 
-// TODO use intrinsics instead of stdlib types
 pub struct TicketLock {
     next: u64,
     now:  u64,
