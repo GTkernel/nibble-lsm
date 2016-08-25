@@ -12,5 +12,6 @@ pub mod epoch;
 pub mod numa;
 pub mod sched;
 pub mod clock;
+pub mod tlock;
 
 pub mod logger;

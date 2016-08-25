@@ -3,6 +3,9 @@
 #![feature(asm)]
 #![feature(repr_simd)]
 
+// used for nibble/tlock.rs
+#![feature(core_intrinsics)]
+
 // Clippy tool
 //#![feature(plugin)]
 //#![plugin(clippy)]
