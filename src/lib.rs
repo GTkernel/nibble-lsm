@@ -32,7 +32,7 @@ extern crate parking_lot;
 
 // TODO keep cuckoo private and move the unit test in the integration
 // test code to where it should be
-pub mod cuckoo;
+//pub mod cuckoo;
 
 pub mod nibble;
 pub use nibble::*;

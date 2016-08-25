@@ -3,8 +3,6 @@
 name = "nibble"
 version = "0.1.0"
 authors = ["Alexander Merritt <merritt.alex@gatech.edu>"]
-build = "build.rs"
-links = "cuckoo"
 
 [dependencies]
 libc = "0.2.7"

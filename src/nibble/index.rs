@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use super::super::cuckoo;
 use numa;
 
 //==----------------------------------------------------==//
@@ -32,7 +31,7 @@ pub fn merge(socket: u16, va: u64) -> IndexEntry {
 /// TODO what if i store the hash of a key instead of the key itself?
 /// save space? all the keys are kept in the log anyway
 pub struct Index {
-    // cuckoo interface has no Rust state (behind FFI)
+    // TODO
 }
 
 impl Index {
@@ -42,14 +41,13 @@ impl Index {
     pub fn new() -> Self {
         let nnodes = numa::NODE_MAP.sockets();
         let mask: usize = (1usize<<nnodes)-1;
-        cuckoo::init(mask, nnodes); // FIXME should only be called once
-        Index { }
+        unimplemented!();
     }
 
     /// Return value of object if it exists, else None.
     #[inline(always)]
     pub fn get(&self, key: u64) -> Option<IndexEntry> {
-        cuckoo::find(key)
+        unimplemented!();
     }
 
     /// Update location of object in the index. Returns None if object
@@ -58,7 +56,7 @@ impl Index {
     #[inline(always)]
     pub fn update(&self, key: u64, value: IndexEntry)
         -> Option<IndexEntry> {
-        cuckoo::update(key, value)
+        unimplemented!();
     }
 
     /// Remove an entry. If it existed, return value, else return
@@ -66,14 +64,11 @@ impl Index {
     #[inline(always)]
     pub fn remove(&self, key: u64) -> Option<IndexEntry> {
         let mut val: IndexEntry = 0;
-        match cuckoo::erase(key, &mut val) {
-            true => Some(val),
-            false => None,
-        }
+        unimplemented!();
     }
 
     pub fn len(&self) -> usize {
-        cuckoo::size()
+        unimplemented!();
     }
 }
 

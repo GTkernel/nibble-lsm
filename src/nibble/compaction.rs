@@ -56,7 +56,6 @@ use segment::*;
 use index::*;
 use thelog::*;
 use clock;
-use cuckoo;
 use epoch;
 
 use std::collections::VecDeque;
