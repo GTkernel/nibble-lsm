@@ -324,8 +324,10 @@ mod tests {
     use std::thread::{self,JoinHandle};
     use std::collections::HashSet;
     use std::ptr;
+    use std::sync;
 
     use rand::{self,Rng};
+    use crossbeam;
 
     use common::*;
     use logger;
@@ -471,8 +473,69 @@ mod tests {
         }
     }
 
-    // TODO many threads
-    // TODO fill up
-    // TODO delete some, all
-}
+    fn threads_read_n(tblsz: usize) {
+        logger::enable();
+        println!("");
 
+        let ht = HashTable::new(tblsz);
+
+        let mut inserted: usize = 0;
+        for key in 0..tblsz {
+            if ht.put(key as u64, 0xffff) {
+                inserted += 1;
+            }
+        }
+        //ht.dump();
+        println!("keys inserted: {}", inserted);
+        // only 'inserted' number of keys are valid in 0-tblsz
+
+        let nthreads = 8;
+        let mut guards = vec![];
+
+        crossbeam::scope(|scope| {
+            for _ in 0..nthreads {
+                let guard = scope.spawn(|| {
+    
+                    let mut keys: Vec<u64>;
+    
+                    keys = Vec::with_capacity((tblsz*2) as usize);
+                    for k in 0..(tblsz*2) {
+                        keys.push(k as u64);
+                    }
+    
+                    let mut value: u64 = 0;
+                    let mut hits: usize;
+                    for _ in 0..3 {
+                        hits = 0;
+                        shuffle(&mut keys);
+                        for k in &keys {
+                            if ht.get(*k, &mut value) {
+                                hits += 1;
+                                assert_eq!(value, 0xffff);
+                                value = 0;
+                            }
+                        }
+                        assert_eq!(hits, inserted);
+                    }
+                });
+                guards.push(guard);
+            }
+        });
+
+        for g in guards {
+            g.join();
+        }
+    }
+
+    #[test]
+    fn threads_read_sm() {
+        threads_read_n(1024);
+    }
+
+    #[test]
+    fn threads_read_med() {
+        threads_read_n(1_usize << 20);
+    }
+
+    // TODO many threads
+}
