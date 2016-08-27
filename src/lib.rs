@@ -13,6 +13,10 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
+#![allow(unused_variables)]
+#![allow(unused_imports)]
+#![allow(unused_mut)]
+
 // Remove these XXX
 #![allow(dead_code)]
 #![allow(unreachable_code)]
@@ -32,6 +36,7 @@ extern crate itertools;
 extern crate quicksort;
 extern crate syscall;
 extern crate parking_lot;
+extern crate num;
 
 // TODO keep cuckoo private and move the unit test in the integration
 // test code to where it should be
