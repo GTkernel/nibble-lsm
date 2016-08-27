@@ -39,15 +39,17 @@ impl fmt::Debug for Bucket {
     }
 }
 
+type find_ops = (Option<usize>, Option<usize>);
+
 // most methods require 'volatile' operations because this is a
 // concurrent hash table, and we cannot have the compiler optimizing
 // with an assumption that values won't change underneath it
+// TODO Use RAII for the locks
 impl Bucket {
 
     #[inline]
     pub fn try_bump_version(&self, version: u64) -> bool {
         let v = &self.version as *const u64 as *mut u64;
-        // volatile_add(v, 1);
         let (val,ok) = unsafe {
             atomic_cas(v, version, version+1)
         };
@@ -58,12 +60,9 @@ impl Bucket {
     pub fn bump_version(&self) {
         let v = &self.version as *const u64 as *mut u64;
         unsafe {
-            let old = *v;
-            debug_assert!(ptr::read_volatile(v) < 1_000); // XXX remove
             atomic_add(v, 1);
-            debug_assert!(old+1 == ptr::read_volatile(v));
+            //volatile_add(v, 1);
         }
-        //volatile_add(v, 1);
     }
 
     #[inline]
@@ -110,6 +109,62 @@ impl Bucket {
             ptr::write_volatile(v, value)
         }
     }
+
+    #[inline]
+    pub fn del_key(&self, idx: usize) {
+        debug_assert!(idx < ENTRIES_PER_BUCKET);
+        unsafe {
+            let v = self.key.get_unchecked(idx)
+                        as *const u64 as *mut u64;
+            ptr::write_volatile(v, INVALID_KEY)
+        }
+    }
+
+    #[inline]
+    pub fn wait_version(&self) -> u64 {
+        let mut v = self.read_version();
+        loop {
+            if is_even(v) { break; }
+            v = self.read_version();
+        }
+        v
+    }
+
+    #[inline]
+    pub fn wait_lock(&self) {
+        let mut v;
+        'retry: loop {
+            v = self.read_version();
+            if is_even(v) {
+                if self.try_bump_version(v) {
+                    return;
+                } else {
+                    continue 'retry;
+                }
+            }
+        }
+    }
+
+    #[inline]
+    pub fn unlock(&self) {
+        self.bump_version();
+    }
+
+    #[inline]
+    pub fn find_key(&self, key: u64) -> find_ops {
+        let mut idx: Option<usize> = None;
+        let mut inv: Option<usize> = None;
+        for i in 0..ENTRIES_PER_BUCKET {
+            let k = self.read_key(i);
+            if key == k {
+                idx = Some(i);
+                break;
+            } else if INVALID_KEY == k {
+                inv = Some(i);
+            }
+        }
+        (idx,inv)
+    }
 }
 
 // TODO make this some inner type
@@ -142,76 +197,44 @@ impl HashTable {
         }
     }
 
+    // does work of both insert and update
     pub fn put(&self, key: u64, value: u64) -> bool {
         let hash = self.make_hash(key);
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
         let bidx = (hash % (self.nbuckets as u64)) as usize;
         let bucket: &Bucket = &self.buckets[bidx];
 
-        trace!("self.nbuckets {}", self.nbuckets);
-        trace!("key {:x} value {:x}", key, value);
-        trace!("hash {:x} bidx {}", hash, bidx);
-        trace!("version (before) {}", bucket.read_version());
-
-        trace!("{:?}", bucket);
-        debug_assert!(bucket.read_version() < 1_000);
-
-        let mut v;
-        'retry: loop {
-            v = bucket.read_version();
-            if is_even(v) {
-                if bucket.try_bump_version(v) {
-                    break;
-                } else {
-                    continue 'retry;
-                }
-            }
-        }
-        debug_assert!(v + 1 == bucket.read_version());
-        trace!("version {}", v+1);
-
-        let mut idx = usize::max_value();
-        let mut inv = usize::max_value();
-
-        // TODO search first, then bump version
-        // to reduce critical section (behave like a reader)
-
-        for i in 0..ENTRIES_PER_BUCKET {
-            let k = bucket.read_key(i);
-            if key == k {
-                idx = i;
-                break;
-            } else if INVALID_KEY == k {
-                inv = i;
-            }
-        }
-
-        // if exists, overwrite
-        if idx != usize::max_value() {
-            trace!("found existing at {}", idx);
-            debug_assert!(bucket.read_key(idx) == key);
-            bucket.set_value(idx, value);
-            bucket.bump_version();
-            debug_assert!(v + 2 == bucket.read_version());
-            return true;
-        }
-        // else if there is an empty slot, use that
-        else if inv != usize::max_value() {
-            trace!("not exist, but found empty at {}", inv);
-            bucket.set_key(inv, key);
-            bucket.set_value(inv, value);
-            bucket.bump_version();
-            debug_assert!(v + 2 == bucket.read_version());
-            return true;
-        }
-        // else, no space to insert
-        else {
-            trace!("not found and no empty slots");
-            bucket.bump_version();
-            trace!("{:?}", bucket);
-            debug_assert!(v + 2 == bucket.read_version());
+        let v = bucket.read_version();
+        let mut opts = bucket.find_key(key);
+        if opts.0 .is_none() && opts.1 .is_none() {
+            trace!("bidx {} {:?}", bidx, bucket);
             return false;
         }
+
+        bucket.wait_lock();
+        if bucket.read_version() != v {
+            opts = bucket.find_key(key);
+        }
+
+        let mut ret: bool = false;
+
+        // if exists, overwrite
+        if let Some(idx) = opts.0 {
+            bucket.set_value(idx, value);
+            ret = true;
+        }
+        // else if there is an empty slot, use that
+        else if let Some(inv) = opts.1 {
+            bucket.set_key(inv, key);
+            bucket.set_value(inv, value);
+            ret = true;
+        }
+        else {
+            trace!("bidx {} {:?}", bidx, bucket);
+        }
+
+        bucket.unlock();
+        ret
     }
 
     pub fn get(&self, key: u64, value: &mut u64) -> bool {
@@ -223,10 +246,7 @@ impl HashTable {
         // TODO if we retry too many times, perhaps forcefully lock
 
         'retry: loop {
-            let v = bucket.read_version();
-            if is_odd(v) {
-                continue 'retry;
-            }
+            let v = bucket.wait_version();
             for i in 0..ENTRIES_PER_BUCKET {
                 if bucket.read_key(i) == key {
                     *value = bucket.read_value(i);
@@ -236,16 +256,41 @@ impl HashTable {
                     return true;
                 }
             }
-            // FIXME i think we only need to check retry on a hit
-            if v != bucket.read_version() {
-                continue 'retry;
-            }
             return false;
         }
     }
 
     pub fn del(&self, key: u64) -> bool {
-        unimplemented!();
+        let hash = self.make_hash(key);
+        //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
+        let bidx = (hash % (self.nbuckets as u64)) as usize;
+        let bucket: &Bucket = &self.buckets[bidx];
+
+        let v = bucket.read_version();
+        let mut opts = bucket.find_key(key);
+        if opts.0 .is_none() {
+            return false;
+        }
+
+        bucket.wait_lock();
+        if bucket.read_version() != v {
+            opts = bucket.find_key(key);
+        }
+
+        if opts.0 .is_none() {
+            bucket.unlock();
+            return false;
+        }
+
+        bucket.del_key(opts.0 .unwrap());
+        bucket.unlock();
+        return true;
+    }
+
+    pub fn dump(&self) {
+        for i in 0..self.nbuckets {
+            debug!("[{}] {:?}", i, self.buckets[i]);
+        }
     }
 
     //
@@ -260,10 +305,10 @@ impl HashTable {
 
     #[inline]
     fn make_hash(&self, value: u64) -> u64 {
-        //fnv1a(value)
+        fnv1a(value)
 
-        let mut sip = hash::SipHasher::default();
-        Self::make_sip(&mut sip, value)
+        //let mut sip = hash::SipHasher::default();
+        //Self::make_sip(&mut sip, value)
     }
 
     fn bucket_idx(&self, hash: u64) {
@@ -280,11 +325,15 @@ mod tests {
     use std::collections::HashSet;
     use std::ptr;
 
+    use rand::{self,Rng};
+
     use common::*;
     use logger;
 
-    //#[test]
+    #[test]
     fn init() {
+        logger::enable();
+        println!("");
         let ht = HashTable::new(1024);
         let nb = 1024 / ENTRIES_PER_BUCKET;
         assert_eq!(ht.nbuckets, nb);
@@ -295,6 +344,7 @@ mod tests {
     #[test]
     fn get_on_empty() {
         logger::enable();
+        println!("");
 
         let ht = HashTable::new(1024);
         let mut value: u64 = 0;
@@ -313,17 +363,19 @@ mod tests {
     #[test]
     fn put_some() {
         logger::enable();
+        println!("");
         let mut key: u64;
 
         let ntables = 16;
-        let tblsz = 1usize << 20;
+        let tblsz = 1usize << 18;
 
         let mut tbl_fills: usize = 0;
+        let mut rng = rand::thread_rng();
 
         'outer: for _ in 0..ntables {
             let ht = HashTable::new(tblsz);
             let mut inserted = 0;
-            key = unsafe { rdrandq() };
+            key = rng.gen::<u64>();
             loop {
                 if ht.put(key, 0xffff) {
                     inserted += 1;
@@ -331,7 +383,7 @@ mod tests {
                     tbl_fills += inserted;
                     continue 'outer;
                 }
-                key += 1;
+                key = rng.gen::<u64>();
             }
         }
         assert!(tbl_fills > 0);
@@ -347,13 +399,15 @@ mod tests {
     #[test]
     fn set_check_and_notexist() {
         logger::enable();
+        println!("");
 
         let ht = HashTable::new(1024);
         let mut value: u64 = 0;
         let mut keys: HashSet<u64> = HashSet::with_capacity(8192);
 
+        let mut rng = rand::thread_rng();
         while keys.len() < 8192 {
-            let key = unsafe { rdrandq() };
+            let key = rng.gen::<u64>();
             if INVALID_KEY == key {
                 continue;
             }
@@ -376,6 +430,44 @@ mod tests {
 
         for key in drain {
             assert_eq!(ht.get(key, &mut value), false);
+        }
+    }
+
+    #[test]
+    fn put_del() {
+        logger::enable();
+        println!("");
+
+        let ht = HashTable::new(1024);
+        let mut keys: Vec<u64> = Vec::new();
+
+        let mut rng = rand::thread_rng();
+        loop {
+            let key = rng.gen::<u64>();
+            if !ht.put(key, 0xffff) {
+                break;
+            }
+            keys.push(key);
+        }
+
+        let mut value: u64 = 0;
+        for key in &keys {
+            assert_eq!(ht.get(*key, &mut value), true);
+            assert_eq!(value, 0xffff);
+            value = 0;
+        }
+
+        for key in &keys {
+            assert_eq!(ht.del(*key), true);
+        }
+
+        // ht.dump();
+
+        for key in &keys {
+            assert_eq!(ht.del(*key), false);
+        }
+        for key in &keys {
+            assert_eq!(ht.get(*key, &mut value), false);
         }
     }
 
