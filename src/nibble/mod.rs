@@ -13,5 +13,6 @@ pub mod numa;
 pub mod sched;
 pub mod clock;
 pub mod tlock;
+pub mod hashtable;
 
 pub mod logger;

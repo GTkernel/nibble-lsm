@@ -1,6 +1,9 @@
 use libc;
+use num;
 use std::ptr;
 use std::slice;
+
+use std::intrinsics;
 
 //==----------------------------------------------------==//
 //      General types
@@ -34,6 +37,54 @@ impl<T> uslice<T> {
 }
 unsafe impl<T> Send for uslice<T> {}
 unsafe impl<T> Sync for uslice<T> {}
+
+//==----------------------------------------------------==//
+//      Atomics and numbers and hashing
+//==----------------------------------------------------==//
+
+#[inline] pub unsafe
+fn atomic_add<T: num::Integer>(loc: *mut T, amt: T) {
+    intrinsics::atomic_xadd(loc, amt);
+}
+
+#[inline] pub unsafe
+fn atomic_cas<T: num::Integer>(loc: *mut T, old: T, val: T) -> (T,bool) {
+    intrinsics::atomic_cxchg(loc, old, val)
+    // intrinsics::atomic_cxchg_failrelaxed
+}
+
+#[inline] pub unsafe
+fn volatile_add<T: num::Integer>(loc: *mut T, amt: T) {
+    ptr::write_volatile(loc,
+        ptr::read_volatile(loc) + amt);
+}
+
+#[inline] pub
+fn is_even<T: num::Integer>(value: T) -> bool {
+    value.is_even()
+}
+
+#[inline] pub
+fn is_odd<T: num::Integer>(value: T) -> bool {
+    value.is_odd()
+}
+
+pub const FNV_OFFSET_BASIS_64: u64 = 0xcbf29ce484222325_u64;
+pub const FNV_PRIME_64: u64 = 0x100000001b3_u64;
+
+#[inline] pub
+fn fnv1a(value: u64) -> u64 {
+    let mut hash: u64 = FNV_OFFSET_BASIS_64;
+    let p = &value as *const u64 as *const u8;
+    let bytes: &[u8] =
+        unsafe {
+            slice::from_raw_parts(p, 8)
+        };
+    for b in bytes {
+        hash = (hash ^ (*b as u64)).wrapping_mul(FNV_PRIME_64);
+    }
+    hash
+}
 
 //==----------------------------------------------------==//
 //      Random stuff
