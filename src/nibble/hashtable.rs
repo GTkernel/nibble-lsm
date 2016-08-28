@@ -2,6 +2,7 @@
  * Concurrent hash table.
  *
  * TODO to grow, we'll need a reserve memory
+ * Maybe I can use Linear Hashing
  */
 
 use std::ptr;
@@ -101,22 +102,30 @@ impl Bucket {
     }
 
     #[inline]
-    pub fn set_value(&self, idx: usize, value: u64) {
+    pub fn set_value(&self, idx: usize, value: u64) -> u64 {
         debug_assert!(idx < ENTRIES_PER_BUCKET);
+        let ret: u64;
         unsafe {
             let v = self.value.get_unchecked(idx)
                         as *const u64 as *mut u64;
-            ptr::write_volatile(v, value)
+            // XXX will this ever be optimized out?
+            //ptr::replace(v, value)
+            ret = ptr::read_volatile(v);
+            ptr::write_volatile(v, value);
         }
+        ret
     }
 
     #[inline]
-    pub fn del_key(&self, idx: usize) {
+    pub fn del_key(&self, idx: usize, old: &mut u64) {
         debug_assert!(idx < ENTRIES_PER_BUCKET);
         unsafe {
             let v = self.key.get_unchecked(idx)
                         as *const u64 as *mut u64;
-            ptr::write_volatile(v, INVALID_KEY)
+            // XXX will this ever be optimized out?
+            //ptr::replace(v, INVALID_KEY)
+            *old = ptr::read_volatile(v);
+            ptr::write_volatile(v, INVALID_KEY);
         }
     }
 
@@ -197,9 +206,16 @@ impl HashTable {
         }
     }
 
-    // does work of both insert and update
-    pub fn put(&self, key: u64, value: u64) -> bool {
-        let hash = self.make_hash(key);
+    // TODO numa init method
+    // mmap the bucket array and treat as a slice
+
+    /// does work of both insert and update
+    /// (true,None) -> insertion
+    /// (true,Some(x)) -> update existing, x is old value
+    /// (false,None) -> cannot insert, table full
+    /// (false,Some(x)) -> never returned
+    pub fn put(&self, key: u64, value: u64) -> (bool,Option<u64>) {
+        let hash = Self::make_hash(key);
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
         let bidx = (hash % (self.nbuckets as u64)) as usize;
         let bucket: &Bucket = &self.buckets[bidx];
@@ -207,7 +223,7 @@ impl HashTable {
         let v = bucket.read_version();
         let mut opts = bucket.find_key(key);
         if opts.0 .is_none() && opts.1 .is_none() {
-            return false;
+            return (false,None);
         }
 
         bucket.wait_lock();
@@ -215,26 +231,24 @@ impl HashTable {
             opts = bucket.find_key(key);
         }
 
-        let mut ret: bool = false;
+        let mut old: Option<u64> = None;
 
         // if exists, overwrite
         if let Some(idx) = opts.0 {
-            bucket.set_value(idx, value);
-            ret = true;
+            old = Some(bucket.set_value(idx, value));
         }
         // else if there is an empty slot, use that
         else if let Some(inv) = opts.1 {
             bucket.set_key(inv, key);
-            bucket.set_value(inv, value);
-            ret = true;
+            old = Some(bucket.set_value(inv, value));
         }
 
         bucket.unlock();
-        ret
+        (true,old)
     }
 
     pub fn get(&self, key: u64, value: &mut u64) -> bool {
-        let hash = self.make_hash(key);
+        let hash = Self::make_hash(key);
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
         let bidx = (hash % (self.nbuckets as u64)) as usize;
         let bucket: &Bucket = &self.buckets[bidx];
@@ -256,8 +270,8 @@ impl HashTable {
         }
     }
 
-    pub fn del(&self, key: u64) -> bool {
-        let hash = self.make_hash(key);
+    pub fn del(&self, key: u64, old: &mut u64) -> bool {
+        let hash = Self::make_hash(key);
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
         let bidx = (hash % (self.nbuckets as u64)) as usize;
         let bucket: &Bucket = &self.buckets[bidx];
@@ -278,7 +292,7 @@ impl HashTable {
             return false;
         }
 
-        bucket.del_key(opts.0 .unwrap());
+        bucket.del_key(opts.0 .unwrap(), old);
         bucket.unlock();
         return true;
     }
@@ -287,6 +301,14 @@ impl HashTable {
         for i in 0..self.nbuckets {
             debug!("[{}] {:?}", i, self.buckets[i]);
         }
+    }
+
+    #[inline]
+    pub fn make_hash(value: u64) -> u64 {
+        fnv1a(value)
+
+        //let mut sip = hash::SipHasher::default();
+        //Self::make_sip(&mut sip, value)
     }
 
     //
@@ -299,16 +321,15 @@ impl HashTable {
         her.finish()
     }
 
-    #[inline]
-    fn make_hash(&self, value: u64) -> u64 {
-        fnv1a(value)
-
-        //let mut sip = hash::SipHasher::default();
-        //Self::make_sip(&mut sip, value)
-    }
-
     fn bucket_idx(&self, hash: u64) {
         unimplemented!();
+    }
+}
+
+impl Drop for HashTable {
+
+    fn drop(&mut self) {
+        // TODO release mmap data
     }
 }
 
@@ -375,7 +396,8 @@ mod tests {
             let mut inserted = 0;
             key = rng.gen::<u64>();
             loop {
-                if ht.put(key, 0xffff) {
+                let (ok,opt) = ht.put(key, 0xffff);
+                if ok {
                     inserted += 1;
                 } else {
                     tbl_fills += inserted;
@@ -418,7 +440,8 @@ mod tests {
         for _ in 0..128 {
             let key = drain.next().unwrap();
             ins.push(key);
-            assert_eq!(ht.put(key, 0xffff), true);
+            let (ok,opt) = ht.put(key, 0xffff);
+            assert_eq!(ok, true);
         }
 
         for key in &ins {
@@ -442,7 +465,8 @@ mod tests {
         let mut rng = rand::thread_rng();
         loop {
             let key = rng.gen::<u64>();
-            if !ht.put(key, 0xffff) {
+            let (ok,opt) = ht.put(key, 0xffff);
+            if !ok {
                 break;
             }
             keys.push(key);
@@ -456,13 +480,13 @@ mod tests {
         }
 
         for key in &keys {
-            assert_eq!(ht.del(*key), true);
+            assert_eq!(ht.del(*key, &mut value), true);
         }
 
         // ht.dump();
 
         for key in &keys {
-            assert_eq!(ht.del(*key), false);
+            assert_eq!(ht.del(*key, &mut value), false);
         }
         for key in &keys {
             assert_eq!(ht.get(*key, &mut value), false);
@@ -477,7 +501,8 @@ mod tests {
 
         let mut inserted: usize = 0;
         for key in 1..(tblsz+1) {
-            if ht.put(key as u64, 0xffff) {
+            let (ok,opt) = ht.put(key as u64, 0xffff);
+            if ok {
                 inserted += 1;
             }
         }
@@ -578,7 +603,8 @@ mod tests {
                             break;
                         }
                         let key = opt.unwrap();
-                        if !ht.put(key, tid ^ key) {
+                        let (ok,opt) = ht.put(key, tid ^ key);
+                        if !ok {
                             break;
                         }
                         keys_in.push(key);
@@ -596,36 +622,44 @@ mod tests {
                     // del random no. of keys, check
                     // add random no. of keys, check
                     // repeat
-                    for _ in 0..64 {
-                        let n = rng.next_u32() as usize % (keys_in.len()+1);
-                        for _ in 0..n {
-                            if let Some(key) = keys_in.pop() {
-                                assert_eq!(ht.del(key), true);
+                    for _ in 0..128 {
+
+                        // do insertion
+                        if rng.gen() {
+                            let n = keys_in.len() / 2;
+                            for _ in 0..n {
+                                if keys_in.is_empty() {
+                                    break;
+                                }
+                                let i = rng.next_u32() as usize
+                                                % keys_in.len();
+                                let key = keys_in.swap_remove(i);
+                                let mut old: u64 = 0;
+                                assert_eq!(ht.del(key,&mut old),true);
                                 keys_out.push(key);
-                            } else {
-                                break;
                             }
                         }
-                        for key in &keys_in {
-                            assert_eq!(ht.get(*key, &mut value), true);
-                            assert_eq!(value, tid ^ *key);
-                        }
-                        for key in &keys_out {
-                            assert_eq!(ht.get(*key, &mut value), false);
-                        }
 
-                        let n = rng.next_u32() as usize % (keys_out.len()+1);
-                        for _ in 0..n {
-                            if let Some(key) = keys_out.pop() {
-                                assert_eq!(ht.get(key, &mut value), false);
-                                if !ht.put(key, tid ^ key) {
+                        // do deletion
+                        else {
+                            let n = keys_out.len() / 2;
+                            for _ in 0..n {
+                                if keys_out.is_empty() {
+                                    break;
+                                }
+                                let i = rng.next_u32() as usize
+                                                % keys_out.len();
+                                let key = keys_out.swap_remove(i);
+                                assert_eq!(ht.get(key,&mut value),false);
+                                let (ok,opt) = ht.put(key, tid ^ key);
+                                if !ok {
                                     break;
                                 }
                                 keys_in.push(key);
-                            } else {
-                                break;
                             }
                         }
+
+                        // check consistency
                         for key in &keys_in {
                             assert_eq!(ht.get(*key, &mut value), true);
                             assert_eq!(value, tid ^ *key);
@@ -634,8 +668,8 @@ mod tests {
                             assert_eq!(ht.get(*key, &mut value), false);
                         }
 
-                        //shuffle(&mut keys_in);
-                        //shuffle(&mut keys_out);
+                        shuffle(&mut keys_in);
+                        shuffle(&mut keys_out);
                     }
 
                 });
