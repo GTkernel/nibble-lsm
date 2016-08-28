@@ -1,5 +1,6 @@
 use libc;
 use num;
+use rand::{self,Rng};
 use std::ptr;
 use std::slice;
 
@@ -84,6 +85,17 @@ fn fnv1a(value: u64) -> u64 {
         hash = (hash ^ (*b as u64)).wrapping_mul(FNV_PRIME_64);
     }
     hash
+}
+
+/// Knuth or FY shuffle
+pub
+fn shuffle<T: num::Integer>(vec: &mut Vec<T>) {
+    let mut rng = rand::thread_rng();
+    let n = vec.len();
+    for i in 0..(n-1) {
+        let ii = (i+1) + (rng.next_u32() as usize % (n-i-1));
+        vec.swap(i, ii);
+    }
 }
 
 //==----------------------------------------------------==//
