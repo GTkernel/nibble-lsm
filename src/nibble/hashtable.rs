@@ -207,7 +207,6 @@ impl HashTable {
         let v = bucket.read_version();
         let mut opts = bucket.find_key(key);
         if opts.0 .is_none() && opts.1 .is_none() {
-            trace!("bidx {} {:?}", bidx, bucket);
             return false;
         }
 
@@ -228,9 +227,6 @@ impl HashTable {
             bucket.set_key(inv, key);
             bucket.set_value(inv, value);
             ret = true;
-        }
-        else {
-            trace!("bidx {} {:?}", bidx, bucket);
         }
 
         bucket.unlock();
@@ -324,7 +320,7 @@ mod tests {
     use std::thread::{self,JoinHandle};
     use std::collections::HashSet;
     use std::ptr;
-    use std::sync;
+    use std::sync::atomic::{AtomicUsize,Ordering};
 
     use rand::{self,Rng};
     use crossbeam;
@@ -473,14 +469,14 @@ mod tests {
         }
     }
 
-    fn threads_read_n(tblsz: usize) {
+    fn threads_read_n(tblsz: usize, nthreads: usize) {
         logger::enable();
         println!("");
 
         let ht = HashTable::new(tblsz);
 
         let mut inserted: usize = 0;
-        for key in 0..tblsz {
+        for key in 1..(tblsz+1) {
             if ht.put(key as u64, 0xffff) {
                 inserted += 1;
             }
@@ -489,7 +485,6 @@ mod tests {
         println!("keys inserted: {}", inserted);
         // only 'inserted' number of keys are valid in 0-tblsz
 
-        let nthreads = 8;
         let mut guards = vec![];
 
         crossbeam::scope(|scope| {
@@ -529,12 +524,133 @@ mod tests {
 
     #[test]
     fn threads_read_sm() {
-        threads_read_n(1024);
+        threads_read_n(1024, 8);
     }
 
     #[test]
     fn threads_read_med() {
-        threads_read_n(1_usize << 20);
+        threads_read_n(1_usize<<20, 8);
+    }
+
+    // each threads gets some disjoint subset of keys.
+    // it will insert them, check they exist and values aren't corrupt
+    // it table is full, it will remove some
+    // mix put/get/del, always verifying its own set of keys
+    fn threads_rw_n(tblsz: usize, nthreads: usize) {
+        logger::enable();
+        println!("");
+
+        let ht = HashTable::new(tblsz);
+        let total = tblsz;// >> 1; // no. keys to use
+        let keys_per = total / nthreads;
+        println!("keys_per {}", keys_per);
+
+        let mut guards = vec![];
+
+        let tids = AtomicUsize::new(0);
+        crossbeam::scope(|scope| {
+            for _ in 0..(nthreads as u64) {
+                let guard = scope.spawn(|| {
+                    let mut value: u64 = 0;
+                    let tid = tids.fetch_add(1,
+                                Ordering::Relaxed) as u64;
+                    let mut rng = rand::thread_rng();
+    
+                    // keep track of which keys we think are in the
+                    // table vs not. any inconsistency should indicate
+                    // buggy implementation
+                    let mut keys_out: Vec<u64> =
+                        Vec::with_capacity(keys_per);
+                    let mut keys_in: Vec<u64> =
+                        Vec::with_capacity(keys_per);
+
+                    // all keys start not inserted
+                    let start: u64 = tid * (keys_per as u64);
+                    for key in start..(start + (keys_per as u64)) {
+                        keys_out.push(key+1); // key=0 is reserved
+                    }
+                    shuffle(&mut keys_out);
+
+                    // blast insert our keys until full
+                    loop {
+                        let opt = keys_out.pop();
+                        if opt.is_none() {
+                            break;
+                        }
+                        let key = opt.unwrap();
+                        if !ht.put(key, tid ^ key) {
+                            break;
+                        }
+                        keys_in.push(key);
+                    }
+
+                    // verify keys
+                    for key in &keys_in {
+                        assert_eq!(ht.get(*key, &mut value), true);
+                        assert_eq!(value, tid ^ *key);
+                    }
+                    for key in &keys_out {
+                        assert_eq!(ht.get(*key, &mut value), false);
+                    }
+
+                    // del random no. of keys, check
+                    // add random no. of keys, check
+                    // repeat
+                    for _ in 0..16 {
+                        let n = rng.next_u32() as usize % (keys_in.len()+1);
+                        for _ in 0..n {
+                            if let Some(key) = keys_in.pop() {
+                                assert_eq!(ht.del(key), true);
+                                keys_out.push(key);
+                            } else {
+                                break;
+                            }
+                        }
+                        for key in &keys_in {
+                            assert_eq!(ht.get(*key, &mut value), true);
+                            assert_eq!(value, tid ^ *key);
+                        }
+                        for key in &keys_out {
+                            assert_eq!(ht.get(*key, &mut value), false);
+                        }
+
+                        let n = rng.next_u32() as usize % (keys_out.len()+1);
+                        for _ in 0..n {
+                            if let Some(key) = keys_out.pop() {
+                                assert_eq!(ht.get(key, &mut value), false);
+                                if !ht.put(key, tid ^ key) {
+                                    break;
+                                }
+                                keys_in.push(key);
+                            } else {
+                                break;
+                            }
+                        }
+                        for key in &keys_in {
+                            assert_eq!(ht.get(*key, &mut value), true);
+                            assert_eq!(value, tid ^ *key);
+                        }
+                        for key in &keys_out {
+                            assert_eq!(ht.get(*key, &mut value), false);
+                        }
+
+                        //shuffle(&mut keys_in);
+                        //shuffle(&mut keys_out);
+                    }
+
+                });
+                guards.push(guard);
+            }
+        });
+
+        for g in guards {
+            g.join();
+        }
+    }
+
+    #[test]
+    fn threads_rw() {
+        threads_rw_n(1usize<<20, 16);
     }
 
     // TODO many threads
