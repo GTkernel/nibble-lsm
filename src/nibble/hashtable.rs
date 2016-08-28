@@ -495,7 +495,7 @@ mod tests {
     
                     keys = Vec::with_capacity((tblsz*2) as usize);
                     for k in 0..(tblsz*2) {
-                        keys.push(k as u64);
+                        keys.push((k+1) as u64);
                     }
     
                     let mut value: u64 = 0;
@@ -596,7 +596,7 @@ mod tests {
                     // del random no. of keys, check
                     // add random no. of keys, check
                     // repeat
-                    for _ in 0..16 {
+                    for _ in 0..64 {
                         let n = rng.next_u32() as usize % (keys_in.len()+1);
                         for _ in 0..n {
                             if let Some(key) = keys_in.pop() {
