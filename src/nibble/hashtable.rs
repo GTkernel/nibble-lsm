@@ -120,12 +120,14 @@ impl Bucket {
     pub fn del_key(&self, idx: usize, old: &mut u64) {
         debug_assert!(idx < ENTRIES_PER_BUCKET);
         unsafe {
-            let v = self.key.get_unchecked(idx)
+            let k = self.key.get_unchecked(idx)
+                        as *const u64 as *mut u64;
+            let v = self.value.get_unchecked(idx)
                         as *const u64 as *mut u64;
             // XXX will this ever be optimized out?
             //ptr::replace(v, INVALID_KEY)
             *old = ptr::read_volatile(v);
-            ptr::write_volatile(v, INVALID_KEY);
+            ptr::write_volatile(k, INVALID_KEY);
         }
     }
 
