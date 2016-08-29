@@ -57,10 +57,10 @@ impl Index {
         assert!(key > 0);
         let hash = HashTable::make_hash(key);
         let tidx = self.table_idx(hash);
-        trace!("GET key {:x} tidx {}", key, tidx);
+        trace!("GET key {:x} table {}", key, tidx);
         debug_assert!(tidx < self.tables.len());
         let ref p = self.tables[tidx];
-        trace!("GET p {:?}", p.0);
+        trace!("GET table @ {:?}", p.0);
         debug_assert!(!p.0 .is_null());
         let mut ret: Option<IndexEntry> = None;
         unsafe {
@@ -83,10 +83,10 @@ impl Index {
         assert!(key > 0);
         let hash = HashTable::make_hash(key);
         let tidx = self.table_idx(hash);
-        trace!("UPDATE key {:x} tidx {}", key, tidx);
+        trace!("UPDATE key {:x} val {:x} table {}", key, value, tidx);
         debug_assert!(tidx < self.tables.len());
         let ref p = self.tables[tidx];
-        trace!("UPDATE p {:?}", p.0);
+        trace!("UPDATE table @ {:?}", p.0);
         debug_assert!(!p.0 .is_null());
         unsafe {
             let ht: &HashTable = &* p.0;
@@ -101,10 +101,10 @@ impl Index {
         assert!(key > 0);
         let hash = HashTable::make_hash(key);
         let tidx = self.table_idx(hash);
-        trace!("REMOVE key {:x} tidx {}", key, tidx);
+        trace!("REMOVE key {:x} table {}", key, tidx);
         debug_assert!(tidx < self.tables.len());
         let ref p = self.tables[tidx];
-        trace!("REMOVE p {:?}", p.0);
+        trace!("REMOVE table @ {:?}", p.0);
         debug_assert!(!p.0 .is_null());
         unsafe {
             let ht: &HashTable = &* p.0;

@@ -12,6 +12,7 @@ use std::sync::atomic::{self, Ordering};
 use std::intrinsics;
 use std::ptr;
 
+// TODO make next,now u32
 pub struct TicketLock {
     next: u64,
     now:  u64,

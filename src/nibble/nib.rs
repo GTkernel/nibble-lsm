@@ -178,6 +178,7 @@ impl Nibble {
         if !ok {
             // no need to undo the log append;
             // entries are stale until we update the index
+            trace!("index update returned false");
             return Err(ErrorCode::TableFull);
         }
 
