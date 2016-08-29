@@ -45,9 +45,10 @@ pub unsafe fn deallocate<T>(ptr: *mut T, count: usize) {
 /// Generic heap buffer that uses malloc underneath. Might be better
 /// to back Buffers with a slab allocator to avoid object sizes
 /// becoming exposed to the heap allocator.
+#[derive(Debug)]
 pub struct Buffer {
-    addr: Pointer<u8>,
-    len: usize,
+    pub addr: Pointer<u8>,
+    pub len: usize,
 }
 
 impl Buffer {

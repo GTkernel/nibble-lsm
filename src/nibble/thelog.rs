@@ -54,7 +54,7 @@ impl EntryHeader {
         assert!(!desc.getvalue().0 .is_null());
         EntryHeader {
             keylen: desc.keylen() as u32,
-            datalen: desc.valuelen(),
+            datalen: desc.valuelen() as u32,
         }
     }
 

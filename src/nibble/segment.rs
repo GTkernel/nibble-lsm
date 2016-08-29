@@ -267,14 +267,14 @@ impl BlockAllocator {
 pub struct ObjDesc {
     key: u64,
     value: Pointer<u8>,
-    vlen: u32,
+    vlen: usize,
 }
 
 
 impl ObjDesc {
 
     /// Create ObjDesc where key is str and value is arbitrary memory.
-    pub fn new(key: u64, value: Pointer<u8>, vlen: u32) -> Self {
+    pub fn new(key: u64, value: Pointer<u8>, vlen: usize) -> Self {
         ObjDesc { key: key, value: value, vlen: vlen }
     }
 
@@ -283,12 +283,12 @@ impl ObjDesc {
         ObjDesc {
             key: key,
             value: Pointer(value.as_ptr()),
-            vlen: value.len() as u32,
+            vlen: value.len(),
         }
     }
 
     pub fn len(&self) -> usize {
-        mem::size_of::<u64>() + self.vlen as usize
+        mem::size_of::<u64>() + self.vlen
     }
 
     pub fn len_with_header(&self) -> usize {
@@ -310,7 +310,7 @@ impl ObjDesc {
     pub fn getkey(&self) -> u64 { self.key }
     pub fn keylen(&self) -> usize { mem::size_of::<u64>() }
     pub fn getvalue(&self) -> Pointer<u8> { self.value }
-    pub fn valuelen(&self) -> u32 { self.vlen }
+    pub fn valuelen(&self) -> usize { self.vlen }
 }
 
 //==----------------------------------------------------==//
