@@ -18,7 +18,7 @@ use logger::*;
 // 3. use array/queue lock?
 
 const VERSION_MASK: u64 = 0x1;
-const ENTRIES_PER_BUCKET: usize = 4;
+const ENTRIES_PER_BUCKET: usize = 8;
 
 // We reserve this value to indicate the bucket slot is empty.
 const INVALID_KEY: u64 = 0u64;
