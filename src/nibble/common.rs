@@ -90,6 +90,7 @@ fn fnv1a(value: u64) -> u64 {
 /// Knuth or FY shuffle
 pub
 fn shuffle<T: num::Integer>(vec: &mut Vec<T>) {
+    if vec.is_empty() { return; }
     let mut rng = rand::thread_rng();
     let n = vec.len();
     for i in 0..(n-1) {
@@ -144,6 +145,7 @@ pub enum ErrorCode {
     SegmentClosed,
 
     OutOfMemory,
+    TableFull,
 
     KeyNotExist,
     InvalidSocket,
@@ -158,6 +160,7 @@ pub fn err2str(code: ErrorCode) -> &'static str {
         ErrorCode::SegmentFull   => { "Segment is full" },
         ErrorCode::SegmentClosed => { "Segment is closed" },
         ErrorCode::OutOfMemory   => { "Out of memory" },
+        ErrorCode::TableFull     => { "Table is full" },
         ErrorCode::KeyNotExist   => { "Key does not exist" },
         ErrorCode::InvalidSocket => { "Invalid socket ID" },
         ErrorCode::EmptyObject   => { "Object is empty" },
