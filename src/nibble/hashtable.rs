@@ -236,19 +236,22 @@ impl HashTable {
 
         let (e,inv) = opts;
         let mut old: Option<u64> = None;
+        let mut ok: bool = false;
 
         // if exists, overwrite
         if let Some(i) = e {
             old = Some(bucket.set_value(i, value));
+            ok = true;
         }
         // else if there is an empty slot, use that
         else if let Some(i) = inv {
             bucket.set_key(i, key);
             bucket.set_value(i, value);
+            ok = true;
         }
 
         bucket.unlock();
-        (true,old)
+        (ok,old)
     }
 
     pub fn get(&self, key: u64, value: &mut u64) -> bool {
