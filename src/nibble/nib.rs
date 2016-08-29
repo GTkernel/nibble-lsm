@@ -69,9 +69,20 @@ impl Nibble {
         info!("socket:   {:.2} GiB",
               (persock as f64)/(2f64.powi(30)));
 
+        //let ntables = numa::NODE_MAP.ncpus();
+        let ntables: usize = 64;
+
+        // XXX won't need this once the index can resize
+        let nitems = 1usize << 25;
+        let n_per  = nitems / ntables;
+        debug!("nitems:  {}", nitems);
+        debug!("Tables:  {}", ntables);
+        debug!("   per:  {}", n_per);
+
+        let index = Arc::new(Index::new(ntables, n_per));
+
         // Create all per-socket elements with threads.
         let nodes: Arc<pl::Mutex<Vec<NibblePerNode>>>;
-        let index = Arc::new(Index::new(1, 1usize<<20));
         nodes = Arc::new(pl::Mutex::new(Vec::with_capacity(nnodes)));
         {
             let mut handles: Vec<JoinHandle<()>> = Vec::new();
@@ -240,10 +251,12 @@ impl Nibble {
         (Ok(1),Some(buf))
     }
 
-    #[cfg(IGNORE)]
     #[inline(always)]
     pub fn del_object(&mut self, key: u64) -> Status {
-        unimplemented!();
+        match self.index.remove(key) {
+            None => Err(ErrorCode::KeyNotExist),
+            Some(_) => Ok(1),
+        }
     }
 
     #[cfg(test)]
@@ -280,103 +293,101 @@ impl Nibble {
 //      Unit tests
 //==----------------------------------------------------==//
 
-#[cfg(IGNORE)]
 mod tests {
     use super::*;
-
+    use common::{self,ErrorCode};
+    use logger;
+    use memory;
+    use rand::{self,Rng};
+    use segment;
     use segment::*;
+    use std::slice;
 
-    use super::super::logger;
-    use super::super::memory;
-    use super::super::segment;
-    use super::super::common;
-
+    // test with one simple object
     #[test]
-    fn nibble_single_small_object() {
+    fn simple() {
         logger::enable();
         let mut nib = Nibble::default();
 
-        // insert initial object
-        let key = String::from("keykeykeykey");
-        let val = String::from("valuevaluevalue");
-        let obj = ObjDesc::new(key.as_str(),
-                        Some(val.as_ptr()), val.len() as u32);
-        if let Err(code) = nib.put_object(&obj) {
-            panic!("{:?}", code);
+        let key: u64 = 1;
+        let value: Vec<u64> = vec![1u64,2,3,4,5];
+        let vptr = common::Pointer(value.as_ptr() as *const u8);
+
+        let obj = ObjDesc::new(key, vptr, value.len()*8);
+        assert!(nib.put_object(&obj).is_ok());
+
+        let (st,opt) = nib.get_object(key);
+        assert!(st.is_ok());
+        assert!(opt.is_some());
+
+        let buf = opt.unwrap();
+        let addr = buf.addr.0 as *const u64;
+        let sl: &[u64] = unsafe {
+            slice::from_raw_parts(addr, buf.len/8)
+        };
+        assert_eq!(sl.iter().sum::<u64>(),
+                    value.iter().sum::<u64>());
+
+        assert!(nib.del_object(key).is_ok());
+        let ret = nib.del_object(key);
+        assert!(ret.is_err());
+    }
+
+    // shove in the object multiple times to cross many blocks
+    #[test]
+    fn many_objects() {
+        logger::enable();
+        let mut nib = Nibble::default();
+        let mut rng = rand::thread_rng();
+
+        let mut value: Vec<u64> = Vec::with_capacity(200);
+        for i in 0..200 {
+            // avoid overflow during summation later
+            value.push(rng.gen::<u32>() as u64);
+        }
+        let sum = value.iter().sum::<u64>();
+        let vptr = common::Pointer(value.as_ptr() as *const u8);
+        let vlen = value.len() * 8;
+
+        let nobj = 2 * segment::SEGMENT_SIZE / vlen;
+        info!("nobj {}", nobj);
+
+        for i in 0..nobj {
+            let key = (i+1) as u64;
+            let obj = ObjDesc::new(key, vptr, vlen);
+            assert!(nib.put_object(&obj).is_ok());
         }
 
-        // verify what we wrote is correct FIXME reduce copy/paste
-        {
-            let ret = nib.get_object(&key);
-            match ret {
-                (Err(code),_) => panic!("key should exist: {:?}", code),
-                (Ok(_),Some(buf)) => {
-                    // convert buf to vec to string for comparison
-                    // FIXME faster method?
-                    let mut v: Vec<u8> = Vec::with_capacity(buf.getlen());
-                    for i in 0..buf.getlen() {
-                        let addr = buf.getaddr() + i;
-                        unsafe { v.push( *(addr as *const u8) ); }
-                    }
-                    match String::from_utf8(v) {
-                        Ok(string) => {
-                            let mut compareto = String::new();
-                            compareto.push_str(val.as_str());
-                            assert_eq!(compareto, string);
-                        },
-                        Err(code) => {
-                            panic!("utf8 error: {:?}", code);
-                        },
-                    }
-                },
-                _ => panic!("unhandled return combo"),
-            }
+        for i in 0..nobj {
+            let key = (i+1) as u64;
+            let (st,opt) = nib.get_object(key);
+            assert!(st.is_ok());
+            assert!(opt.is_some());
+            let buf = opt.unwrap();
+            let addr = buf.addr.0 as *const u64;
+            let sl: &[u64] = unsafe {
+                slice::from_raw_parts(addr, buf.len/8)
+            };
+            assert_eq!(sl.iter().sum::<u64>(), sum);
         }
 
-        // shove in the object multiple times to cross many blocks
-        let val2: &'static str = "VALUEVALUEVALUE";
-        let obj2 = ObjDesc::new(key.as_str(),
-                            Some(val2.as_ptr()), val2.len() as u32);
-        for _ in 0..100000 {
-            if let Err(code) = nib.put_object(&obj2) {
-                match code {
-                    common::ErrorCode::OutOfMemory => break,
-                    _ => panic!("{:?}", code),
-                }
-            }
+        for i in 0..nobj {
+            let key = (i+1) as u64;
+            assert!(nib.del_object(key).is_ok());
+            let ret = nib.del_object(key);
+            assert!(ret.is_err());
         }
 
-        {
-            let ret = nib.get_object(&key);
-            match ret {
-                (Err(code),_) => panic!("key should exist: {:?}", code),
-                (Ok(_),Some(buf)) => {
-                    // convert buf to vec to string for comparison
-                    // FIXME faster method?
-                    let mut v: Vec<u8> = Vec::with_capacity(buf.getlen());
-                    for i in 0..buf.getlen() {
-                        let addr = buf.getaddr() + i;
-                        unsafe { v.push( *(addr as *const u8) ); }
-                    }
-                    match String::from_utf8(v) {
-                        Ok(string) => {
-                            let mut compareto = String::new();
-                            compareto.push_str(val2);
-                            assert_eq!(compareto, string);
-                        },
-                        Err(code) => {
-                            panic!("utf8 error: {:?}", code);
-                        },
-                    }
-                },
-                _ => panic!("unhandled return combo"),
-            }
+        for i in 0..nobj {
+            let key = (i+1) as u64;
+            let (st,opt) = nib.get_object(key);
+            assert!(st.is_err());
+            assert!(opt.is_none());
         }
-
-        assert_eq!(nib.nlive(), 1);
     }
 
     /// Give the segment index of the specified key (as String)
+    #[cfg(IGNORE)]
     fn segment_of(nib: &Nibble, key: &String) -> usize {
         logger::enable();
 
@@ -397,7 +408,7 @@ mod tests {
     }
 
     /// on init, epoch table should be zero
-    #[test]
+    #[cfg(IGNORE)]
     fn epoch_0() {
         logger::enable();
         let nib = Nibble::default();
@@ -411,7 +422,7 @@ mod tests {
     /// add one item repeatedly and observe the live size of the
     /// segment remains constant. upon rolling the head, check the
     /// segment live size is zero and the new is updated
-    #[test]
+    #[cfg(IGNORE)]
     fn epoch_1() {
         logger::enable();
         let mut nib = Nibble::default();
@@ -448,7 +459,7 @@ mod tests {
     }
 
     /// add unique items, observe the live size of the segment grows
-    #[test]
+    #[cfg(IGNORE)]
     fn epoch_2() {
         logger::enable();
         let mut nib = Nibble::default();
@@ -491,7 +502,7 @@ mod tests {
     }
 
     /// add/remove one item and observe the live size is set then zero
-    #[test]
+    #[cfg(IGNORE)]
     fn epoch_3() {
         logger::enable();
         let mut nib = Nibble::default();
@@ -515,7 +526,7 @@ mod tests {
         assert_eq!(nib.nodes[0].seginfo.get_live(idx), 0usize);
     }
 
-    #[test]
+    #[cfg(IGNORE)]
     #[should_panic(expected = "larger than segment")]
     fn obj_too_large() {
         logger::enable();
@@ -533,7 +544,7 @@ mod tests {
         unsafe { memory::deallocate(value, len); }
     }
 
-    #[test]
+    #[cfg(IGNORE)]
     fn large_objs() {
         logger::enable();
         let mut nib = Nibble::default();
