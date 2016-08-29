@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use hashtable::*;
 use numa;
+use common::{Pointer};
 
 //==----------------------------------------------------==//
 //      Index
@@ -9,7 +11,7 @@ use numa;
 pub type IndexRef = Arc<Index>;
 
 /// Fat pointer as the value in every index entry.
-/// | Socket ID | Virtual Address |
+/// | Allocator ID | Virtual Address |
 ///     16 bits     48 bits
 pub type IndexEntry = u64;
 
@@ -28,26 +30,47 @@ pub fn merge(socket: u16, va: u64) -> IndexEntry {
 /// Index structure that allows us to retreive objects from the log.
 /// It is just a simple wrapper over whatever data structure we wish
 /// to eventually use.
-/// TODO what if i store the hash of a key instead of the key itself?
-/// save space? all the keys are kept in the log anyway
 pub struct Index {
-    // TODO
+    nnodes: usize,
+    tables: Vec<Pointer<HashTable>>,
 }
 
 impl Index {
 
-    // FIXME pass some Config object that says how the index should be
-    // allocated across NUMA sockets
-    pub fn new() -> Self {
-        let nnodes = numa::NODE_MAP.sockets();
-        let mask: usize = (1usize<<nnodes)-1;
-        unimplemented!();
+    pub fn new(n: usize, per: usize) -> Self {
+        let mut tables: Vec<Pointer<HashTable>>;
+        tables = Vec::with_capacity(n);
+        for _ in 0..n {
+            let t = Box::new(HashTable::new(per));
+            let p = Pointer(Box::into_raw(t));
+            tables.push(p);
+        }
+        Index {
+            nnodes: numa::NODE_MAP.sockets(),
+            tables: tables,
+        }
     }
 
     /// Return value of object if it exists, else None.
     #[inline(always)]
     pub fn get(&self, key: u64) -> Option<IndexEntry> {
-        unimplemented!();
+        assert!(key > 0);
+        let hash = HashTable::make_hash(key);
+        let tidx = self.table_idx(hash);
+        trace!("GET key {:x} tidx {}", key, tidx);
+        debug_assert!(tidx < self.tables.len());
+        let ref p = self.tables[tidx];
+        trace!("GET p {:?}", p.0);
+        debug_assert!(!p.0 .is_null());
+        let mut ret: Option<IndexEntry> = None;
+        unsafe {
+            let ht: &HashTable = &* p.0;
+            let mut v: u64 = 0;
+            if ht.get(key, &mut v) {
+                ret = Some(v);
+            }
+        };
+        ret
     }
 
     /// Update location of object in the index. Returns None if object
@@ -55,20 +78,56 @@ impl Index {
     /// object.
     #[inline(always)]
     pub fn update(&self, key: u64, value: IndexEntry)
-        -> Option<IndexEntry> {
-        unimplemented!();
+        -> (bool,Option<IndexEntry>) {
+
+        assert!(key > 0);
+        let hash = HashTable::make_hash(key);
+        let tidx = self.table_idx(hash);
+        trace!("UPDATE key {:x} tidx {}", key, tidx);
+        debug_assert!(tidx < self.tables.len());
+        let ref p = self.tables[tidx];
+        trace!("UPDATE p {:?}", p.0);
+        debug_assert!(!p.0 .is_null());
+        unsafe {
+            let ht: &HashTable = &* p.0;
+            ht.put(key, value)
+        }
     }
 
     /// Remove an entry. If it existed, return value, else return
     /// None.
     #[inline(always)]
     pub fn remove(&self, key: u64) -> Option<IndexEntry> {
-        let mut val: IndexEntry = 0;
-        unimplemented!();
+        assert!(key > 0);
+        let hash = HashTable::make_hash(key);
+        let tidx = self.table_idx(hash);
+        trace!("REMOVE key {:x} tidx {}", key, tidx);
+        debug_assert!(tidx < self.tables.len());
+        let ref p = self.tables[tidx];
+        trace!("REMOVE p {:?}", p.0);
+        debug_assert!(!p.0 .is_null());
+        unsafe {
+            let ht: &HashTable = &* p.0;
+            let mut old: u64 = 0;
+            if ht.del(key, &mut old) {
+                Some(old)
+            } else {
+                None
+            }
+        }
     }
 
     pub fn len(&self) -> usize {
         unimplemented!();
+    }
+
+    //
+    // Priate methods
+    //
+
+    #[inline(always)]
+    fn table_idx(&self, hash: u64) -> usize {
+        (hash % (self.tables.len() as u64)) as usize
     }
 }
 
@@ -76,23 +135,103 @@ impl Index {
 //      Unit tests
 //==----------------------------------------------------==//
 
-#[cfg(IGNORE)]
 mod tests {
     use super::*;
-
     use super::super::logger;
+    use rand::{self,Rng};
+    use std::sync::atomic::{AtomicUsize,Ordering};
+    use crossbeam;
+    use std::{thread, time};
+
+    fn base(ntables: usize, nthreads: usize) {
+        logger::enable();
+        let nkeys = ntables*(1usize<<16);
+        let keys_per = nkeys/nthreads;
+        let cap = nkeys*10;
+
+        let index = Index::new(ntables, cap);
+
+        let mut guards = vec![];
+        let tids = AtomicUsize::new(0);
+        crossbeam::scope(|scope| {
+            for _ in 0..(nthreads as u64) {
+                let guard = scope.spawn(|| {
+
+                    let mut rng = rand::thread_rng();
+                    let tid = tids.fetch_add(1,
+                                Ordering::Relaxed) as u64;
+
+                    // +1 b/c zero is not a valid key
+                    let start: u64 = tid * (keys_per as u64) + 1;
+                    let end: u64 = start + keys_per as u64;
+
+                    // offset each thread slightly
+                    let dur = time::Duration::from_millis(tid*20);
+                    thread::sleep(dur);
+
+                    let value: u64 = rng.gen();
+
+                    let niter = 1024/ntables;
+                    for _ in 0..niter {
+
+                        for k in start..end {
+                            assert_eq!(index.get(k), None);
+                        }
+
+                        for k in start..end {
+                            let (ok,opt) = index.update(k, value);
+                            assert_eq!(ok, true);
+                            assert_eq!(opt, None);
+                            assert_eq!(index.get(k), Some(value));
+                        }
+
+                        for k in start..end {
+                            let (ok,opt) = index.update(k, 0xffff);
+                            assert_eq!(ok, true);
+                            assert_eq!(opt, Some(value));
+                        }
+
+                        for k in start..end {
+                            let (ok,opt) = index.update(k, value);
+                            assert_eq!(ok, true);
+                            assert_eq!(opt, Some(0xffff));
+                        }
+
+                        for k in start..end {
+                            assert_eq!(index.remove(k), Some(value));
+                            assert_eq!(index.get(k), None);
+                            assert_eq!(index.remove(k), None);
+                        }
+                    }
+
+                });
+                guards.push(guard);
+            }
+        });
+
+        for g in guards {
+            g.join();
+        }
+
+    }
 
     #[test]
-    fn index_basic() {
-        logger::enable();
-        let index = Index::new();
-        let key1 = String::from("alex");
-        let key2 = String::from("notexist");
-        assert_eq!(index.update(&key1, 42).is_some(), false);
-        let opt = index.update(&key1, 24);
-        assert_eq!(opt.is_some(), true);
-        assert_eq!(opt.unwrap(), 42);
-        assert_eq!(index.get(key2.as_str()).is_some(), false);
-        assert_eq!(index.get(key1.as_str()).is_some(), true);
+    fn simple() {
+        base(1,1);
+    }
+
+    #[test]
+    fn multiple_one_thread() {
+        base(64,1);
+    }
+
+    #[test]
+    fn simple_many() {
+        base(1,12); 
+    }
+
+    #[test]
+    fn multiple_many() {
+        base(64,12);
     }
 }

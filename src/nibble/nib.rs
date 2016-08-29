@@ -71,7 +71,7 @@ impl Nibble {
 
         // Create all per-socket elements with threads.
         let nodes: Arc<pl::Mutex<Vec<NibblePerNode>>>;
-        let index = index_ref!();
+        let index = Arc::new(Index::new(1, 1usize<<20));
         nodes = Arc::new(pl::Mutex::new(Vec::with_capacity(nnodes)));
         {
             let mut handles: Vec<JoinHandle<()>> = Vec::new();
@@ -174,7 +174,12 @@ impl Nibble {
                obj.getkey(), va, ientry);
 
         // 2. update reference to object
-        let opt = self.index.update(obj.getkey(), ientry);
+        let (ok,opt) = self.index.update(obj.getkey(), ientry);
+        if !ok {
+            // no need to undo the log append;
+            // entries are stale until we update the index
+            return Err(ErrorCode::TableFull);
+        }
 
         // 3. decrement live size of segment if we overwrite object
         if let Some(old_ientry) = opt {
