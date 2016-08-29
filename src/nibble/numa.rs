@@ -101,6 +101,10 @@ impl NodeMap {
     pub fn sockets(&self) -> usize {
         self.sockets.len()
     }
+
+    pub fn ncpus(&self) -> usize {
+        self.sockets.len() * self.sockets[0].ncpus
+    }
 }
 
 /// Read file and interpret as an integer range, e.g.
