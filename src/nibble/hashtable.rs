@@ -224,7 +224,8 @@ impl HashTable {
 
         let v = bucket.read_version();
         let mut opts = bucket.find_key(key);
-        if opts.0 .is_none() && opts.1 .is_none() {
+        let (e,inv) = opts;
+        if e.is_none() && inv.is_none() {
             return (false,None);
         }
 
@@ -233,16 +234,17 @@ impl HashTable {
             opts = bucket.find_key(key);
         }
 
+        let (e,inv) = opts;
         let mut old: Option<u64> = None;
 
         // if exists, overwrite
-        if let Some(idx) = opts.0 {
-            old = Some(bucket.set_value(idx, value));
+        if let Some(i) = e {
+            old = Some(bucket.set_value(i, value));
         }
         // else if there is an empty slot, use that
-        else if let Some(inv) = opts.1 {
-            bucket.set_key(inv, key);
-            old = Some(bucket.set_value(inv, value));
+        else if let Some(i) = inv {
+            bucket.set_key(i, key);
+            bucket.set_value(i, value);
         }
 
         bucket.unlock();
@@ -280,7 +282,8 @@ impl HashTable {
 
         let v = bucket.read_version();
         let mut opts = bucket.find_key(key);
-        if opts.0 .is_none() {
+        let (e,inv) = opts;
+        if e.is_none() {
             return false;
         }
 
@@ -289,12 +292,13 @@ impl HashTable {
             opts = bucket.find_key(key);
         }
 
-        if opts.0 .is_none() {
+        let (e,inv) = opts;
+        if e.is_none() {
             bucket.unlock();
             return false;
         }
 
-        bucket.del_key(opts.0 .unwrap(), old);
+        bucket.del_key(e.unwrap(), old);
         bucket.unlock();
         return true;
     }
