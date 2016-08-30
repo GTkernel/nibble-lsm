@@ -153,6 +153,10 @@ impl Nibble {
         unimplemented!();
     }
 
+    //
+    // Get/Put/Del API
+    //
+
     #[inline(always)]
     fn __put(&self, obj: &ObjDesc, hint: PutPolicy) -> Status {
         epoch::pin();
@@ -254,7 +258,7 @@ impl Nibble {
     }
 
     #[inline(always)]
-    pub fn del_object(&mut self, key: u64) -> Status {
+    pub fn del_object(&self, key: u64) -> Status {
         epoch::pin();
 
         // 1. remove key and acquire old
@@ -278,6 +282,31 @@ impl Nibble {
         epoch::quiesce();
         Ok(1)
     }
+
+    //
+    // Lower-level allocation API
+    //
+
+    pub fn alloc(key: u64, len: usize, node: u8, pin: bool)
+        -> Pointer<u8> {
+        unimplemented!();
+    }
+
+    pub fn del(key: u64) {
+        unimplemented!();
+    }
+
+    pub fn pin(key: u64) {
+        unimplemented!();
+    }
+
+    pub fn unpin(key: u64) {
+        unimplemented!();
+    }
+
+    //
+    // Misc. methods
+    //
 
     #[cfg(test)]
     pub fn nlive(&self) -> usize {
