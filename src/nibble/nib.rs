@@ -142,7 +142,7 @@ impl Nibble {
         self.nnodes as usize
     }
 
-    pub fn enable_compaction(&mut self, node: NodeId) {
+    pub fn enable_compaction(&self, node: NodeId) {
         let mut comp = self.nodes[node.0].compactor.lock();
         comp.spawn(WorkerRole::Reclaim);
         comp.spawn(WorkerRole::Compact);
@@ -229,6 +229,11 @@ impl Nibble {
     #[inline(always)]
     pub fn put_object(&self, obj: &ObjDesc) -> Status {
         self.__put(obj, PutPolicy::Specific(0))
+    }
+
+    #[inline(always)]
+    pub fn exists(&self, key: u64) -> bool {
+        self.index.get(key).is_some()
     }
 
     /// TODO use Result<Buffer> as return value
