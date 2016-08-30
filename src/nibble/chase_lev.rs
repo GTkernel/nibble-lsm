@@ -57,7 +57,7 @@ const K: isize = 4;
 // size.
 //
 // The size in question is 1 << MIN_BITS
-const MIN_BITS: u32 = 21;
+const MIN_BITS: u32 = 23;
 
 #[derive(Debug)]
 struct Deque<T> {
@@ -348,6 +348,7 @@ impl<T> Buffer<T> {
     // Again, unsafe because this has incredibly dubious ownership violations.
     // It is assumed that this buffer is immediately dropped.
     unsafe fn resize(&self, b: isize, t: isize, delta: i32) -> Buffer<T> {
+        assert!(false, "oops.. it wants to resize. increase MIN");
         let buf = Buffer::new(((self.log_size as i32) + delta) as u32);
         for i in t..b {
             buf.put(i, self.get(i));
