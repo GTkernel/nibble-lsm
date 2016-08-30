@@ -57,7 +57,7 @@ const K: isize = 4;
 // size.
 //
 // The size in question is 1 << MIN_BITS
-const MIN_BITS: u32 = 7;
+const MIN_BITS: u32 = 21;
 
 #[derive(Debug)]
 struct Deque<T> {
