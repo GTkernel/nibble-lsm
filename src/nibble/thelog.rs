@@ -6,6 +6,7 @@ use memory::*;
 
 use std::mem::size_of;
 use std::sync::Arc;
+use std::ptr;
 
 use parking_lot as pl;
 
@@ -282,6 +283,40 @@ impl Log {
         buf
     }
 
+    /// Only pull out the entry header. Useful to know the object size
+    /// when deleting, updating, or compacting. Unlike get_ref, we
+    /// make a real copy of the header. get_ref only does so if the
+    /// header happens to be split across two blocks.
+    #[inline(always)]
+    pub fn copy_header(&self, va: usize) -> EntryHeader {
+        let mut header: EntryHeader = EntryHeader::empty();
+        let offset = va & BLOCK_OFF_MASK;
+        let blk_tail = BLOCK_SIZE - offset;
+        let len = size_of::<EntryHeader>();
+
+        if blk_tail >= len {
+            let head_addr = va as *const usize as *const EntryHeader;
+            header = unsafe { ptr::read(head_addr) };
+        }
+        // header is split.. gotta do more work
+        // some copy/paste from get_entry above
+        else {
+            let block: Block = self.manager.block_of(va);
+            debug_assert_eq!(block.list().ptr().is_null(), false);
+            let usl = block.list();
+            debug_assert!(block.blk_idx() < usl.len(),
+                "block idx {} out of bounds for uslice {}",
+                block.blk_idx(), usl.len());
+            let list: &[BlockRef] = unsafe { usl.slice() };
+            unsafe {
+                copy_out(&list[block.blk_idx()..], offset,
+                         header.as_mut_ptr(), len);
+            }
+        }
+
+        header
+    }
+
     //
     // --- Internal methods used for testing only ---
     //
@@ -341,6 +376,7 @@ impl<'a> EntryReference<'a> {
 }
 
 /// Construct an EntryReference given a VA and a set of Blocks.
+/// See also Log::copy_header
 pub fn get_ref(list: &[BlockRef], idx: usize, va: usize) -> EntryReference {
     let mut header: EntryHeader;
     let href: &EntryHeader;
@@ -348,6 +384,8 @@ pub fn get_ref(list: &[BlockRef], idx: usize, va: usize) -> EntryReference {
     let blk_tail = BLOCK_SIZE - offset;
     let len = size_of::<EntryHeader>();
 
+    // only copy out the header if it is split across blocks,
+    // else, set the href to point directly into the log
     if blk_tail >= len {
         let head_addr = va as *const usize as *const EntryHeader;
         href = unsafe { &*head_addr };

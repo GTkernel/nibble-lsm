@@ -195,12 +195,14 @@ impl Nibble {
 
         // 3. decrement live size of segment if we overwrite object
         if let Some(old_ientry) = opt {
+            // read header
             let (old_sock,old_va) = extract(old_ientry);
-            let idx: usize = self.nodes[old_sock as usize]
-                                 .manager.segment_of(old_va as usize);
-            // XXX is this working?? XXX
+            let node = &self.nodes[old_sock as usize];
+            let idx: usize = node.manager.segment_of(old_va as usize);
+            let head = node.log.copy_header(old_va as usize);
+            // decrement live bytes
             self.nodes[old_sock as usize].seginfo
-                .decr_live(idx, obj.len_with_header());
+                .decr_live(idx, head.len_with_header());
         }
         epoch::quiesce();
         Ok(1)
@@ -253,10 +255,28 @@ impl Nibble {
 
     #[inline(always)]
     pub fn del_object(&mut self, key: u64) -> Status {
-        match self.index.remove(key) {
-            None => Err(ErrorCode::KeyNotExist),
-            Some(_) => Ok(1),
-        }
+        epoch::pin();
+
+        // 1. remove key and acquire old
+        let ientry: IndexEntry = match self.index.remove(key) {
+            None => {
+                return Err(ErrorCode::KeyNotExist);
+            },
+            Some(entry) => entry,
+        };
+        let (socket,va) = extract(ientry);
+
+        // 2. read the size of the object
+        let node = &self.nodes[socket as usize];
+        let head = node.log.copy_header(va as usize);
+
+        // 3. decrement live size of segment
+        let idx: usize = node.manager.segment_of(va as usize);
+        self.nodes[socket as usize].seginfo
+            .decr_live(idx, head.len_with_header());
+
+        epoch::quiesce();
+        Ok(1)
     }
 
     #[cfg(test)]
@@ -298,6 +318,7 @@ mod tests {
     use common::{self,ErrorCode};
     use logger;
     use memory;
+    use index;
     use rand::{self,Rng};
     use segment;
     use segment::*;
@@ -387,28 +408,23 @@ mod tests {
     }
 
     /// Give the segment index of the specified key (as String)
-    #[cfg(IGNORE)]
-    fn segment_of(nib: &Nibble, key: &String) -> usize {
+    fn segment_of(nib: &Nibble, key: u64) -> usize {
         logger::enable();
 
         // look up virtual address
-        let va: usize = match nib.index.get(key.as_str()) {
-            None => panic!("key should exist"),
-            Some(va_) => va_,
-        };
+        let opt = nib.index.get(key);
+        assert!(opt.is_some(), "key {:x} not in index", key);
+        let ientry: index::IndexEntry = opt.unwrap();
+        let (socket,va) = index::extract(ientry);
+        let socket = socket as usize;
 
         // associate with segment and return
-        match nib.nodes[0].manager.lock() {
-            Err(_) => panic!("lock poison"),
-            Ok(guard) => match guard.segment_of(va) {
-                None => panic!("segment should exist"),
-                Some(idx) => idx,
-            },
-        }
+        let mgr: &SegmentManager = &nib.nodes[socket].manager;
+        mgr.segment_of(va as usize)
     }
 
     /// on init, epoch table should be zero
-    #[cfg(IGNORE)]
+    #[test]
     fn epoch_0() {
         logger::enable();
         let nib = Nibble::default();
@@ -422,33 +438,29 @@ mod tests {
     /// add one item repeatedly and observe the live size of the
     /// segment remains constant. upon rolling the head, check the
     /// segment live size is zero and the new is updated
-    #[cfg(IGNORE)]
+    #[test]
     fn epoch_1() {
         logger::enable();
         let mut nib = Nibble::default();
 
-        let key = String::from("keykeykeykey");
-        let val = String::from("valuevaluevalue");
-        let obj = ObjDesc::new2(&key, &val);
+        let key: u64 = 1;
+        let value: Vec<u64> = vec![1,2,3,4,5];
+        let vptr = common::Pointer(value.as_ptr() as *const u8);
+        let vlen = value.len() * 8;
+        let obj = ObjDesc::new(key, vptr, vlen);
         let size = obj.len_with_header();
 
-        if let Err(code) = nib.put_object(&obj) {
-            panic!("{:?}", code)
-        }
-
         // do first insertion, grab head idx used
-        if let Err(code) = nib.put_object(&obj) {
-            panic!("{:?}", code)
-        }
-        let head = segment_of(&nib, &key);
+        assert!(nib.put_object(&obj).is_ok());
+        let head = segment_of(&nib, key);
         assert_eq!(nib.nodes[0].seginfo.get_live(head), size);
 
         // insert until the head rolls
         loop {
-            if let Err(code) = nib.put_object(&obj) {
-                panic!("{:?}", code)
-            }
-            let segidx = segment_of(&nib, &key);
+            assert!(nib.put_object(&obj).is_ok());
+            // FIXME assumes the segment index we compare to doesn't
+            // change sockets
+            let segidx = segment_of(&nib, key);
             assert_eq!(nib.nodes[0].seginfo.get_live(segidx), size);
             if head != segidx {
                 // head rolled. let's check prior segment live size
@@ -459,35 +471,39 @@ mod tests {
     }
 
     /// add unique items, observe the live size of the segment grows
-    #[cfg(IGNORE)]
+    #[test]
     fn epoch_2() {
         logger::enable();
         let mut nib = Nibble::default();
-        let mut keyv = 0usize;
-        let value = String::from("sldkfslkfjlsdjflksdjfksjddfdfdf");
+        let mut rng = rand::thread_rng();
 
         // do first insertion, grab head idx used
-        let key = keyv.to_string();
-        let obj = ObjDesc::new2(&key, &value);
-        let mut len = obj.len_with_header();
-        if let Err(code) = nib.put_object(&obj) {
-            panic!("{:?}", code)
+        let mut key: u64 = 1;
+        let mut value: Vec<u64> = Vec::with_capacity(200);
+        for i in 0..200 {
+            value.push(rng.gen::<u32>() as u64);
         }
-        let head = segment_of(&nib, &key);
+        let vptr = common::Pointer(value.as_ptr() as *const u8);
+        let vlen = value.len() * 8;
+        let obj = ObjDesc::new(key, vptr, vlen);
+        let mut len = obj.len_with_header();
+        assert!(nib.put_object(&obj).is_ok());
+
+        let head = segment_of(&nib, key);
+        // XXX the socket may be different
         assert_eq!(nib.nodes[0].seginfo.get_live(head), len);
-        keyv += 1;
+        key += 1;
 
         let mut total = len; // accumulator excluding current obj
 
         // insert until the head rolls
         loop {
-            let key = keyv.to_string();
-            let obj = ObjDesc::new2(&key, &value);
+            let obj = ObjDesc::new(key, vptr, vlen);
             len = obj.len_with_header();
-            if let Err(code) = nib.put_object(&obj) {
-                panic!("{:?}", code)
-            }
-            let segidx = segment_of(&nib, &key);
+            assert!(nib.put_object(&obj).is_ok());
+            // FIXME assumes the segment index we compare to doesn't
+            // change sockets
+            let segidx = segment_of(&nib, key);
             if head == segidx {
                 assert_eq!(nib.nodes[0].seginfo.get_live(segidx), total+len);
             } else {
@@ -496,33 +512,31 @@ mod tests {
                 assert_eq!(nib.nodes[0].seginfo.get_live(segidx), len);
                 break;
             }
-            keyv += 1;
+            key += 1;
             total += len;
         }
     }
 
     /// add/remove one item and observe the live size is set then zero
-    #[cfg(IGNORE)]
+    #[test]
     fn epoch_3() {
         logger::enable();
         let mut nib = Nibble::default();
 
-        let key = String::from("lsfkjlksdjflks");
-        let value = String::from("sldkfslkfjlsdjflksdjfksjddfdfdf");
+        let key: u64 = 1;
+        let value: Vec<u64> = vec![1,2,3,4,5];
+        let vptr = common::Pointer(value.as_ptr() as *const u8);
+        let vlen = value.len() * 8;
+        let obj = ObjDesc::new(key, vptr, vlen);
+        let size = obj.len_with_header();
 
-        // insert, then delete
-        let obj = ObjDesc::new2(&key, &value);
-        if let Err(code) = nib.put_object(&obj) {
-            panic!("{:?}", code)
-        }
+        assert!(nib.put_object(&obj).is_ok());
 
-        let idx = segment_of(&nib, &key);
+        let idx = segment_of(&nib, key);
         let len = obj.len_with_header();
         assert_eq!(nib.nodes[0].seginfo.get_live(idx), len);
 
-        if let Err(code) = nib.del_object(&key) {
-            panic!("{:?}", code)
-        }
+        assert!(nib.del_object(key).is_ok());
         assert_eq!(nib.nodes[0].seginfo.get_live(idx), 0usize);
     }
 
