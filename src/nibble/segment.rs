@@ -265,9 +265,9 @@ impl BlockAllocator {
 /// refer to them.
 #[derive(Debug)]
 pub struct ObjDesc {
-    key: u64,
-    value: Pointer<u8>,
-    vlen: usize,
+    pub key: u64,
+    pub value: Pointer<u8>,
+    pub vlen: usize,
 }
 
 
