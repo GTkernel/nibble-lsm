@@ -14,5 +14,6 @@ pub mod sched;
 pub mod clock;
 pub mod tlock;
 pub mod hashtable;
+pub mod chase_lev;
 
 pub mod logger;
