@@ -208,7 +208,7 @@ fn __reclaim(state: &Arc<pl::RwLock<Worker>>) {
 }
 
 fn __compact(state: &Arc<pl::RwLock<Worker>>) {
-    let dur = Duration::from_secs(1);
+    let dur = Duration::from_millis(500);
     let mut s = state.write();
     let new = s.check_new();
     debug!("{} new candidates", new);
@@ -220,8 +220,8 @@ fn __compact(state: &Arc<pl::RwLock<Worker>>) {
         let ratio = remaining/total;
         debug!("node-{:?} rem. {} total {} ratio {:.2} run: {:?}",
                s.manager.socket().unwrap(),
-               remaining, total, ratio, ratio<0.2);
-        ratio < 0.2
+               remaining, total, ratio, ratio<0.5);
+        ratio < 0.5
     };
     if run {
         info!("compaction initiated");
