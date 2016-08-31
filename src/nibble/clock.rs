@@ -13,9 +13,24 @@ static mut CYCLES_PER_SECOND: u64 = 0u64;
 pub unsafe fn rdtsc() -> u64 {
     let mut low: u32;
     let mut high: u32;
-    asm!("rdtsc" : "={eax}" (low), "={edx}" (high));
+    asm!("rdtsc" : "={eax}" (low),
+                    "={edx}" (high));
     ((high as u64) << 32) | (low as u64)
 }
+
+/// Read the CPU ID using RDTSCP
+/// ca. 30 cycles overhead
+#[inline(always)]
+#[allow(unused_mut)]
+pub fn rdtscp_id() -> u32 {
+    let mut id: u32;
+    unsafe {
+        asm!("rdtscp" : "={ecx}" (id));
+    }
+    id & 0x1ff // no system yet has >= 512 cores
+}
+
+// TODO when RDPID is available, use that instead of RDTSCP
 
 /// Same as calling rdtsc but we internalize the unsafe block
 #[inline(always)]
