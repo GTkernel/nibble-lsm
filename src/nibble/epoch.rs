@@ -204,6 +204,7 @@ pub fn quiesce() {
 }
 
 /// Store the current epoch to the thread slot.
+#[inline(always)]
 pub fn pin() {
     EPOCH_SLOT.with( |slotptr| {
         let mut slot = unsafe { &mut**(slotptr.get()) };
@@ -211,12 +212,14 @@ pub fn pin() {
     });
 }
 
+#[inline(always)]
 pub fn slot_addr() -> usize {
     EPOCH_SLOT.with( |slotptr| {
         unsafe { *slotptr.get() as *const _ as usize }
     })
 }
 
+#[inline(always)]
 pub fn current() -> Option<EpochRaw> {
     EPOCH_SLOT.with( |slotptr| {
         let slot = unsafe { &mut**(slotptr.get()) };
