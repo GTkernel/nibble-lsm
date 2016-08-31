@@ -220,9 +220,12 @@ impl HashTable {
 
     pub fn new(entries: usize, sock: usize) -> Self {
         let nbuckets = entries / ENTRIES_PER_BUCKET;
-        let len = nbuckets * mem::size_of::<Bucket>();
+        let mut len = nbuckets * mem::size_of::<Bucket>();
         info!("new table on socket {} len {}", sock, len);
-        let mmap = MemMap::numa(len, NodeId(sock), 1usize<<12);
+        let align: usize = 1usize<<21;
+        // round up to next alignment
+        len = (len + align - 1) & !(align-1);
+        let mmap = MemMap::numa(len, NodeId(sock), align);
         let p = Pointer(mmap.addr() as *const Bucket);
 
         let sl: &mut [Bucket] = unsafe {
