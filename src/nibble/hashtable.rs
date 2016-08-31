@@ -9,9 +9,12 @@ use std::ptr;
 use std::slice;
 use std::fmt;
 use std::hash;
+use std::mem;
 
+use memory::*;
 use common::{Pointer, fnv1a, is_even, is_odd, atomic_add, atomic_cas};
 use logger::*;
+use numa::{self,NodeId};
 
 // 1. use versioned lock
 // 2. use ticket lock
@@ -209,18 +212,23 @@ impl Drop for LockedBucket {
 // the NUMA memory allocation support
 pub struct HashTable {
     nbuckets: usize,
-    buckets: Vec<Bucket>,
+    bucket_mmap: MemMap,
+    buckets: Pointer<Bucket>,
 }
 
 impl HashTable {
 
-    pub fn new(entries: usize) -> Self {
+    pub fn new(entries: usize, sock: usize) -> Self {
         let nbuckets = entries / ENTRIES_PER_BUCKET;
-        let mut v: Vec<Bucket> = Vec::with_capacity(nbuckets);
-        unsafe {
-            v.set_len(nbuckets);
-        }
-        for b in &mut v {
+        let len = nbuckets * mem::size_of::<Bucket>();
+        info!("new table on socket {} len {}", sock, len);
+        let mmap = MemMap::numa(len, NodeId(sock), 1usize<<12);
+        let p = Pointer(mmap.addr() as *const Bucket);
+
+        let sl: &mut [Bucket] = unsafe {
+            slice::from_raw_parts_mut(p.0 as *mut Bucket,nbuckets)
+        };
+        for b in sl {
             b.version = 0;
             for i in 0..ENTRIES_PER_BUCKET {
                 b.key[i] = INVALID_KEY;
@@ -229,7 +237,14 @@ impl HashTable {
         }
         HashTable {
             nbuckets: nbuckets,
-            buckets: v,
+            bucket_mmap: mmap,
+            buckets: p,
+        }
+    }
+
+    fn as_slice(&self) -> &[Bucket] {
+        unsafe {
+            slice::from_raw_parts(self.buckets.0, self.nbuckets)
         }
     }
 
@@ -245,7 +260,8 @@ impl HashTable {
         let hash = Self::make_hash(key);
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
         let bidx = (hash % (self.nbuckets as u64)) as usize;
-        let bucket: &Bucket = &self.buckets[bidx];
+        let buckets: &[Bucket] = self.as_slice();
+        let bucket: &Bucket = &buckets[bidx];
 
         let v = bucket.read_version();
         let mut opts = bucket.find_key(key);
@@ -283,7 +299,8 @@ impl HashTable {
         let hash = Self::make_hash(key);
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
         let bidx = (hash % (self.nbuckets as u64)) as usize;
-        let bucket: &Bucket = &self.buckets[bidx];
+        let buckets: &[Bucket] = self.as_slice();
+        let bucket: &Bucket = &buckets[bidx];
 
         // TODO if we retry too many times, perhaps forcefully lock
 
@@ -306,7 +323,8 @@ impl HashTable {
         let hash = Self::make_hash(key);
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
         let bidx = (hash % (self.nbuckets as u64)) as usize;
-        let bucket: &Bucket = &self.buckets[bidx];
+        let buckets: &[Bucket] = self.as_slice();
+        let bucket: &Bucket = &buckets[bidx];
 
         let v = bucket.read_version();
         let mut opts = bucket.find_key(key);
@@ -340,7 +358,8 @@ impl HashTable {
         let hash = Self::make_hash(key);
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
         let bidx = (hash % (self.nbuckets as u64)) as usize;
-        let bucket: &Bucket = &self.buckets[bidx];
+        let buckets: &[Bucket] = self.as_slice();
+        let bucket: &Bucket = &buckets[bidx];
 
         let v = bucket.read_version();
         let mut opts = bucket.find_key(key);
@@ -367,12 +386,6 @@ impl HashTable {
         } else {
             bucket.unlock();
             None
-        }
-    }
-
-    pub fn dump(&self) {
-        for i in 0..self.nbuckets {
-            debug!("[{}] {:?}", i, self.buckets[i]);
         }
     }
 
@@ -570,7 +583,7 @@ mod tests {
         logger::enable();
         println!("");
 
-        let ht = HashTable::new(tblsz);
+        let ht = HashTable::new(tblsz, 0);
 
         let mut inserted: usize = 0;
         for key in 1..(tblsz+1) {
@@ -638,7 +651,7 @@ mod tests {
         logger::enable();
         println!("");
 
-        let ht = HashTable::new(tblsz);
+        let ht = HashTable::new(tblsz, 0);
         let total = tblsz;// >> 1; // no. keys to use
         let keys_per = total / nthreads;
         println!("keys_per {}", keys_per);

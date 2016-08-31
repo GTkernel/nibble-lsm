@@ -72,7 +72,6 @@ impl Nibble {
         let ntables = numa::NODE_MAP.ncpus();
         //let ntables: usize = 64;
 
-        warn!("---== INDEX DOES NOT YET SPAN ACROSS SOCKETS ==---");
         // XXX won't need this once the index can resize
         let nitems = 1usize << 30;
         let n_per  = nitems / ntables;

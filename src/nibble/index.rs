@@ -40,8 +40,10 @@ impl Index {
     pub fn new(n: usize, per: usize) -> Self {
         let mut tables: Vec<Pointer<HashTable>>;
         tables = Vec::with_capacity(n);
-        for _ in 0..n {
-            let t = Box::new(HashTable::new(per));
+        let nsockets = numa::NODE_MAP.sockets();
+        for i in 0..n {
+            let sock = i % nsockets;
+            let t = Box::new(HashTable::new(per, sock));
             let p = Pointer(Box::into_raw(t));
             tables.push(p);
         }
