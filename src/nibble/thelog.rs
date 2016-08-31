@@ -3,6 +3,8 @@ use segment;
 use segment::*;
 use epoch::*;
 use memory::*;
+use clock;
+use numa::{self,NodeId};
 
 use std::mem::size_of;
 use std::sync::Arc;
@@ -23,14 +25,6 @@ macro_rules! wlock {
         $segref.unwrap().write().unwrap()
     }
 }
-
-//==----------------------------------------------------==//
-//      Constants
-//==----------------------------------------------------==//
-
-pub const LOG_HEADS_SHIFT: usize = 3;
-pub const NUM_LOG_HEADS:   usize = 1 << LOG_HEADS_SHIFT;
-pub const LOG_HEADS_MASK:  usize = NUM_LOG_HEADS - 1;
 
 //==----------------------------------------------------==//
 //      Entry header
@@ -206,27 +200,37 @@ impl LogHead {
 //      The log
 //==----------------------------------------------------==//
 
+pub fn num_log_heads() -> usize {
+    numa::NODE_MAP.cpus_in(NodeId(0))
+}
+
 pub struct Log {
     heads: Vec<LogHeadRef>,
     manager: SegmentManagerRef,
     seginfo: SegmentInfoTableRef,
     // TODO track current capacity?
+    /// Number of log heads per instance of the log (per socket).
+    /// Allocate as many as there are cores on the socket.
+    nheads: usize,
+
 }
 
 impl Log {
 
     pub fn new(manager: SegmentManagerRef) -> Self {
-        info!("NUM_LOG_HEADS {}", NUM_LOG_HEADS);
+        let nheads: usize = num_log_heads();
+        info!("LOG HEADS {}", nheads);
         let seginfo = manager.seginfo();
         let mut heads: Vec<LogHeadRef>;
-        heads = Vec::with_capacity(NUM_LOG_HEADS as usize);
-        for _ in 0..NUM_LOG_HEADS {
+        heads = Vec::with_capacity(nheads);
+        for _ in 0..nheads {
             heads.push(loghead_ref!(manager.clone()));
         }
         Log {
             heads: heads,
             manager: manager.clone(),
             seginfo: seginfo,
+            nheads: nheads,
         }
     }
 
@@ -236,7 +240,12 @@ impl Log {
         let va: usize;
 
         // fast quasi-randomness (TODO might always be zero?)
-        let mut i = (buf as *const _ as usize) & LOG_HEADS_MASK;
+        //let mut i = (buf as *const _ as usize) & LOG_HEADS_MASK;
+        //let mut i = clock::now() as usize & LOG_HEADS_MASK;
+
+        // using processor ID should hopefully avoid conflicts
+        // compared to random assignment and hoping for luck
+        let mut i = clock::rdtscp_id() as usize % self.nheads;
 
         // 1. pick a log head and append
         'again: loop {
@@ -245,7 +254,7 @@ impl Log {
                     Err(e) => match e {
                         // try another log head instead
                         ErrorCode::OutOfMemory =>  {
-                            i = (i + 1) & LOG_HEADS_MASK;
+                            i = (i + 1) % self.nheads;
                             continue 'again;
                         },
                         _ => return Err(e),
@@ -254,7 +263,7 @@ impl Log {
                 }
                 break;
             }
-            i = (i + 1) & LOG_HEADS_MASK;
+            i = (i + 1) % self.nheads;
         }
 
         // 2. update segment info table

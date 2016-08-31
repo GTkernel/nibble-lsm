@@ -19,7 +19,7 @@ const MIN_SEG_PER_SOCKET: usize = 4;
 
 macro_rules! min_log_size {
     ( $nsockets:expr ) => {
-        ((NUM_LOG_HEADS as usize) * MIN_SEG_PER_SOCKET)
+        (num_log_heads() * MIN_SEG_PER_SOCKET)
             * SEGMENT_SIZE * $nsockets
             + COMPACTION_RESERVE_SEGMENTS
     }
