@@ -60,8 +60,8 @@ impl Nibble {
         let nnodes = numa::NODE_MAP.sockets();
         let mincap = min_log_size!(nnodes);
         assert!(capacity >= mincap,
-                "nibble requires more memory: {} but have {}",
-                mincap, capacity);
+                "nibble requires more memory: {} GiB",
+                mincap / (1usize<<30));
         info!("sockets:  {}", nnodes);
         let persock = capacity/nnodes;
         info!("capacity: {:.2} GiB",
@@ -69,15 +69,16 @@ impl Nibble {
         info!("socket:   {:.2} GiB",
               (persock as f64)/(2f64.powi(30)));
 
-        //let ntables = numa::NODE_MAP.ncpus();
-        let ntables: usize = 64;
+        let ntables = numa::NODE_MAP.ncpus();
+        //let ntables: usize = 64;
 
+        warn!("---== INDEX DOES NOT YET SPAN ACROSS SOCKETS ==---");
         // XXX won't need this once the index can resize
-        let nitems = 1usize << 25;
+        let nitems = 1usize << 30;
         let n_per  = nitems / ntables;
-        debug!("nitems:  {}", nitems);
-        debug!("Tables:  {}", ntables);
-        debug!("   per:  {}", n_per);
+        info!("nitems:  {}", nitems);
+        info!("Tables:  {}", ntables);
+        info!("   per:  {}", n_per);
 
         let index = Arc::new(Index::new(ntables, n_per));
 
