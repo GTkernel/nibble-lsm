@@ -543,35 +543,30 @@ impl Worker {
                 let old = entry.get_loc() as u64;
                 let ientry_old = merge(socket as u16, old as u64);
 
-                // if let Some(lock) =
-                //     // FIXME XXX
-                //     cuckoo::update_hold_ifeq(key,ientry_new,ientry_old) {
+                if let Some(lock) = self.index
+                    .update_lock_ifeq(key,ientry_new,ientry_old) {
+                        // try append; if fail, extend, try again
+                        if let None = new.append_entry(&entry) {
+                            debug!("node-{:?} extending segment; entry {}",
+                                   self.manager.socket().unwrap(), n);
+                            match self.manager.alloc_blocks(1) {
+                                Some(mut blocks) =>
+                                    new.extend(&mut blocks),
+                                    None => panic!("OOM"), // FIXME spin?
+                            }
+                            debug!("retrying append");
+                            if let None = new.append_entry(&entry) {
+                                // can only happen if obj > block
+                                panic!("OOM?");
+                            }
+                        }
 
-                //         // try append; if fail, extend, try again
-                //         if let None = new.append_entry(&entry) {
-                //             debug!("node-{:?} extending segment; entry {}",
-                //                    self.manager.socket().unwrap(), n);
-                //             match self.manager.alloc_blocks(1) {
-                //                 Some(mut blocks) =>
-                //                     new.extend(&mut blocks),
-                //                     None => panic!("OOM"), // FIXME spin?
-                //             }
-                //             debug!("retrying append");
-                //             if let None = new.append_entry(&entry) {
-                //                 // can only happen if obj > block
-                //                 panic!("OOM?");
-                //             }
-                //         }
+                        // three atomics follow...
+                        //atomic::fence(atomic::Ordering::SeqCst);
+                        self.seginfo.incr_live(new.slot(), entry.len);
 
-                //         // three atomics follow...
-                //         atomic::fence(atomic::Ordering::SeqCst);
-                //         self.seginfo.incr_live(new.slot(), entry.len);
-
-                //         // release object TODO make RAII
-                //         cuckoo::update_release(lock);
-
-                //         bytes_appended += entry.len;
-                // }
+                        bytes_appended += entry.len;
+                }
 
                 n += 1;
             }

@@ -111,6 +111,21 @@ impl Index {
         }
     }
 
+    pub fn update_lock_ifeq(&self, key: u64, new: u64, old: u64)
+        -> Option<LockedBucket> {
+
+        assert!(key > 0);
+        let hash = HashTable::make_hash(key);
+        let tidx = self.table_idx(hash);
+        debug_assert!(tidx < self.tables.len());
+        let ref p = self.tables[tidx];
+        debug_assert!(!p.0 .is_null());
+        unsafe {
+            let ht: &HashTable = &* p.0;
+            ht.update_lock_ifeq(key, new, old)
+        }
+    }
+
     pub fn len(&self) -> usize {
         unimplemented!();
     }

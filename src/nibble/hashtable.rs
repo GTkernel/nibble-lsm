@@ -10,7 +10,7 @@ use std::slice;
 use std::fmt;
 use std::hash;
 
-use common::{fnv1a, is_even, is_odd, atomic_add, atomic_cas};
+use common::{Pointer, fnv1a, is_even, is_odd, atomic_add, atomic_cas};
 use logger::*;
 
 // 1. use versioned lock
@@ -178,6 +178,31 @@ impl Bucket {
     }
 }
 
+/// RAII-based lock used for clients of the API who must do
+/// non-trivial amounts of work during a key update in the table.
+/// Compaction, for example, is one.
+pub struct LockedBucket {
+    bucket: Pointer<Bucket>,
+}
+
+impl LockedBucket {
+
+    /// Caller should lock bucket before creating
+    fn new(bucket: &Bucket) -> Self {
+        LockedBucket {
+            bucket: Pointer(bucket as *const Bucket),
+        }
+    }
+
+}
+
+impl Drop for LockedBucket {
+    fn drop(&mut self) {
+        let b: &Bucket = unsafe { &*self.bucket.0 };
+        b.unlock();
+    }
+}
+
 // TODO make this some inner type
 // TODO initialize one per core, or per socket, etc.
 // TODO May need to use
@@ -304,6 +329,45 @@ impl HashTable {
         bucket.del_key(e.unwrap(), old);
         bucket.unlock();
         return true;
+    }
+
+    /// Grab the lock on the bucket holding the key only if the
+    /// existing value matches one specified. Before returning,
+    /// replace existing value with new.
+    pub fn update_lock_ifeq(&self, key: u64, new: u64, old: u64)
+        -> Option<LockedBucket> {
+
+        let hash = Self::make_hash(key);
+        //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
+        let bidx = (hash % (self.nbuckets as u64)) as usize;
+        let bucket: &Bucket = &self.buckets[bidx];
+
+        let v = bucket.read_version();
+        let mut opts = bucket.find_key(key);
+        let (e,inv) = opts;
+        if e.is_none() {
+            return None;
+        }
+
+        bucket.wait_lock();
+        if bucket.read_version() != v {
+            opts = bucket.find_key(key);
+        }
+
+        let (e,inv) = opts;
+        if e.is_none() {
+            bucket.unlock();
+            return None;
+        }
+
+        let i = e.unwrap();
+        if old == bucket.read_value(i) {
+            bucket.set_value(i, new);
+            Some(LockedBucket::new(&bucket))
+        } else {
+            bucket.unlock();
+            None
+        }
     }
 
     pub fn dump(&self) {
