@@ -32,6 +32,7 @@ extern crate test;
 extern crate time;
 extern crate clap;
 extern crate crossbeam;
+extern crate num;
 
 extern crate nibble;
 
@@ -60,13 +61,7 @@ use std::time::{Duration,Instant};
 // deque wants to resize (to avoid invoking malloc in critical path)
 use nibble::chase_lev;
 
-fn pairs(npairs: usize, objsize: usize) {
-    let nib: Nibble = Nibble::new(53_687_091_200_usize);
-
-    for sock in 0..numa::NODE_MAP.sockets() {
-        nib.enable_compaction(NodeId(sock));
-    }
-
+fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
     let mut guards = vec![];
     let mut tids: u64 = 0;
     let iters = 200;
@@ -78,9 +73,11 @@ fn pairs(npairs: usize, objsize: usize) {
     println!("keys per thread: {}", per);
 
     let barrier = Arc::new(Barrier::new(npairs*2));
+    let total_kops = AtomicUsize::new(0);
 
     crossbeam::scope(|scope| {
         for _ in 0..npairs {
+            let total_ = &total_kops;
 
             //let (tx,rx) = channel::<u64>();
             let (mut worker, stealer) = chase_lev::deque();
@@ -140,11 +137,14 @@ fn pairs(npairs: usize, objsize: usize) {
 
             // Spawn receiver/releaser
             let guard = scope.spawn(move || {
-                println!("tid {}", tid);
                 let nib = &*nib_ref;
                 let mut many: usize = 0;
 
-                unsafe { pin_cpu(tid as usize); }
+                let cpu: usize = tid as usize;
+                let sock: usize = numa::NODE_MAP.sock_of(cpu).0;
+                println!("tid {} cpu {} sock {}",
+                            tid, cpu, sock);
+                unsafe { pin_cpu(cpu); }
                 b.wait();
 
                 let now = Instant::now();
@@ -174,8 +174,11 @@ fn pairs(npairs: usize, objsize: usize) {
                 }
                 let dur = now.elapsed();
                 let sec = dur.as_secs();
-                let ops: f64 = many as f64 / sec as f64;
+                // *2 because each delete has an associated alloc
+                let ops: f64 = 2f64 * many as f64 / sec as f64;
                 println!("tid {} perf: {:.2} kops/sec", tid, ops/1e3);
+                total_.fetch_add(2*(many/sec as usize)/1000,
+                                Ordering::Relaxed);
             });
             guards.push(guard);
         }
@@ -184,12 +187,65 @@ fn pairs(npairs: usize, objsize: usize) {
     for g in guards {
         g.join();
     }
+
+    let kops = total_kops.load(Ordering::Relaxed);
+    println!("Total {:.2} kop/sec", kops);
+}
+
+fn arg_as_num<T: num::Integer>(args: &clap::ArgMatches,
+                               name: &str) -> T {
+    match args.value_of(name) {
+        None => panic!("Specify {}", name),
+        Some(s) => match T::from_str_radix(s,10) {
+            Err(_) => panic!("size NaN"),
+            Ok(s) => s,
+        },
+    }
 }
 
 fn main() {
+    let matches = App::new("Nibble pipeline allocation benchmark.")
+        .arg(Arg::with_name("min")
+             .long("min")
+             .help("min thread pairs")
+             .takes_value(true))
+        .arg(Arg::with_name("max")
+             .long("max")
+             .help("max thread pairs")
+             .takes_value(true))
+        .arg(Arg::with_name("incr")
+             .long("incr")
+             .help("incr thread pairs")
+             .takes_value(true))
+        .arg(Arg::with_name("size")
+             .long("size")
+             .help("object size [bytes]")
+             .takes_value(true))
+        .arg(Arg::with_name("cap")
+             .long("cap")
+             .help("total log capacity [GiB]")
+             .takes_value(true))
+        .get_matches();
+
+    let from: usize = arg_as_num(&matches, "min");
+    let to: usize   = arg_as_num(&matches, "max");
+    let incr: usize = arg_as_num(&matches, "incr");
+    let s: usize    = arg_as_num(&matches, "size");
+    let mut cap: usize  = arg_as_num(&matches, "cap");
+    cap *= 1usize<<30;
+
     logger::enable();
-    let n: usize = 6;
-    let s: usize = 100;
-    println!("pairs {} obj.size {}", n, s);
-    pairs(n,s);
+    let nib = Nibble::new(cap);
+
+    // turn on compaction for all sockets
+    for sock in 0..numa::NODE_MAP.sockets() {
+        nib.enable_compaction(NodeId(sock));
+    }
+
+    let mut n: usize = from;
+    while n <= to {
+        println!("pairs {} obj.size {}", n, s);
+        pairs(&nib,n,s);
+        n += incr;
+    }
 }
