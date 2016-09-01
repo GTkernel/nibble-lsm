@@ -73,11 +73,11 @@ fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
     println!("keys per thread: {}", per);
 
     let barrier = Arc::new(Barrier::new(npairs*2));
-    let total_kops = AtomicUsize::new(0);
+    let total_ops = AtomicUsize::new(0);
 
     crossbeam::scope(|scope| {
         for _ in 0..npairs {
-            let total_ = &total_kops;
+            let tot_ops = &total_ops;
 
             //let (tx,rx) = channel::<u64>();
             let (mut worker, stealer) = chase_lev::deque();
@@ -173,12 +173,16 @@ fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
                             "too many empty steals.. hung?");
                 }
                 let dur = now.elapsed();
-                let sec = dur.as_secs();
+                let sec: f64 = dur.as_secs() as f64 +
+                                dur.subsec_nanos() as f64 / 1e9;
+                if sec < 5f64 {
+                    println!("Warning: test ran for < 5 seconds");
+                }
                 // *2 because each delete has an associated alloc
-                let ops: f64 = 2f64 * many as f64 / sec as f64;
-                println!("tid {} perf: {:.2} kops/sec", tid, ops/1e3);
-                total_.fetch_add(2*(many/sec as usize)/1000,
-                                Ordering::Relaxed);
+                let ops: usize = (2f64 * many as f64 / sec) as usize;
+                println!("tid {} perf: {:.2} kops/sec",
+                         tid, ops as f64/1e3);
+                tot_ops.fetch_add(ops, Ordering::Relaxed);
             });
             guards.push(guard);
         }
@@ -188,7 +192,7 @@ fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
         g.join();
     }
 
-    let kops = total_kops.load(Ordering::Relaxed);
+    let kops = total_ops.load(Ordering::Relaxed) as f64 / 1e3;
     println!("Total {:.2} kop/sec", kops);
 }
 
