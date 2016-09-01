@@ -442,10 +442,9 @@ mod tests {
     fn init() {
         logger::enable();
         println!("");
-        let ht = HashTable::new(1024);
+        let ht = HashTable::new(1024, 0);
         let nb = 1024 / ENTRIES_PER_BUCKET;
         assert_eq!(ht.nbuckets, nb);
-        assert_eq!(ht.buckets.len(), nb);
     }
 
     // generate random set of keys and attempt to check existence
@@ -454,7 +453,7 @@ mod tests {
         logger::enable();
         println!("");
 
-        let ht = HashTable::new(1024);
+        let ht = HashTable::new(1024, 0);
         let mut value: u64 = 0;
         for i in 0..8192 {
             let mut key;
@@ -481,7 +480,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         'outer: for _ in 0..ntables {
-            let ht = HashTable::new(tblsz);
+            let ht = HashTable::new(tblsz,0);
             let mut inserted = 0;
             key = rng.gen::<u64>();
             loop {
@@ -510,7 +509,7 @@ mod tests {
         logger::enable();
         println!("");
 
-        let ht = HashTable::new(1024);
+        let ht = HashTable::new(1024,0);
         let mut value: u64 = 0;
         let mut keys: HashSet<u64> = HashSet::with_capacity(8192);
 
@@ -548,7 +547,7 @@ mod tests {
         logger::enable();
         println!("");
 
-        let ht = HashTable::new(1024);
+        let ht = HashTable::new(1024,0);
         let mut keys: Vec<u64> = Vec::new();
 
         let mut rng = rand::thread_rng();
