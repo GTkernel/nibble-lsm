@@ -22,7 +22,6 @@ use nibble::nib::{PutPolicy,Nibble};
 use nibble::numa::{self,NodeId};
 use nibble::sched::*;
 use nibble::segment::{ObjDesc,SEGMENT_SIZE};
-use nibble::cuckoo;
 use rand::Rng;
 use std::mem;
 use std::sync::Arc;
@@ -54,6 +53,7 @@ struct Config {
     mem: MemPolicy,
 }
 
+#[cfg(IGNORE)]
 fn run(config: &Config) {
     logger::enable();
 
@@ -364,5 +364,5 @@ fn main() {
         mem: mem,
     };
 
-    run(&config);
+    //run(&config);
 }

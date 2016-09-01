@@ -17,7 +17,7 @@ use nibble::logger;
 use nibble::nib::Nibble;
 use nibble::segment::{ObjDesc,SEGMENT_SIZE};
 use nibble::common::ErrorCode;
-use nibble::cuckoo;
+//use nibble::cuckoo;
 
 #[cfg(IGNORE)]
 fn direct_insert() {

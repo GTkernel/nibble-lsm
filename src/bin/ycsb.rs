@@ -18,7 +18,6 @@ use clap::{Arg, App, SubCommand};
 use log::LogLevel;
 use nibble::clock;
 use nibble::common::{Pointer,ErrorCode,rdrand,rdrandq};
-use nibble::cuckoo;
 use nibble::epoch;
 use nibble::logger;
 use nibble::memory;
@@ -224,7 +223,7 @@ impl WorkloadGenerator {
                 info!("range [{},{}) on socket {}",
                 start_key, end_key, sock);
                 for key in start_key..end_key {
-                    let obj = ObjDesc::new(key, v, size as u32);
+                    let obj = ObjDesc::new(key, v, size);
                     if let Err(code) = arc.put_where(&obj,
                                           nib::PutPolicy::Specific(sock)) {
                         panic!("{:?}", code)
@@ -396,7 +395,7 @@ impl WorkloadGenerator {
                                         PutPolicy::Local => sock.0,
                                     };
                                     let obj = ObjDesc::new(key as u64, v,
-                                                           config.size as u32);
+                                                           config.size);
                                     let nibnode = nib::PutPolicy::Specific(put_sock);
                                     while let Err(e) = nibble.put_where(&obj, nibnode) {
                                         match e {
@@ -425,7 +424,6 @@ impl WorkloadGenerator {
             }
             println!("# total kops {}",
                      accum.load(Ordering::Relaxed));
-            cuckoo::print_conflicts(0usize);
         }
 
     } // run()
