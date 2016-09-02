@@ -35,3 +35,8 @@ debug-assertions = false
 # https://github.com/rust-lang/rust/issues/34122
 debug = true
 lto = false
+
+[profile.bench]
+debug-assertions = false
+debug = false
+opt-level = 3
