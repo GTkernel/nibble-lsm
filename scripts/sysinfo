@@ -16,6 +16,9 @@ echo '';echo '[g++]'; g++ --version
 if [ -e Makefile ]; then
     echo '';echo '[Makefile]'; cat Makefile
 fi
+if [ -e Cargo.toml ]; then
+    echo ''; echo '[Cargo.toml]'; cat Cargo.toml
+fi
 
 echo '';echo '[cpu]'; grep 'model name' /proc/cpuinfo | head -n 1
 echo '';echo '[sockets=cores]';

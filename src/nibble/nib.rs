@@ -69,8 +69,10 @@ impl Nibble {
         info!("socket:   {:.2} GiB",
               (persock as f64)/(2f64.powi(30)));
 
-        let ntables = numa::NODE_MAP.ncpus();
+        //let ntables = numa::NODE_MAP.ncpus();
         //let ntables: usize = 64;
+
+        let ntables: usize = numa::NODE_MAP.sockets();
 
         // XXX won't need this once the index can resize
         let nitems = 1usize << 30;
@@ -78,6 +80,9 @@ impl Nibble {
         info!("nitems:  {}", nitems);
         info!("Tables:  {}", ntables);
         info!("   per:  {}", n_per);
+
+        info!(" segsz:  {}", SEGMENT_SIZE);
+        info!(" blksz:  {}", BLOCK_SIZE);
 
         let index = Arc::new(Index::new(ntables, n_per));
 
@@ -167,7 +172,7 @@ impl Nibble {
             PutPolicy::Interleave =>
                 (unsafe { rdrand() } % self.nnodes) as usize,
         };
-        trace!("PUT key {} socket {:?}", obj.getkey(),socket);
+        //trace!("PUT key {} socket {:?}", obj.getkey(),socket);
 
         if socket >= self.nodes.len() {
             return Err(ErrorCode::InvalidSocket);
@@ -178,22 +183,22 @@ impl Nibble {
         // elsewhere?
         match self.nodes[socket].log.append(obj) {
             Err(code) => {
-                trace!("log full: {} bytes",
-                      self.nodes[socket].seginfo.live_bytes());
+                //trace!("log full: {} bytes",
+                      //self.nodes[socket].seginfo.live_bytes());
                 return Err(code);
             },
             Ok(v) => va = v,
         }
         let ientry = merge(socket as u16, va as u64);
-        trace!("key {} va 0x{:x} ientry 0x{:x}",
-               obj.getkey(), va, ientry);
+        //trace!("key {} va 0x{:x} ientry 0x{:x}",
+               //obj.getkey(), va, ientry);
 
         // 2. update reference to object
         let (ok,opt) = self.index.update(obj.getkey(), ientry);
         if !ok {
             // no need to undo the log append;
             // entries are stale until we update the index
-            trace!("index update returned false");
+            warn!("index update returned false");
             return Err(ErrorCode::TableFull);
         }
 
@@ -251,8 +256,8 @@ impl Nibble {
         };
         let (socket,va) = extract(ientry);
 
-        trace!("GET key {:x}: ientry {:x} -> socket 0x{:x} va 0x{:x}",
-               key, ientry, socket, va);
+        //trace!("GET key {:x}: ientry {:x} -> socket 0x{:x} va 0x{:x}",
+               //key, ientry, socket, va);
 
         // 2. ask Log to give us the object
         let buf = self.nodes[socket as usize]

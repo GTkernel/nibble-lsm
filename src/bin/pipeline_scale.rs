@@ -49,6 +49,7 @@ use nibble::segment::{ObjDesc,SEGMENT_SIZE};
 use rand::Rng;
 use std::collections::VecDeque;
 use std::mem;
+use std::ptr;
 use std::sync::{Arc,Barrier};
 use std::sync::atomic::*;
 use std::sync::mpsc::{channel,Sender,Receiver};
@@ -64,7 +65,7 @@ use nibble::chase_lev;
 fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
     let mut guards = vec![];
     let mut tids: u64 = 0;
-    let iters = 200;
+    let iters = 5000;
     println!("iters {}", iters);
 
     // unique keys per thread pair.  not all will be active at the
@@ -75,9 +76,16 @@ fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
     let barrier = Arc::new(Barrier::new(npairs*2));
     let total_ops = AtomicUsize::new(0);
 
+    let main_now = Instant::now();
+
+    // Try to have all threads halt at same time, else missing overlap
+    // will skew results.
+    let mut stop_now: bool = false;
+
     crossbeam::scope(|scope| {
         for _ in 0..npairs {
             let tot_ops = &total_ops;
+            let stop_ = Pointer(&stop_now as *const bool);
 
             //let (tx,rx) = channel::<u64>();
             let (mut worker, stealer) = chase_lev::deque();
@@ -105,7 +113,7 @@ fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
 
                 b.wait();
 
-                for _ in 0..iters {
+                'all: for _ in 0..iters {
                     let mut key = start;
 
                     while key <= (start+ per as u64) {
@@ -124,10 +132,20 @@ fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
                         key += 1;
 
                         worker.push(key-1);
+
+                        if 0 == (iters % 100) { unsafe {
+                            if ptr::read_volatile(stop_.0) {
+                                println!("tid {} stopping", tid);
+                                break 'all;
+                            }
+                        }}
                     }
                 }
 
                 worker.push(0u64); // =done
+                unsafe {
+                    ptr::write_volatile(stop_.0 as *mut _, true);
+                }
             });
             guards.push(guard);
 
@@ -180,8 +198,8 @@ fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
                 }
                 // *2 because each delete has an associated alloc
                 let ops: usize = (2f64 * many as f64 / sec) as usize;
-                println!("tid {} perf: {:.2} kops/sec",
-                         tid, ops as f64/1e3);
+                println!("tid {} sec {:.2} perf: {:.2} kops/sec",
+                         tid, sec, ops as f64/1e3);
                 tot_ops.fetch_add(ops, Ordering::Relaxed);
             });
             guards.push(guard);
@@ -192,8 +210,12 @@ fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
         g.join();
     }
 
+    let elapsed = main_now.elapsed();
+    let sec: f64 = elapsed.as_secs() as f64 +
+        elapsed.subsec_nanos() as f64 / 1e9;
+
     let kops = total_ops.load(Ordering::Relaxed) as f64 / 1e3;
-    println!("Total {:.2} kop/sec", kops);
+    println!("Total {:.2} kop/sec ({:.2} sec)", kops, sec);
 }
 
 fn arg_as_num<T: num::Integer>(args: &clap::ArgMatches,
