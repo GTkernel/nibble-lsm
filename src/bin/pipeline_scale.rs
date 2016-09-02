@@ -119,11 +119,17 @@ fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
                     while key <= (start+ per as u64) {
 
                         // wait for other thread to catch up
-                        let mut waits = 0usize;
-                        while nib.exists(key) {
-                            waits += 1;
-                            assert!(waits < 2000,
-                                    "sender waiting too long");
+                        if nib.exists(key) {
+                            let now_ = Instant::now();
+                            loop {
+                                if now_.elapsed().as_secs() > 2 {
+                                    assert!(false,
+                                            "sender waited too long");
+                                }
+                                if !nib.exists(key) {
+                                    break;
+                                }
+                            }
                         }
 
                         obj.key = key;
