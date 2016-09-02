@@ -3,3 +3,8 @@ set -e
 set -u
 
 echo never > /sys/kernel/mm/transparent_hugepage/enabled
+echo never > /sys/kernel/mm/transparent_hugepage/defrag
+
+echo '[THP]:'
+echo -n ' enabled: '; cat /sys/kernel/mm/transparent_hugepage/enabled
+echo -n '  defrag: '; cat /sys/kernel/mm/transparent_hugepage/defrag
