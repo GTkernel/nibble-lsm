@@ -1,0 +1,17 @@
+#! /usr/bin/env bash
+set -e
+set -u
+
+[[ $# -ne 1 ]] && \
+    echo "Specify number of pages" && exit 1
+pgs=$1
+shift
+
+numactl --interleave=0-15 \
+    echo $pgs > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+
+echo '[Huge Pages]:'
+echo -n '2MB huge pages: '
+cat /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+echo -n '1GB huge pages: '
+cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages
