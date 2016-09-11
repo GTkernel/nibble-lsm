@@ -1,0 +1,9 @@
+#! /usr/bin/env bash
+set -e
+set -u
+
+cargo build --lib --release
+make -C tests/Makefile.shuffle
+cd tests
+    ./shuffle
+
