@@ -297,13 +297,50 @@ impl Nibble {
     // Lower-level allocation API
     //
 
-    pub fn alloc(key: u64, len: usize, node: u8, pin: bool)
-        -> Pointer<u8> {
-        unimplemented!();
+    // Insert key into index; write object header into log, but
+    // do not write actual object itself.
+    // This version of alloc acts like an explicit insert.
+    pub fn alloc(&self, key: u64, len: u64, sock: u32) -> Pointer<u8> {
+        // epoch::pin();
+        let va: usize;
+
+        let obj = ObjDesc::null(key, len as usize);
+
+        let res = self.nodes[sock as usize].log.append(&obj);
+        assert_eq!(res.is_ok(), true);
+        va = res.unwrap();
+
+        let ientry = merge(sock as u16, va as u64);
+
+        // 2. update reference to object
+        let (ok,opt) = self.index.update(obj.key, ientry);
+        // verify this inserted, and was not an update
+        assert_eq!(ok, true);
+        assert_eq!(opt.is_none(), true);
+
+        // epoch::quiesce();
+        Pointer(va as *const u8)
     }
 
-    pub fn del(key: u64) {
-        unimplemented!();
+    // Delete key from index.
+    pub fn free(&self, key: u64) {
+        // epoch::pin();
+
+        // 1. remove key and acquire old
+        let res = self.index.remove(key);
+        let ientry: IndexEntry = res.unwrap();
+        let (socket,va) = extract(ientry);
+
+        // 2. read the size of the object
+        let node = &self.nodes[socket as usize];
+        let head = node.log.copy_header(va as usize);
+
+        // 3. decrement live size of segment
+        let idx: usize = node.manager.segment_of(va as usize);
+        self.nodes[socket as usize].seginfo
+            .decr_live(idx, head.len_with_header());
+
+        // epoch::quiesce();
     }
 
     pub fn pin(key: u64) {

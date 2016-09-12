@@ -3,7 +3,5 @@ set -e
 set -u
 
 cargo build --lib --release
-make -C tests/Makefile.shuffle
-cd tests
-    ./shuffle
+make -C tests/shuffle/
 

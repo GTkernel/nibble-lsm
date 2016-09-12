@@ -268,6 +268,8 @@ pub struct ObjDesc {
     pub key: u64,
     pub value: Pointer<u8>,
     pub vlen: usize,
+    // false - we do everything but copy the object itself
+    pub copy: bool,
 }
 
 
@@ -275,7 +277,7 @@ impl ObjDesc {
 
     /// Create ObjDesc where key is str and value is arbitrary memory.
     pub fn new(key: u64, value: Pointer<u8>, vlen: usize) -> Self {
-        ObjDesc { key: key, value: value, vlen: vlen }
+        ObjDesc { key: key, value: value, vlen: vlen, copy: true }
     }
 
     /// Create ObjDesc where key and value are String
@@ -284,6 +286,18 @@ impl ObjDesc {
             key: key,
             value: Pointer(value.as_ptr()),
             vlen: value.len(),
+            copy: true,
+        }
+    }
+
+    /// Used to implement 'alloc' behavior (as opposed to PUT).
+    pub fn null(key: u64, vlen: usize) -> Self {
+        ObjDesc {
+            key: key,
+            value: Pointer(ptr::null::<u8>()),
+            vlen: vlen,
+            // nothing to copy
+            copy: false,
         }
     }
 
@@ -457,7 +471,13 @@ impl Segment {
                 self.append_safe(header.as_ptr(), hlen);
                 let v = &buf.key as *const _ as *const u8;
                 self.append_safe(v, mem::size_of::<u64>());
-                self.append_safe(buf.value.0 as *const u8, buf.vlen as usize);
+                if buf.copy {
+                    self.append_safe(buf.value.0 as *const u8,
+                        buf.vlen as usize);
+                } else {
+                    // forward the head without copying
+                    incr!(self.head, buf.vlen);
+                }
                 self.nobj += 1;
                 self.update_header(1);
                 Ok(va)
@@ -620,9 +640,10 @@ impl Segment {
     /// Append some buffer safely across block boundaries (if needed).
     /// Caller must ensure the containing segment has sufficient
     /// capacity.
+    #[inline]
     fn append_safe(&mut self, from: *const u8, len: usize) {
-        assert!(len <= self.rem);
-        assert_eq!(self.head.is_some(), true);
+        debug_assert!(len <= self.rem);
+        debug_assert_eq!(self.head.is_some(), true);
         let mut remblk = self.rem_in_block();
         // 1. If buffer fits in remainder of block, just copy it
         if len <= remblk {

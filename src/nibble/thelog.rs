@@ -46,7 +46,9 @@ impl EntryHeader {
 
     pub fn new(desc: &ObjDesc) -> Self {
         assert!(desc.keylen() <= usize::max_value());
-        assert!(!desc.getvalue().0 .is_null());
+        // NOTE an ObjDesc may have a null value pointer,
+        // as it may originate from an alloc instead of a PUT.
+        // assert!(!desc.getvalue().0 .is_null());
         EntryHeader {
             keylen: desc.keylen() as u32,
             datalen: desc.valuelen() as u32,
@@ -122,7 +124,7 @@ impl LogHead {
     }
 
     pub fn append(&mut self, buf: &ObjDesc) -> Status {
-        assert!(buf.len_with_header() <
+        debug_assert!(buf.len_with_header() <
                 (SEGMENT_SIZE-size_of::<SegmentHeader>()),
                 "object {} larger than segment {}",
                 buf.len_with_header(), SEGMENT_SIZE);
@@ -136,6 +138,7 @@ impl LogHead {
         }
         // check if the object can fit in remaining space
         else {
+            // XXX why clone each time???
             let segref = self.segment.clone().unwrap();
             roll = {
                 let seg = segref.read();
