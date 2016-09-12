@@ -54,8 +54,8 @@ enum {
 };
 
 // Given command arguments (no need to modify here)
-ul nthreads;
-ul size; // size of object
+static ul nthreads;
+static ul size; // size of object
 
 // Control over object sizes generated. There is a first ('size') and
 // a second ('size' * DELTA) with variation around the size in the
@@ -125,6 +125,7 @@ void* worker(void *args_) {
         (struct worker_args*)args_;
 
     ul many = 0;
+    const ul npairs = nthreads / 2;
 
     // As Nibble requires keys, we must choose a starting key that,
     // when incremented, does not practically lead to overlap amongst
@@ -136,7 +137,7 @@ void* worker(void *args_) {
     // to reuse keys :)
     ul key = (u64)gettid() * (2ul << 44);
 
-    for (ul q = 0; q < nthreads/2; q++) {
+    for (ul q = 0; q < npairs; q++) {
         cq_init(&args->queues[q]);
         //printf("worker %lu queue %p\n", args->id, &args->queues[q]);
     }
@@ -160,14 +161,14 @@ void* worker(void *args_) {
     setup_sizes(nsizes, sizes1, sizes2, &rdata);
 
     // randomize the consumer queues we push to
-    ul *qs = calloc(nthreads/2, sizeof(*qs));
+    ul *qs = calloc(npairs, sizeof(*qs));
     assert(qs);
-    for (ul i = 0; i < nthreads/2; i++)
+    for (ul i = 0; i < npairs; i++)
         qs[i] = i;
-    shuffle_ul(qs, nthreads/2, &rdata);
-    shuffle_ul(qs, nthreads/2, &rdata);
+    shuffle_ul(qs, npairs, &rdata);
+    shuffle_ul(qs, npairs, &rdata);
     // number of consumer threads to communicate with
-    ul nqs = (nthreads/2);// / 4;
+    ul nqs = (npairs);// / 4;
 
     atomic_sub_fetch(&warmup_barrier, 1);
     while (atomic_load(&warmup_barrier) > 0)
@@ -298,13 +299,14 @@ out:;
 void* consumer(void *args_) {
     struct consumer_args *args =
         (struct consumer_args*)args_;
+    const ul npairs = nthreads / 2;
 
-    for (ul q = 0; q < nthreads/2; q++) {
+    for (ul q = 0; q < npairs; q++) {
         //printf("consumer %lu queue %p\n",
                 //args->id, args->queues[q]);
     }
 
-    ul many = 0;
+    ul many = 0, iters = 0;
 
     struct drand48_data rdata;
     srand48_r((ul)args, &rdata);
@@ -313,48 +315,34 @@ void* consumer(void *args_) {
     while (atomic_load(&warmup_barrier) > 0)
         ;
 
-#if defined(PRINT_PROGRESS)
-    ul last_print_time = 0ul;
-    ul partial_many = 0ul;
-#endif
-
 #define FREE(ii)    nibble_free(b->keys[ii])
 
     ul start = rdtsc();
     struct batch *b;
     while (1) {
         // find any batch that is ready
-        for (ul prod = 0; prod < nthreads/2; prod++) {
+        for (ul prod = 0; prod < npairs; prod++) {
             struct cqueue *q = args->queues[prod];
-            if (cq_pop_try(q, (ul*)&b)) {
-                assert(b->status == FREE_OK);
-                for (ul i = 0; i < NPTRS; i+=16) {
-                    FREE(i+0); FREE(i+1);
-                    FREE(i+2); FREE(i+3);
-                    FREE(i+4); FREE(i+5);
-                    FREE(i+6); FREE(i+7);
-                    FREE(i+8); FREE(i+9);
-                    FREE(i+10); FREE(i+11);
-                    FREE(i+12); FREE(i+13);
-                    FREE(i+14); FREE(i+15);
-                }
-                b->status = ALLOC_OK; // we're done
-                many += NPTRS;
-#if defined(PRINT_PROGRESS)
-                partial_many += NPTRS;
-#endif
+            if (!cq_pop_try(q, (ul*)&b))
+                continue;
+            //assert(b->status == FREE_OK);
+            for (ul i = 0; i < NPTRS; i+=16) {
+                FREE(i+0); FREE(i+1);
+                FREE(i+2); FREE(i+3);
+                FREE(i+4); FREE(i+5);
+                FREE(i+6); FREE(i+7);
+                FREE(i+8); FREE(i+9);
+                FREE(i+10); FREE(i+11);
+                FREE(i+12); FREE(i+13);
+                FREE(i+14); FREE(i+15);
             }
-            ul sec = (rdtsc()-start) / ticks_per_sec;
-#if defined(PRINT_PROGRESS)
-            if (args->id < 2 && (sec - last_print_time) > 5) {
-                float ops = (partial_many/1e3) / (sec - last_print_time);
-                printf("c %lu kops/sec: %.2f\n", args->id, ops);
-                last_print_time = sec;
-                partial_many = 0ul;
+            b->status = ALLOC_OK; // we're done
+            many += NPTRS;
+            if (0 == (++iters & 0xff)) {
+                ul sec = (rdtsc()-start) / ticks_per_sec;
+                if (sec < TEST_SKIP_FIRST_SEC)
+                    many = 0ul;
             }
-#endif
-            if (sec < TEST_SKIP_FIRST_SEC)
-                many = 0ul;
         }
         if (stop)
             goto out;
