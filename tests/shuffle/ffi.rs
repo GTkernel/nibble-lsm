@@ -9,7 +9,7 @@ extern crate nibble;
 // use nibble::clock;
 use nibble::common::{Pointer,ErrorCode,rdrand,rdrandq};
 // use nibble::epoch;
-// use nibble::logger;
+use nibble::logger;
 // use nibble::memory;
 use nibble::nib::{self,Nibble};
 use nibble::numa::{self,NodeId};
@@ -20,14 +20,15 @@ use nibble::numa::{self,NodeId};
 // use std::mem;
 // use std::sync::Arc;
 // use std::sync::atomic::*;
-// use std::thread::{self,JoinHandle};
-// use std::time::{Instant,Duration};
+use std::thread::{self,JoinHandle};
+use std::time::{Instant,Duration};
 use std::ptr::null;
 
 static mut NIBBLE: Pointer<Nibble> = Pointer(null::<Nibble>());
 
 #[no_mangle] pub extern
 fn nibble_default() {
+	logger::enable();
 	println!("# Nibble allocating...");
 	let nib: Box<Nibble> = Box::new(Nibble::default());
 	println!("# Nibble enabling compaction");
