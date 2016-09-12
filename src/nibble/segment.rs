@@ -477,14 +477,33 @@ impl Segment {
                     self.append_safe(buf.value.0 as *const u8,
                         buf.vlen as usize);
                 } else {
-                    // forward the head without copying
-                    incr!(self.head, buf.vlen);
+                    self.bump_head(buf.vlen as usize);
                 }
                 self.nobj += 1;
                 self.update_header(1);
                 Ok(va)
             } else { Err(ErrorCode::SegmentFull) }
         } else { Err(ErrorCode::SegmentClosed) }
+    }
+
+    /// Bump the head offset for this segment as if we appended
+    /// the given bytes (but we do not do any copying). Used to
+    /// implement Nibble::alloc. append_safe performs the same work,
+    /// but incrementally as it copies each piece.
+    #[inline]
+    fn bump_head(&mut self, len: usize) {
+        let remblk = self.rem_in_block();
+        if len < remblk {
+            incr!(self.head, len);
+            debug_assert!((self.head.unwrap() -
+                self.blocks[self.curblk.unwrap()].addr) < BLOCK_SIZE);
+        } else {
+            let nblks: usize = 1 + (len - remblk) / BLOCK_SIZE;
+            self.next_block(nblks);
+            let offset = (len - remblk) % BLOCK_SIZE;
+            incr!(self.head, offset);
+        }
+        self.rem -= len;
     }
 
     /// Copy an entry from one set of blocks to this segment. Used by
@@ -566,20 +585,23 @@ impl Segment {
 
     /// Increment the head offset into the start of the next block.
     /// Return false if we cannot roll because we're already at the
-    /// final block.
-    fn next_block(&mut self) -> bool {
-        assert_eq!(self.head.is_some(), true);
-        assert_eq!(self.curblk.is_some(), true);
+    /// final block. 'n' specifies how many blocks to increment by.
+    #[inline]
+    fn next_block(&mut self, n: usize) -> bool {
+        debug_assert_eq!(self.head.is_some(), true);
+        debug_assert_eq!(self.curblk.is_some(), true);
         let mut curblk = self.curblk.unwrap();
         let numblks: usize = self.blocks.len();
-        assert!(numblks > 0);
-        if curblk < (numblks - 1) {
-            curblk += 1;
+        debug_assert!(numblks > 0);
+        if (curblk + n) < numblks {
+            curblk += n;
             self.curblk = Some(curblk);
             self.head = Some(self.blocks[curblk].addr);
             true
         } else {
-            warn!("block roll asked on last block");
+            // this can happen if the object fits _exactly_ into the
+            // remainder space of a segment - it's ok, we just ignore
+            // this request
             false
         }
     }
@@ -660,7 +682,7 @@ impl Segment {
             }
             incr!(self.head, len);
             if len == remblk {
-                self.next_block();
+                self.next_block(1);
             }
         }
         // 2. If it spills over, perform two (or more) copies.
@@ -680,7 +702,7 @@ impl Segment {
                 loc = (from as usize + amt) as *const u8;
                 // If we exceeded the block, get the next one
                 if remblk == amt {
-                    assert_eq!(self.next_block(), true);
+                    self.next_block(1);
                 }
             }
         }
