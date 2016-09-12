@@ -138,12 +138,9 @@ impl LogHead {
         }
         // check if the object can fit in remaining space
         else {
-            // XXX why clone each time???
-            let segref = self.segment.clone().unwrap();
-            roll = {
-                let seg = segref.read();
-                !seg.can_hold(buf)
-            };
+            roll = self.segment.as_ref().map(|seg|
+                !seg.read().can_hold(buf)
+            ).unwrap();
             if roll {
                 debug!("rolling: head cannot hold new object");
             }
@@ -156,13 +153,12 @@ impl LogHead {
             }
         }
 
-        // XXX clone then lock.. yuck
-        let segref = self.segment.clone().unwrap();
-        let mut seg = segref.write();
-        match seg.append(buf) {
-            Err(s) => panic!("has space but append failed: {:?}",s),
-            va @ Ok(_) => va,
-        }
+        self.segment.as_ref().map(|seg| {
+            match seg.write().append(buf) {
+                Err(s) => panic!("has space but append failed: {:?}",s),
+                va @ Ok(_) => va,
+            }
+        }).unwrap()
     }
 
     //

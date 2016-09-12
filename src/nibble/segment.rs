@@ -544,16 +544,13 @@ impl Segment {
     }
 
     /// Increment values in header by specified amount
-    /// TODO can i directly update the value? like in C:
-    ///         struct header *h = (struct header*)self.front;
-    ///         h->num_objects++;
+    #[inline(always)]
     fn update_header(&self, n: u32) {
-        assert_eq!(self.front.is_some(), true);
-        let mut header: SegmentHeader;
-        let p = self.front.unwrap() as *mut SegmentHeader;
-        unsafe { header = ptr::read(p); }
+        debug_assert_eq!(self.front.is_some(), true);
+        let mut header: &mut SegmentHeader = unsafe {
+            &mut *(self.front.unwrap() as *mut SegmentHeader)
+        };
         header.num_objects += n;
-        unsafe { ptr::write(p, header); }
     }
 
     /// Increment the head offset into the start of the next block.
