@@ -35,11 +35,9 @@ struct Bucket {
 
 impl fmt::Debug for Bucket {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "Bucket {{ ver {} key {:x} {:x} {:x} {:x} val {:x} {:x} {:x} {:x}  }}",
+        write!(f, "Bucket {{ ver {} key {:x} {:x} {:x}  }}",
                self.version,
-               self.key[0], self.key[1], self.key[2], self.key[3],
-               self.value[0], self.value[1], self.value[2], self.value[3]
-               )
+               self.key[0], self.key[1], self.key[2])
     }
 }
 
