@@ -307,7 +307,7 @@ impl Nibble {
         let obj = ObjDesc::null(key, len as usize);
 
         let res = self.nodes[sock as usize].log.append(&obj);
-        assert_eq!(res.is_ok(), true);
+        debug_assert_eq!(res.is_ok(), true);
         va = res.unwrap();
 
         let ientry = merge(sock as u16, va as u64);
@@ -315,8 +315,8 @@ impl Nibble {
         // 2. update reference to object
         let (ok,opt) = self.index.update(obj.key, ientry);
         // verify this inserted, and was not an update
-        assert_eq!(ok, true);
-        assert_eq!(opt.is_none(), true);
+        debug_assert_eq!(ok, true);
+        debug_assert_eq!(opt.is_none(), true);
 
         // epoch::quiesce();
         Pointer(va as *const u8)
