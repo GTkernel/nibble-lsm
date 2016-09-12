@@ -250,12 +250,16 @@ impl Log {
         // compared to random assignment and hoping for luck
         let mut i = clock::rdtscp_id() as usize % self.nheads;
 
+        // TODO keep track of #times we had to iterate for avail head
+
         // 1. pick a log head and append
         'again: loop {
             if let Some(mut h) = self.heads[i].try_lock() {
                 match h.append(buf) {
                     Err(e) => match e {
                         // try another log head instead
+                        // FIXME if we try all and they return OOM,
+                        // we should probably stop spinning
                         ErrorCode::OutOfMemory =>  {
                             i = (i + 1) % self.nheads;
                             continue 'again;
