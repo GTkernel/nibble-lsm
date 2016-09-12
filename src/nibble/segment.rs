@@ -301,10 +301,12 @@ impl ObjDesc {
         }
     }
 
+    #[inline(always)]
     pub fn len(&self) -> usize {
         mem::size_of::<u64>() + self.vlen
     }
 
+    #[inline(always)]
     pub fn len_with_header(&self) -> usize {
         size_of::<EntryHeader>() + self.len()
     }
@@ -531,14 +533,23 @@ impl Segment {
         Some(new_va)
     }
 
+    #[inline(always)]
     pub fn close(&mut self) { self.closed = true; }
+    #[inline(always)]
     pub fn nobjects(&self) -> usize { self.nobj }
+    #[inline(always)]
     pub fn nblocks(&self) -> usize { self.blocks.len() }
+    #[inline(always)]
     pub fn slot(&self) -> usize { self.slot }
+    #[inline(always)]
     pub fn len(&self) -> usize { self.len }
+    #[inline(always)]
     pub fn socket(&self) -> NodeId { self.socket }
+    #[inline(always)]
     pub fn remaining(&self) -> usize { self.rem }
+    #[inline(always)]
     pub fn can_hold_amt(&self, len: usize) -> bool { self.rem >= len }
+    #[inline(always)]
     pub fn can_hold(&self, buf: &ObjDesc) -> bool {
         self.can_hold_amt(buf.len_with_header())
     }

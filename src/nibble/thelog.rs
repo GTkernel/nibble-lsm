@@ -62,9 +62,13 @@ impl EntryHeader {
         }
     }
 
+    #[inline(always)]
     pub fn getdatalen(&self) -> u32 { self.datalen }
+    #[inline(always)]
     pub fn getkeylen(&self) -> u32 { self.keylen }
+    #[inline(always)]
     pub fn object_length(&self) -> u32 { self.datalen + self.keylen }
+    #[inline(always)]
     pub fn len_with_header(&self) -> usize {
         (self.object_length() as usize) + size_of::<EntryHeader>()
     }
