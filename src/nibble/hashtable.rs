@@ -51,7 +51,7 @@ type find_ops = (Option<usize>, Option<usize>);
 // TODO Use RAII for the locks
 impl Bucket {
 
-    #[inline]
+    #[inline(always)]
     pub fn try_bump_version(&self, version: u64) -> bool {
         let v = &self.version as *const u64 as *mut u64;
         let (val,ok) = unsafe {
@@ -60,7 +60,7 @@ impl Bucket {
         ok
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn bump_version(&self) {
         let v = &self.version as *const u64 as *mut u64;
         unsafe {
@@ -69,13 +69,13 @@ impl Bucket {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn read_version(&self) -> u64 {
         let v = &self.version as *const u64;
         unsafe { ptr::read_volatile(v) }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn read_key(&self, idx: usize) -> u64 {
         debug_assert!(idx < ENTRIES_PER_BUCKET);
         unsafe {
@@ -84,7 +84,7 @@ impl Bucket {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn read_value(&self, idx: usize) -> u64 {
         debug_assert!(idx < ENTRIES_PER_BUCKET);
         unsafe {
@@ -93,7 +93,7 @@ impl Bucket {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn set_key(&self, idx: usize, key: u64) {
         debug_assert!(idx < ENTRIES_PER_BUCKET);
         debug_assert!(key != INVALID_KEY);
@@ -104,7 +104,7 @@ impl Bucket {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn set_value(&self, idx: usize, value: u64) -> u64 {
         debug_assert!(idx < ENTRIES_PER_BUCKET);
         let ret: u64;
@@ -119,7 +119,7 @@ impl Bucket {
         ret
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn del_key(&self, idx: usize, old: &mut u64) {
         debug_assert!(idx < ENTRIES_PER_BUCKET);
         unsafe {
@@ -134,7 +134,7 @@ impl Bucket {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn wait_version(&self) -> u64 {
         let mut v = self.read_version();
         loop {
@@ -144,7 +144,7 @@ impl Bucket {
         v
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn wait_lock(&self) {
         let mut v;
         'retry: loop {
@@ -159,12 +159,12 @@ impl Bucket {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn unlock(&self) {
         self.bump_version();
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn find_key(&self, key: u64) -> find_ops {
         let mut idx: Option<usize> = None;
         let mut inv: Option<usize> = None;
@@ -392,7 +392,7 @@ impl HashTable {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn make_hash(value: u64) -> u64 {
         fnv1a(value)
 
@@ -404,7 +404,7 @@ impl HashTable {
     // Private methods
     //
 
-    #[inline]
+    #[inline(always)]
     fn make_sip<T: hash::Hasher>(her: &mut T, value: u64) -> u64 {
         her.write_u64(value);
         her.finish()

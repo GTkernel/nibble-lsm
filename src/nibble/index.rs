@@ -56,7 +56,7 @@ impl Index {
     /// Return value of object if it exists, else None.
     #[inline(always)]
     pub fn get(&self, key: u64) -> Option<IndexEntry> {
-        assert!(key > 0);
+        debug_assert!(key > 0);
         let hash = HashTable::make_hash(key);
         let tidx = self.table_idx(hash);
         debug_assert!(tidx < self.tables.len());
@@ -80,7 +80,7 @@ impl Index {
     pub fn update(&self, key: u64, value: IndexEntry)
         -> (bool,Option<IndexEntry>) {
 
-        assert!(key > 0);
+        debug_assert!(key > 0);
         let hash = HashTable::make_hash(key);
         let tidx = self.table_idx(hash);
         debug_assert!(tidx < self.tables.len());
@@ -96,7 +96,7 @@ impl Index {
     /// None.
     #[inline(always)]
     pub fn remove(&self, key: u64) -> Option<IndexEntry> {
-        assert!(key > 0);
+        debug_assert!(key > 0);
         let hash = HashTable::make_hash(key);
         let tidx = self.table_idx(hash);
         debug_assert!(tidx < self.tables.len());
@@ -116,7 +116,7 @@ impl Index {
     pub fn update_lock_ifeq(&self, key: u64, new: u64, old: u64)
         -> Option<LockedBucket> {
 
-        assert!(key > 0);
+        debug_assert!(key > 0);
         let hash = HashTable::make_hash(key);
         let tidx = self.table_idx(hash);
         debug_assert!(tidx < self.tables.len());
