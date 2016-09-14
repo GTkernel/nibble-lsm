@@ -188,13 +188,26 @@ void* worker(void *args_) {
     ul partial_many = 0ul;
 #endif
 
+#define CHECK_BATCH \
+    do { \
+        b = &batches[next_b]; \
+        next_b = (next_b + 1) % NBATCHES; \
+        if (b->status == ALLOC_OK) \
+            goto found; \
+    } while (0)
+
     while (1) {
         struct batch *b;
         do { // search for a ready batch
-            b = &batches[next_b];
-            next_b = (next_b + 1) % NBATCHES;
-        } while (b->status != ALLOC_OK);
+            CHECK_BATCH; CHECK_BATCH; CHECK_BATCH; CHECK_BATCH;
+            CHECK_BATCH; CHECK_BATCH; CHECK_BATCH; CHECK_BATCH;
+            CHECK_BATCH; CHECK_BATCH; CHECK_BATCH; CHECK_BATCH;
+            CHECK_BATCH; CHECK_BATCH; CHECK_BATCH; CHECK_BATCH;
+            CHECK_BATCH; CHECK_BATCH; CHECK_BATCH; CHECK_BATCH;
+            CHECK_BATCH; CHECK_BATCH; CHECK_BATCH; CHECK_BATCH;
+        } while (1);
 
+found:;
         if (stop)
             goto out;
 
