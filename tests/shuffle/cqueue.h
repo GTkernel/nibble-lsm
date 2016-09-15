@@ -40,11 +40,6 @@ struct cqueue {
     // keep both head and item in same cache line
     uint64_t head __ALIGN64;
     volatile uint64_t array[__CQ_ENTRIES] __ALIGN64;
-#if defined(CQUEUE_USE_LOCKS)
-    // separate push and pop locks
-    uint8_t pushl __ALIGN64;
-    uint8_t popl  __ALIGN64;
-#endif
     uint64_t tail __ALIGN64;
 };
 
@@ -55,15 +50,10 @@ _Static_assert(__CQ_ENTRIES >= 2,
 
 typedef struct cqueue cqueue_t;
 
-static void __unlock_push(cqueue_t *queue);
-static void __unlock_pop(cqueue_t *queue);
-
 static inline
 void cq_init(cqueue_t *queue) {
     memset(queue, 0, sizeof(*queue));
     queue->head = 1ul;
-    __unlock_push(queue);
-    __unlock_pop(queue);
 }
 
 static inline
@@ -93,52 +83,18 @@ bool cq_full_tail(cqueue_t *queue) {
     return queue->head == *tail;
 }
 
-bool     cq_pop_try(cqueue_t *queue, uint64_t *val);
-uint64_t cq_pop(cqueue_t *queue);
-void     cq_push(cqueue_t *queue, uint64_t val);
-
 //                      //
 // Private API below    //
 //                      //
 
-#if defined(CQUEUE_USE_LOCKS)
 static inline
-void __lock_push(cqueue_t *queue) {
-    while (atomic_tas(&queue->pushl))
-        ;
-}
-
-static inline
-void __unlock_push(cqueue_t *queue) {
-    atomic_clear(&queue->pushl);
-}
-
-static inline
-void __lock_pop(cqueue_t *queue) {
-    while (atomic_tas(&queue->popl))
-        ;
-}
-
-static inline
-void __unlock_pop(cqueue_t *queue) {
-    atomic_clear(&queue->popl);
-}
-#else
-static inline void __lock_push(cqueue_t *__UNUSED queue) { ; }
-static inline void __unlock_push(cqueue_t *__UNUSED queue) { ; }
-static inline void __lock_pop(cqueue_t *__UNUSED queue) { ; }
-static inline void __unlock_pop(cqueue_t *__UNUSED queue) { ; }
-#endif /* CQUEUE_USE_LOCKS */
-
 void cq_push(cqueue_t *queue, uint64_t val) {
-    __lock_push(queue);
     while (cq_full_tail(queue))
         ;
     assert(queue->head < __CQ_ENTRIES);
     uint64_t prior = queue->head > 0 ? queue->head-1 : __CQ_ENTRIES-1;
     queue->array[prior] = val;
     queue->head = __CQ_NEXT(queue->head);
-    __unlock_push(queue);
 }
 
 static inline
@@ -148,25 +104,21 @@ void __pop(cqueue_t *queue, uint64_t *val) {
     queue->tail = __CQ_NEXT(queue->tail);
 }
 
+static inline
 uint64_t cq_pop(cqueue_t *queue) {
     uint64_t val;
-    __lock_pop(queue);
     while (cq_empty_head(queue))
         ;
     __pop(queue, &val);
-    __unlock_pop(queue);
     return val;
 }
 
+static inline
 bool cq_pop_try(cqueue_t *queue, uint64_t *val) {
-    if (cq_empty_head(queue))
-        return false;
-    __lock_pop(queue);
     bool ret = false;
     if (!cq_empty_head(queue)) {
         __pop(queue, val);
         ret = true;
     }
-    __unlock_pop(queue);
     return ret;
 }
