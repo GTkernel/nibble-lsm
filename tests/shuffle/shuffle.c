@@ -28,12 +28,12 @@
 
 enum {
     // We need to know this to append to the more performant log.
-    CPUS_PER_SOCKET = 18,
+    CPUS_PER_SOCKET = 15,
     TOTAL_SOCKETS = 16,
 
     // only begin measuring after this many seconds
     // to wait for test to stabilize
-    TEST_SKIP_FIRST_SEC = 20,
+    TEST_SKIP_FIRST_SEC = 5,
 
     // whole test runs this long
     // make this at least 30 seconds greater than the skip length
@@ -45,12 +45,12 @@ enum {
 
     // total set of batches held by each worker
     // need a lot to satisfy the hungry consumers
-    NBATCHES = 1<<16,
+    NBATCHES = 1<<12, // 16
 
     // number of objects within each batch
     // large enough to reduce pushing/popping frequency
     // 4k seems to be a good amount (keep as power of two)
-    NPTRS = 1<<10,
+    NPTRS = 1<<14, // 10
 };
 
 // Given command arguments (no need to modify here)
