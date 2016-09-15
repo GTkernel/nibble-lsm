@@ -17,14 +17,21 @@ use common::{prefetchw};
 use logger::*;
 use numa::{self,NodeId};
 
+// Methods for locking a bucket
 // 1. use versioned lock
 // 2. use ticket lock
 // 3. use array/queue lock?
 
+// Methods for resizing
+// 1. Lock entire table, allocate new one, copy over. This is what
+//    nearly all hash table implementations do.
+// 2. Linear hashing (not linear probing; lock one bucket at a time,
+//    relocate objects among new bucket and old)
+
 const VERSION_MASK: u64 = 0x1;
 const ENTRIES_PER_BUCKET: usize = 3;
 
-// We reserve this value to indicate the bucket slot is empty.
+/// We reserve this value to indicate the bucket slot is empty.
 const INVALID_KEY: u64 = 0u64;
 
 struct Bucket {
