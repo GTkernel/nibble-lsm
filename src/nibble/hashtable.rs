@@ -283,6 +283,7 @@ impl HashTable {
         let mut opts = bucket.find_key(key);
         let (e,inv) = opts;
         if e.is_none() && inv.is_none() {
+            warn!("Bucket is full!");
             return (false,None);
         }
 
