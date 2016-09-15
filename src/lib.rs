@@ -21,6 +21,8 @@
 #![allow(dead_code)]
 #![allow(unreachable_code)]
 
+#![forbid(const_err)]
+
 #[macro_use]
 extern crate log;
 

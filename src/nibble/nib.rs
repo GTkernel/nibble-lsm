@@ -77,12 +77,14 @@ impl Nibble {
         // XXX won't need this once the index can resize
         let nitems = 1usize << 30;
         let n_per  = nitems / ntables;
-        info!("nitems:  {}", nitems);
-        info!("Tables:  {}", ntables);
-        info!("   per:  {}", n_per);
+        info!("     nitems:     {}", nitems);
+        info!("     Tables:     {}", ntables);
+        info!("        per:     {}", n_per);
 
-        info!(" segsz:  {}", SEGMENT_SIZE);
-        info!(" blksz:  {}", BLOCK_SIZE);
+        info!("      segsz:     {}", SEGMENT_SIZE);
+        info!("      blksz:     {}", BLOCK_SIZE);
+        info!("   blks/seg:     {}", BLOCKS_PER_SEG);
+        info!("  nblks var:     {}", ALLOC_NBLKS_VAR);
 
         let index = Arc::new(Index::new(ntables, n_per));
 

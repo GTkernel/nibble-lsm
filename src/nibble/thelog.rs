@@ -12,6 +12,16 @@ use std::ptr;
 
 use parking_lot as pl;
 
+/// 2^this number of blocks to vary new segment allocations
+pub const ALLOC_NBLKS_VAR:  usize = BLOCKS_PER_SEG >> 2;
+
+/// If this breaks compilation, you need to make segments larger or
+/// blocks smaller.
+#[allow(dead_code)]
+fn __assert_Check_nblks_Not_Zero() {
+    1/ALLOC_NBLKS_VAR;
+}
+
 /// Acquire read lock on SegmentRef
 macro_rules! rlock {
     ( $segref:expr ) => {
@@ -170,8 +180,15 @@ impl LogHead {
     //
 
     /// Replace the head segment.
+    /// Vary the size slightly to avoid contention on future
+    /// allocations (in case many threads roll all at once).
     fn replace(&mut self) -> Status {
-        self.segment = self.manager.alloc();
+        //self.segment = self.manager.alloc();
+        let nblks: usize = unsafe {
+            (rdrand() as usize % ALLOC_NBLKS_VAR) +
+                BLOCKS_PER_SEG
+        };
+        self.segment = self.manager.alloc_size(nblks);
         match self.segment {
             None => Err(ErrorCode::OutOfMemory),
             _ => Ok(1),
