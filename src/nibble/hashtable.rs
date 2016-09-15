@@ -440,8 +440,9 @@ mod tests {
     fn init() {
         logger::enable();
         println!("");
-        let ht = HashTable::new(1024, 0);
-        let nb = 1024 / ENTRIES_PER_BUCKET;
+        let tblsize = 1<<20;
+        let ht = HashTable::new(tblsize, 0);
+        let nb = tblsize / ENTRIES_PER_BUCKET;
         assert_eq!(ht.nbuckets, nb);
     }
 
@@ -451,7 +452,7 @@ mod tests {
         logger::enable();
         println!("");
 
-        let ht = HashTable::new(1024, 0);
+        let ht = HashTable::new(1<<20, 0);
         let mut value: u64 = 0;
         for i in 0..8192 {
             let mut key;
@@ -472,7 +473,7 @@ mod tests {
         let mut key: u64;
 
         let ntables = 16;
-        let tblsz = 1usize << 18;
+        let tblsz = 1usize << 20;
 
         let mut tbl_fills: usize = 0;
         let mut rng = rand::thread_rng();
@@ -507,7 +508,7 @@ mod tests {
         logger::enable();
         println!("");
 
-        let ht = HashTable::new(1024,0);
+        let ht = HashTable::new(1<<20,0);
         let mut value: u64 = 0;
         let mut keys: HashSet<u64> = HashSet::with_capacity(8192);
 
@@ -545,7 +546,7 @@ mod tests {
         logger::enable();
         println!("");
 
-        let ht = HashTable::new(1024,0);
+        let ht = HashTable::new(1<<20,0);
         let mut keys: Vec<u64> = Vec::new();
 
         let mut rng = rand::thread_rng();
@@ -635,12 +636,12 @@ mod tests {
 
     #[test]
     fn threads_read_sm() {
-        threads_read_n(1024, 8);
+        threads_read_n(1<<17, 8);
     }
 
     #[test]
     fn threads_read_med() {
-        threads_read_n(1_usize<<20, 8);
+        threads_read_n(1_usize<<23, 8);
     }
 
     // each threads gets some disjoint subset of keys.
