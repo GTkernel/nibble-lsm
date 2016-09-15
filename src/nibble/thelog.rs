@@ -265,7 +265,8 @@ impl Log {
 
         // using processor ID should hopefully avoid conflicts
         // compared to random assignment and hoping for luck
-        let mut i = clock::rdtscp_id() as usize % self.nheads;
+        let (sockID,coreID) = clock::rdtscp_id();
+        let mut i = coreID as usize % self.nheads;
 
         // TODO keep track of #times we had to iterate for avail head
 

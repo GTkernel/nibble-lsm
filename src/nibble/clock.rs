@@ -18,16 +18,21 @@ pub unsafe fn rdtsc() -> u64 {
     ((high as u64) << 32) | (low as u64)
 }
 
-/// Read the CPU ID using RDTSCP
+/// Read the CPU ID using RDTSCP. Returns (socket,core) where core is
+/// the global core ID, not the socket-local ID.
 /// ca. 30 cycles overhead
+/// On Linux, IA32_TSC_AUX is used to hold the core and node
+/// identifiers; first 12 bits hold the CPU, and bit 12+ hold the NUMA
+/// node. The state of this MSR depends on the implementation of the
+/// OS kernel (it must initialize this value).
 #[inline(always)]
 #[allow(unused_mut)]
-pub fn rdtscp_id() -> u32 {
-    let mut id: u32;
+pub fn rdtscp_id() -> (u32,u32) {
+    let mut ecx: u32;
     unsafe {
-        asm!("rdtscp" : "={ecx}" (id));
+        asm!("rdtscp" : "={ecx}" (ecx));
     }
-    id & 0x1ff // no system yet has >= 512 cores
+    (ecx >> 12, ecx & ((1<<12)-1))
 }
 
 // TODO when RDPID is available, use that instead of RDTSCP
