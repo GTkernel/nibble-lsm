@@ -91,19 +91,24 @@ impl SegmentInfoTable {
         self.table[index].epoch.store(value, self.ordering)
     }
 
-    pub fn incr_live(&self, index: usize, amt: usize) -> usize {
-        let v = self.table[index].live.fetch_add(amt, self.ordering);
-        debug_assert!(v <= SEGMENT_SIZE);
-        v
+    pub fn incr_live(&self, index: usize, amt: usize) {
+        unsafe {
+            self.table.get_unchecked(index)
+                .live.fetch_add(amt, self.ordering);
+        }
+        //debug_assert!(v <= SEGMENT_SIZE);
     }
 
     pub fn incr_epoch(&self, index: usize, amt: usize) -> usize {
         self.table[index].epoch.fetch_add(amt, self.ordering)
     }
 
-    pub fn decr_live(&self, index: usize, amt: usize) -> usize {
+    pub fn decr_live(&self, index: usize, amt: usize) {
         debug_assert!(self.get_live(index) >= amt);
-        self.table[index].live.fetch_sub(amt, self.ordering)
+        unsafe {
+            self.table.get_unchecked(index)
+                .live.fetch_sub(amt, self.ordering);
+        }
     }
 
     pub fn decr_epoch(&self, index: usize, amt: usize) -> usize {
