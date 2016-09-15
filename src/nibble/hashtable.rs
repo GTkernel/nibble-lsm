@@ -256,6 +256,7 @@ impl HashTable {
         prefetchw(addr);
     }
 
+    #[inline(always)]
     fn as_slice(&self) -> &[Bucket] {
         unsafe {
             slice::from_raw_parts(self.buckets.0, self.nbuckets)
@@ -270,6 +271,7 @@ impl HashTable {
     /// (true,Some(x)) -> update existing, x is old value
     /// (false,None) -> cannot insert, table full
     /// (false,Some(x)) -> never returned
+    #[inline(always)]
     pub fn put(&self, key: u64, value: u64) -> (bool,Option<u64>) {
         let hash = Self::make_hash(key);
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
@@ -309,6 +311,7 @@ impl HashTable {
         (ok,old)
     }
 
+    #[inline(always)]
     pub fn get(&self, key: u64, value: &mut u64) -> bool {
         let hash = Self::make_hash(key);
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
@@ -333,6 +336,7 @@ impl HashTable {
         }
     }
 
+    #[inline(always)]
     pub fn del(&self, key: u64, old: &mut u64) -> bool {
         let hash = Self::make_hash(key);
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
@@ -366,6 +370,7 @@ impl HashTable {
     /// Grab the lock on the bucket holding the key only if the
     /// existing value matches one specified. Before returning,
     /// replace existing value with new.
+    #[inline(always)]
     pub fn update_lock_ifeq(&self, key: u64, new: u64, old: u64)
         -> Option<LockedBucket> {
 
