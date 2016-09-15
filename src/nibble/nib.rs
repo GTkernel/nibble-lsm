@@ -75,7 +75,7 @@ impl Nibble {
         let ntables: usize = numa::NODE_MAP.sockets();
 
         // XXX won't need this once the index can resize
-        let nitems = 1usize << 30;
+        let nitems = 1usize << 32;
         let n_per  = nitems / ntables;
         info!("     nitems:     {}", nitems);
         info!("     Tables:     {}", ntables);
