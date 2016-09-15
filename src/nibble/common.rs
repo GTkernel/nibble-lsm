@@ -43,6 +43,11 @@ unsafe impl<T> Sync for uslice<T> {}
 //      Atomics and numbers and hashing
 //==----------------------------------------------------==//
 
+#[inline(always)] pub
+fn prefetchw(cacheline: *const u8) {
+    unsafe { asm!("prefetchw $0" : : "m" (cacheline) : ) }
+}
+
 #[inline] pub unsafe
 fn atomic_add<T: num::Integer>(loc: *mut T, amt: T) {
     intrinsics::atomic_xadd(loc, amt);

@@ -13,6 +13,7 @@ use std::mem;
 
 use memory::*;
 use common::{Pointer, fnv1a, is_even, is_odd, atomic_add, atomic_cas};
+use common::{prefetchw};
 use logger::*;
 use numa::{self,NodeId};
 
@@ -241,6 +242,18 @@ impl HashTable {
             bucket_mmap: mmap,
             buckets: p,
         }
+    }
+
+    #[inline(always)]
+    pub fn prefetchw(&self, hash: u64) {
+        let bidx = (hash % (self.nbuckets as u64)) as usize;
+        let buckets: &[Bucket] = self.as_slice();
+        let bucket: &Bucket = &buckets[bidx];
+        let addr: *const u8 = unsafe {
+            //&bucket.version as *const _ as *const u8
+            bucket.key.get_unchecked(2) as *const _ as *const u8
+        };
+        prefetchw(addr);
     }
 
     fn as_slice(&self) -> &[Bucket] {
