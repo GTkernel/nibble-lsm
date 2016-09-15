@@ -28,8 +28,8 @@
 
 enum {
     // We need to know this to append to the more performant log.
-    CPUS_PER_SOCKET = 15,
-    TOTAL_SOCKETS = 16,
+    CPUS_PER_SOCKET = 6,
+    TOTAL_SOCKETS = 2,
 
     // only begin measuring after this many seconds
     // to wait for test to stabilize
@@ -37,7 +37,7 @@ enum {
 
     // whole test runs this long
     // make this at least 30 seconds greater than the skip length
-    TEST_LEN_SEC = 60 + TEST_SKIP_FIRST_SEC,
+    TEST_LEN_SEC = 6000 + TEST_SKIP_FIRST_SEC,
 
     // shift between object sizes every this many seconds
     // make this larger than the test runtime to disable
@@ -177,7 +177,6 @@ void* worker(void *args_) {
     for (ul i = 0; i < npairs; i++)
         qs[i] = i; //(i + 2 * args->id) % npairs;
     shuffle_ul(qs, npairs, &rdata);
-
     // number of consumer threads to communicate with
     ul nqs = (npairs);// / 4;
 
@@ -315,14 +314,13 @@ out:;
 void* consumer(void *args_) {
     struct consumer_args *args =
         (struct consumer_args*)args_;
+    const ul npairs = nthreads / 2;
 
     // consumers get odd-numbered CPUs
     int cpu = args->id * 2 + 1;
     //printf("consumer cpu %lu\n", cpu);
     cpu_set_t mask; CPU_ZERO(&mask); CPU_SET(cpu, &mask);
     assert(0 == sched_setaffinity(0, sizeof(mask), &mask));
-
-    const ul npairs = nthreads / 2;
 
     for (ul q = 0; q < npairs; q++) {
         //printf("consumer %lu queue %p\n",
@@ -397,11 +395,13 @@ int main(int narg, char *args[]) {
     fflush(stdout);
 
     nthreads = 2 * strtol(args[1], NULL, 10);
+    const ul npairs = nthreads / 2;
+
     size = strtol(args[2], NULL, 10);
 
-    pthread_t *wtids = calloc(nthreads/2, sizeof(*wtids));
+    pthread_t *wtids = calloc(npairs, sizeof(*wtids));
     assert(wtids);
-    pthread_t *ctids = calloc(nthreads/2, sizeof(*ctids));
+    pthread_t *ctids = calloc(npairs, sizeof(*ctids));
     assert(ctids);
 
     atomic_store(&warmup_barrier, nthreads+1);
@@ -414,13 +414,13 @@ int main(int narg, char *args[]) {
             NBATCHES, NPTRS, nthreads,
             size, (ul)(size*DELTA), DELTA, VARIANCE);
 
-    struct worker_args *wargs = calloc(nthreads/2,sizeof(*wargs));
+    struct worker_args *wargs = calloc(npairs,sizeof(*wargs));
     assert(wargs);
-    struct consumer_args *cargs = calloc(nthreads/2,sizeof(*cargs));
+    struct consumer_args *cargs = calloc(npairs,sizeof(*cargs));
     assert(cargs);
 
-    for (ul t = 0; t < nthreads/2; t++) {
-        wargs[t].queues = malloc(nthreads/2 * sizeof(struct cqueue));
+    for (ul t = 0; t < npairs; t++) {
+        wargs[t].queues = malloc(npairs * sizeof(struct cqueue));
         assert(wargs[t].queues);
         wargs[t].id = t;
         assert(0 == pthread_create(&wtids[t], NULL,
@@ -430,10 +430,10 @@ int main(int narg, char *args[]) {
 
 #if defined(RELEASE_SELF)
 #else
-    for (ul t = 0; t < nthreads/2; t++) {
-        cargs[t].queues = malloc(nthreads/2 * sizeof(struct cqueue*));
+    for (ul t = 0; t < npairs; t++) {
+        cargs[t].queues = malloc(npairs * sizeof(struct cqueue*));
         assert(cargs[t].queues);
-        for (ul p = 0; p < nthreads/2; p++)
+        for (ul p = 0; p < npairs; p++)
             cargs[t].queues[p] = &wargs[p].queues[t];
         cargs[t].id = t;
         assert(0 == pthread_create(&ctids[t], NULL,
@@ -455,9 +455,9 @@ int main(int narg, char *args[]) {
     start = rdtsc();
     puts("# Test starting");
 
-    for (ul t = 0; t < nthreads/2; t++)
+    for (ul t = 0; t < npairs; t++)
         pthread_join(wtids[t], NULL);
-    for (ul t = 0; t < nthreads/2; t++)
+    for (ul t = 0; t < npairs; t++)
         pthread_join(ctids[t], NULL);
 
     ul end = rdtsc();
@@ -468,9 +468,9 @@ int main(int narg, char *args[]) {
     printf("kops/sec %.2f\n", kops/sec);
 
 #if 0
-    for (ul t = 0; t < nthreads/2; t++)
+    for (ul t = 0; t < npairs; t++)
         free(wargs[t].queues);
-    for (ul t = 0; t < nthreads/2; t++)
+    for (ul t = 0; t < npairs; t++)
         free(cargs[t].queues);
     free(wargs);
     free(cargs);
