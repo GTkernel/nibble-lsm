@@ -88,6 +88,7 @@ impl Index {
         debug_assert!(!p.0 .is_null());
         unsafe {
             let ht: &HashTable = &* p.0;
+            //ht.prefetchw(hash); // FIXME where to put?
             ht.put(key, value)
         }
     }
