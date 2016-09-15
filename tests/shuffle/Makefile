@@ -16,7 +16,7 @@ shuffle.o:	shuffle.c Makefile cqueue.h
 .PHONY: shuffle
 shuffle:	libffi.a shuffle.o util.o
 	cargo build --lib --release
-	$(CC) $^ -o $@ $(LDFLAGS) $(LIBS) -L./ -lffi
+	$(CC) shuffle.o util.o -o $@ -L./ -lffi $(LDFLAGS) $(LIBS)
 
 ../../target/release/libnibble.rlib: Makefile
 	cargo build --lib --release
