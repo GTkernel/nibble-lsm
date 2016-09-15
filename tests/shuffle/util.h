@@ -57,6 +57,18 @@ uint64_t rdrand() {
     return r;
 }
 
+// XXX this is highly Linux-specific
+static inline
+void rdtscp_id(int *node, int *cpu)
+{
+    uint64_t ecx = 0;
+    __asm__ volatile ("rdtscp"
+            : "=c" (ecx)
+            : :);
+    *node = ecx >> 12;
+    *cpu = ecx & ((1<<12)-1);
+}
+
 static inline
 uint64_t rdtscp(void)
 {

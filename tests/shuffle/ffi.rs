@@ -30,7 +30,8 @@ static mut NIBBLE: Pointer<Nibble> = Pointer(null::<Nibble>());
 fn nibble_default() {
 	logger::enable();
 	println!("# Nibble allocating...");
-	let nib: Box<Nibble> = Box::new(Nibble::default());
+	//let nib: Box<Nibble> = Box::new(Nibble::default());
+	let nib: Box<Nibble> = Box::new(Nibble::new(1usize<<38));
 	println!("# Nibble enabling compaction");
 	for sock in 0..numa::NODE_MAP.sockets() {
 		nib.enable_compaction(NodeId(sock));

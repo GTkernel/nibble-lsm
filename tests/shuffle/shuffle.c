@@ -120,9 +120,19 @@ struct consumer_args {
     ul id;
 };
 
+//==--------------------------------------------------------------==//
+//      WORKER
+//==--------------------------------------------------------------==//
+
 void* worker(void *args_) {
     struct worker_args *args =
         (struct worker_args*)args_;
+
+    // producers get even-numbered CPUs
+    int cpu = args->id * 2;
+    //printf("producer cpu %lu\n", cpu);
+    cpu_set_t mask; CPU_ZERO(&mask); CPU_SET(cpu, &mask);
+    assert(0 == sched_setaffinity(0, sizeof(mask), &mask));
 
     ul many = 0;
     const ul npairs = nthreads / 2;
@@ -160,13 +170,14 @@ void* worker(void *args_) {
     ul sizes1[nsizes], sizes2[nsizes];
     setup_sizes(nsizes, sizes1, sizes2, &rdata);
 
-    // randomize the consumer queues we push to
+    // offset our starting queue to push to;
+    // can also randomize if you wish
     ul *qs = calloc(npairs, sizeof(*qs));
     assert(qs);
     for (ul i = 0; i < npairs; i++)
-        qs[i] = i;
+        qs[i] = i; //(i + 2 * args->id) % npairs;
     shuffle_ul(qs, npairs, &rdata);
-    shuffle_ul(qs, npairs, &rdata);
+
     // number of consumer threads to communicate with
     ul nqs = (npairs);// / 4;
 
@@ -188,23 +199,30 @@ void* worker(void *args_) {
     ul partial_many = 0ul;
 #endif
 
+#define BATCH(ii) \
+    do { \
+        b = &batches[(next_b+(ii)) % NBATCHES]; \
+        if (b->status == ALLOC_OK) { \
+            next_b = (next_b+(ii)+1) % NBATCHES; \
+            goto found; \
+        } \
+    } while (0)
+
     while (1) {
         struct batch *b;
         do { // search for a ready batch
-            b = &batches[next_b];
-            next_b = (next_b + 1) % NBATCHES;
-        } while (b->status != ALLOC_OK);
+            BATCH(0); BATCH(1); BATCH(2); BATCH(3);
+            BATCH(4); BATCH(5); BATCH(6); BATCH(7);
+            BATCH(8); BATCH(9); BATCH(10); BATCH(11);
+            BATCH(12); BATCH(13); BATCH(14); BATCH(15);
+        } while (1);
+found:;
 
         if (stop)
             goto out;
 
-        // does the CPU ID given by RDTSC match the value
-        // assigned by Linux? FIXME
-        long socket = (rdtsc_id() / CPUS_PER_SOCKET) % TOTAL_SOCKETS;
-
-        //printf("w %lu b %p\n", args->id, b);
-
-        //printf("w %lu b %p exec\n", args->id, b);
+        int cpu, socket;
+        rdtscp_id(&socket, &cpu);
 
 #define ALLOC(ii) \
     do { \
@@ -241,20 +259,11 @@ void* worker(void *args_) {
         }
 #endif
 
-#if defined(RELEASE_SELF)
-        for (ul i = 0; i < NPTRS; i++)
-            free( b->keys[i] );
-        many += NPTRS;
-#if defined(PRINT_PROGRESS)
-        partial_many += NPTRS;
-#endif
-#else   /* RELEASE_SELF */
         // hand it off
         b->status = FREE_OK;
         fullfence();
         cq_push(&args->queues[qs[next_q]], (ul)b);
         next_q = (next_q + 1) % nqs;
-#endif  /* RELEASE_SELF */
 
         ul sec = (rdtsc()-start) / ticks_per_sec;
         if (sec >= TEST_LEN_SEC || stop)
@@ -268,11 +277,14 @@ void* worker(void *args_) {
             last_shift_time = sec;
         }
 #if defined(PRINT_PROGRESS)
-        if (args->id < 2 && (sec - last_print_time) > 5) {
-            float ops = (partial_many/1e3) / (sec - last_print_time);
-            printf("w %lu kops/sec: %.2f\n", args->id, ops);
-            last_print_time = sec;
-            partial_many = 0ul;
+        if ((sec - last_print_time) > 5) {
+            if (args->id < 2) {
+                float ops = (partial_many/1e3) /
+                    (sec - last_print_time);
+                printf("w %lu kops/sec: %.2f\n", args->id, ops);
+                last_print_time = sec;
+                partial_many = 0ul;
+            }
         }
 #endif
         if (sec < TEST_SKIP_FIRST_SEC)
@@ -296,9 +308,20 @@ out:;
     pthread_exit(NULL);
 }
 
+//==--------------------------------------------------------------==//
+//      CONSUMER
+//==--------------------------------------------------------------==//
+
 void* consumer(void *args_) {
     struct consumer_args *args =
         (struct consumer_args*)args_;
+
+    // consumers get odd-numbered CPUs
+    int cpu = args->id * 2 + 1;
+    //printf("consumer cpu %lu\n", cpu);
+    cpu_set_t mask; CPU_ZERO(&mask); CPU_SET(cpu, &mask);
+    assert(0 == sched_setaffinity(0, sizeof(mask), &mask));
+
     const ul npairs = nthreads / 2;
 
     for (ul q = 0; q < npairs; q++) {
@@ -358,6 +381,10 @@ out:;
     pthread_exit(NULL);
 }
 
+//==--------------------------------------------------------------==//
+//      MAIN
+//==--------------------------------------------------------------==//
+
 int main(int narg, char *args[]) {
     if (narg != 3) {
         printf("Usage: %s pairs objsize\n", *args);
@@ -365,11 +392,12 @@ int main(int narg, char *args[]) {
     }
 
     printf("my pid %d\n", getpid());
+    printf("# CPUS_PER_SOCKET %d and TOTAL_SOCKETS %d\n",
+            CPUS_PER_SOCKET, TOTAL_SOCKETS);
+    fflush(stdout);
 
     nthreads = 2 * strtol(args[1], NULL, 10);
     size = strtol(args[2], NULL, 10);
-
-    nibble_default();
 
     pthread_t *wtids = calloc(nthreads/2, sizeof(*wtids));
     assert(wtids);
@@ -397,7 +425,7 @@ int main(int narg, char *args[]) {
         wargs[t].id = t;
         assert(0 == pthread_create(&wtids[t], NULL,
                     worker, (void*)&wargs[t]));
-        sched_yield();
+        //sched_yield();
     }
 
 #if defined(RELEASE_SELF)
@@ -413,12 +441,15 @@ int main(int narg, char *args[]) {
     }
 #endif
 
+    nibble_default();
+
     atomic_sub_fetch(&warmup_barrier, 1);
     while (atomic_load(&warmup_barrier) > 0)
         ;
 
     ul start = rdtsc();
-    printf("# Test skipping first %d seconds...\n", TEST_SKIP_FIRST_SEC);
+    printf("# Test skipping first %d seconds...\n",
+            TEST_SKIP_FIRST_SEC);
     sleep(TEST_SKIP_FIRST_SEC);
 
     start = rdtsc();
