@@ -17,6 +17,9 @@
 #![allow(unused_imports)]
 #![allow(unused_mut)]
 
+// Used for likely/unlikely
+#![feature(core_intrinsics)]
+
 // Remove these XXX
 #![allow(dead_code)]
 #![allow(unreachable_code)]

@@ -10,6 +10,7 @@ use std::slice;
 use std::fmt;
 use std::hash;
 use std::mem;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use memory::*;
 use common::{Pointer, fnv1a, is_even, is_odd, atomic_add, atomic_cas};
@@ -217,9 +218,10 @@ impl Drop for LockedBucket {
 // TODO May need to use
 // the NUMA memory allocation support
 pub struct HashTable {
+    resizing: AtomicBool,
+    buckets: Pointer<Bucket>,
     nbuckets: usize,
     bucket_mmap: MemMap,
-    buckets: Pointer<Bucket>,
 }
 
 impl HashTable {
@@ -245,9 +247,10 @@ impl HashTable {
             }
         }
         HashTable {
+            resizing: AtomicBool::new(false),
+            buckets: p,
             nbuckets: nbuckets,
             bucket_mmap: mmap,
-            buckets: p,
         }
     }
 
@@ -281,17 +284,30 @@ impl HashTable {
     #[inline(always)]
     pub fn put(&self, key: u64, value: u64) -> (bool,Option<u64>) {
         let hash = Self::make_hash(key);
-        //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
-        let bidx = (hash % (self.nbuckets as u64)) as usize;
-        let buckets: &[Bucket] = self.as_slice();
-        let bucket: &Bucket = &buckets[bidx];
 
-        let v = bucket.read_version();
-        let mut opts = bucket.find_key(key);
-        let (e,inv) = opts;
-        if e.is_none() && inv.is_none() {
-            warn!("Bucket is full!");
-            return (false,None);
+        let bidx: usize;
+        let buckets: &[Bucket];
+        let bucket: &Bucket;
+        let v: u64;
+        let opts: find_ops;
+
+        'retry: loop {
+            self.wait_resizing();
+
+            //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
+            bidx = (hash % (self.nbuckets as u64)) as usize;
+            buckets = self.as_slice();
+            bucket = &buckets[bidx];
+
+            v = bucket.read_version();
+            let mut opts = bucket.find_key(key);
+            let (e,inv) = opts;
+            if e.is_none() && inv.is_none() {
+                self.resize();
+                // whether we win or lose the race to resize,
+                // always retry again as buckets will change
+                continue 'retry;
+            }
         }
 
         bucket.wait_lock();
@@ -321,6 +337,8 @@ impl HashTable {
 
     #[inline(always)]
     pub fn get(&self, key: u64, value: &mut u64) -> bool {
+        self.wait_resizing();
+
         let hash = Self::make_hash(key);
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
         let bidx = (hash % (self.nbuckets as u64)) as usize;
@@ -346,6 +364,8 @@ impl HashTable {
 
     #[inline(always)]
     pub fn del(&self, key: u64, old: &mut u64) -> bool {
+        self.wait_resizing();
+
         let hash = Self::make_hash(key);
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
         let bidx = (hash % (self.nbuckets as u64)) as usize;
@@ -381,6 +401,7 @@ impl HashTable {
     #[inline(always)]
     pub fn update_lock_ifeq(&self, key: u64, new: u64, old: u64)
         -> Option<LockedBucket> {
+        self.wait_resizing();
 
         let hash = Self::make_hash(key);
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
@@ -413,6 +434,40 @@ impl HashTable {
         } else {
             bucket.unlock();
             None
+        }
+    }
+
+    // TODO make this a simple non-atomic load in a loop
+    #[inline(always)]
+    pub fn wait_resizing(&self) {
+        unsafe {
+            while unlikely(self.resizing.load(Ordering::SeqCst)) {
+                ;
+            }
+        }
+    }
+
+    /// Attempt to 'lock' the table for resizing. Return false if we
+    /// did not succeed, and other thread is going to do the work.
+    pub fn set_resizing(&self) -> bool {
+        !self.resizing
+            .compare_and_swap(false, true,
+                              Ordering::SeqCst)
+    }
+
+    pub fn resize(&self) -> bool {
+        if !self.set_resizing() {
+            return false;
+        }
+        info!("Table resizing");
+
+
+        // allocate new bucket array
+        // iterate over each bucket, hash the keys, insert
+        // check epoch table for min value
+        // release old table
+        unsafe {
+
         }
     }
 
