@@ -11,12 +11,16 @@ use std::fmt;
 use std::hash;
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::intrinsics;
+
+use num::Integer;
 
 use memory::*;
 use common::{Pointer, fnv1a, is_even, is_odd, atomic_add, atomic_cas};
 use common::{prefetchw};
 use logger::*;
 use numa::{self,NodeId};
+use clock;
 
 // Methods for locking a bucket
 // 1. use versioned lock
@@ -29,6 +33,13 @@ use numa::{self,NodeId};
 // 2. Linear hashing (not linear probing; lock one bucket at a time,
 //    relocate objects among new bucket and old)
 
+// When we allocate a table, mmap much more than we need.
+// This way, resizing will not put mmap on the critical path,
+// as mmap does not scale with many threads.
+
+/// Over-allocate virtual memory to avoid invoking mmap.
+const TABLE_VLEN: usize = 1usize << 35;
+
 const VERSION_MASK: u64 = 0x1;
 const ENTRIES_PER_BUCKET: usize = 3;
 
@@ -37,9 +48,8 @@ const INVALID_KEY: u64 = 0u64;
 
 struct Bucket {
     version: u64,
-    key: [u64; ENTRIES_PER_BUCKET],
-    value: [u64; ENTRIES_PER_BUCKET],
-    // TODO ptr to next in chain
+    key:    [u64; ENTRIES_PER_BUCKET],
+    value:  [u64; ENTRIES_PER_BUCKET],
 }
 
 impl fmt::Debug for Bucket {
@@ -168,7 +178,27 @@ impl Bucket {
 
     #[inline(always)]
     pub fn unlock(&self) {
+        debug_assert!(self.version.is_odd());
         self.bump_version();
+    }
+
+    pub fn reset_version(&self) {
+        unsafe {
+            let version: *mut u64 =
+                &self.version as *const u64 as *mut u64;
+            ptr::write_volatile(version, 0u64);
+        }
+    }
+
+    /// Locate an empty slot in the bucket. Return index.
+    #[inline(always)]
+    pub fn find_empty(&self) -> Option<usize> {
+        for i in 0..ENTRIES_PER_BUCKET {
+            if self.read_key(i) == INVALID_KEY {
+                return Some(i);
+            }
+        }
+        None
     }
 
     #[inline(always)]
@@ -213,15 +243,14 @@ impl Drop for LockedBucket {
     }
 }
 
-// TODO make this some inner type
-// TODO initialize one per core, or per socket, etc.
-// TODO May need to use
-// the NUMA memory allocation support
 pub struct HashTable {
-    resizing: AtomicBool,
+    allow_resize: bool,
     buckets: Pointer<Bucket>,
-    nbuckets: usize,
     bucket_mmap: MemMap,
+    /// Current number of buckets in the MemMap.
+    nbuckets: usize,
+    /// Bytes used by nbuckets (must be <= MemMap.len)
+    len: usize,
 }
 
 impl HashTable {
@@ -233,7 +262,7 @@ impl HashTable {
         let align: usize = 1usize<<21;
         // round up to next alignment
         len = (len + align - 1) & !(align-1);
-        let mmap = MemMap::numa(len, NodeId(sock), align);
+        let mmap = MemMap::numa(TABLE_VLEN, NodeId(sock), align, false);
         let p = Pointer(mmap.addr() as *const Bucket);
 
         let sl: &mut [Bucket] = unsafe {
@@ -246,12 +275,18 @@ impl HashTable {
                 b.value[i] = 0;
             }
         }
+        // TODO use threads to populate the arrays.
         HashTable {
-            resizing: AtomicBool::new(false),
+            allow_resize: true,
             buckets: p,
             nbuckets: nbuckets,
             bucket_mmap: mmap,
+            len: len,
         }
+    }
+
+    pub fn forbid_resize(&mut self) {
+        self.allow_resize = false;
     }
 
     #[inline(always)]
@@ -285,28 +320,30 @@ impl HashTable {
     pub fn put(&self, key: u64, value: u64) -> (bool,Option<u64>) {
         let hash = Self::make_hash(key);
 
-        let bidx: usize;
-        let buckets: &[Bucket];
-        let bucket: &Bucket;
-        let v: u64;
-        let opts: find_ops;
+        let mut bidx: usize;
+        let mut buckets: &[Bucket];
+        let mut bucket: &Bucket;
+        let mut v: u64;
+        let mut opts: find_ops;
 
         'retry: loop {
-            self.wait_resizing();
-
             //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
             bidx = (hash % (self.nbuckets as u64)) as usize;
             buckets = self.as_slice();
             bucket = &buckets[bidx];
 
             v = bucket.read_version();
-            let mut opts = bucket.find_key(key);
+            opts = bucket.find_key(key);
             let (e,inv) = opts;
-            if e.is_none() && inv.is_none() {
+            if unlikely!(e.is_none() && inv.is_none()) {
+                if !self.allow_resize {
+                    return (false, None);
+                }
                 self.resize();
                 // whether we win or lose the race to resize,
                 // always retry again as buckets will change
-                continue 'retry;
+            } else {
+                break;
             }
         }
 
@@ -337,9 +374,8 @@ impl HashTable {
 
     #[inline(always)]
     pub fn get(&self, key: u64, value: &mut u64) -> bool {
-        self.wait_resizing();
-
         let hash = Self::make_hash(key);
+
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
         let bidx = (hash % (self.nbuckets as u64)) as usize;
         let buckets: &[Bucket] = self.as_slice();
@@ -364,9 +400,8 @@ impl HashTable {
 
     #[inline(always)]
     pub fn del(&self, key: u64, old: &mut u64) -> bool {
-        self.wait_resizing();
-
         let hash = Self::make_hash(key);
+
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
         let bidx = (hash % (self.nbuckets as u64)) as usize;
         let buckets: &[Bucket] = self.as_slice();
@@ -375,7 +410,7 @@ impl HashTable {
         let v = bucket.read_version();
         let mut opts = bucket.find_key(key);
         let (e,inv) = opts;
-        if e.is_none() {
+        if unlikely!(e.is_none()) {
             return false;
         }
 
@@ -401,9 +436,9 @@ impl HashTable {
     #[inline(always)]
     pub fn update_lock_ifeq(&self, key: u64, new: u64, old: u64)
         -> Option<LockedBucket> {
-        self.wait_resizing();
 
         let hash = Self::make_hash(key);
+
         //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
         let bidx = (hash % (self.nbuckets as u64)) as usize;
         let buckets: &[Bucket] = self.as_slice();
@@ -437,38 +472,112 @@ impl HashTable {
         }
     }
 
-    // TODO make this a simple non-atomic load in a loop
-    #[inline(always)]
-    pub fn wait_resizing(&self) {
+    fn lock_all(&self) {
+        let buckets: &[Bucket] = self.as_slice();
+        for b in buckets {
+            b.wait_lock();
+        }
+    }
+
+    pub fn resize(&self) {
+        // grow by this amount
+        let factor: usize = 2;
+
+        let nbuckets = self.nbuckets * factor;
+        let len = self.len * factor;
+        assert!(len <= self.bucket_mmap.len(),
+            "Resizing table cannot grow beyond mmap area");
+
+        info!("resizing table 0x{:x}", self.bucket_mmap.addr());
+
+        // for bucket in self.as_slice() {
+        //     println!("BEF {:?}", bucket);
+        // }
+
+        let begin = clock::now();
+
+        let start = clock::now();
         unsafe {
-            while unlikely(self.resizing.load(Ordering::SeqCst)) {
-                ;
+            // this should fault pages on the socket set by mbind
+            // TODO we assume zero is used to indicate INVALID_KEY and
+            // that version zero is a valid starting version
+            // (all true)
+            self.bucket_mmap.clear_region(self.len, self.len);
+        }
+        let end = clock::now();
+        debug!("clearing memory {} µs", clock::to_usec(end-start));
+
+        let buckets: &[Bucket] = unsafe {
+            slice::from_raw_parts(self.buckets.0, nbuckets)
+        };
+
+        let old_buckets = &buckets[0..self.nbuckets];
+        let new_buckets = &buckets[self.nbuckets..nbuckets];
+
+        // lock all buckets. prevents concurrent operations
+        let start = clock::now();
+        self.lock_all();
+        let end = clock::now();
+        debug!("locking buckets {} µs", clock::to_usec(end-start));
+
+        let start = clock::now();
+        for bidx in 0..self.nbuckets {
+            let old: &Bucket = &buckets[bidx];
+            // prefetch next bucket? TODO
+            for kidx in 0..ENTRIES_PER_BUCKET {
+                let key = old.read_key(kidx);
+                if INVALID_KEY == key {
+                    continue;
+                }
+                let hash = Self::make_hash(key);
+                let bbidx = (hash % (nbuckets as u64)) as usize;
+                if bidx != bbidx {
+                    // prefetch new bucket? TODO
+                    let new: &Bucket = &buckets[bbidx];
+                    let mut value: u64 = 0;
+                    old.del_key(kidx, &mut value);
+                    let opt = new.find_empty();
+                    // To really fix this, we'd restart resizing
+                    // with even more buckets
+                    assert!(opt.is_some(),
+                        "While resizing table, new bucket is full!");
+                    let kkidx = opt.unwrap();
+                    new.set_key(kkidx, key);
+                    new.set_value(kkidx, value);
+                }
             }
         }
-    }
+        let end = clock::now();
+        debug!("resizing {} µs", clock::to_usec(end-start));
 
-    /// Attempt to 'lock' the table for resizing. Return false if we
-    /// did not succeed, and other thread is going to do the work.
-    pub fn set_resizing(&self) -> bool {
-        !self.resizing
-            .compare_and_swap(false, true,
-                              Ordering::SeqCst)
-    }
-
-    pub fn resize(&self) -> bool {
-        if !self.set_resizing() {
-            return false;
-        }
-        info!("Table resizing");
-
-
-        // allocate new bucket array
-        // iterate over each bucket, hash the keys, insert
-        // check epoch table for min value
-        // release old table
         unsafe {
+            asm!("sfence" : : : "memory");
 
+            let me: &mut Self =
+                &mut *(self as *const _ as *mut _);
+            me.nbuckets = nbuckets;
+            me.len = len;
         }
+
+        // at this point, the upper buckets are now accessible,
+        // and threads may put/get into them. unlock the rest
+
+        let start = clock::now();
+        for bucket in old_buckets {
+            bucket.unlock();
+        }
+        let end = clock::now();
+        debug!("unlocking {} µs", clock::to_usec(end-start));
+
+        let end = clock::now();
+        debug!("resize total {} µs", clock::to_usec(end-begin));
+
+        // for bucket in old_buckets {
+        //     println!("OLD {:?}", bucket);
+        // }
+        // for bucket in new_buckets {
+        //     println!("NEW {:?}", bucket);
+        // }
     }
 
     #[inline(always)]
@@ -503,6 +612,7 @@ impl Drop for HashTable {
 
 mod tests {
     use super::*;
+    use super::Bucket;
     use super::ENTRIES_PER_BUCKET;
     use super::INVALID_KEY;
 
@@ -513,6 +623,7 @@ mod tests {
 
     use rand::{self,Rng};
     use crossbeam;
+    use num::Integer;
 
     use common::*;
     use logger;
@@ -522,7 +633,8 @@ mod tests {
         logger::enable();
         println!("");
         let tblsize = 1<<20;
-        let ht = HashTable::new(tblsize, 0);
+        let mut ht = HashTable::new(tblsize, 0);
+        ht.forbid_resize();
         let nb = tblsize / ENTRIES_PER_BUCKET;
         assert_eq!(ht.nbuckets, nb);
     }
@@ -533,7 +645,8 @@ mod tests {
         logger::enable();
         println!("");
 
-        let ht = HashTable::new(1<<20, 0);
+        let mut ht = HashTable::new(1<<20, 0);
+        ht.forbid_resize();
         let mut value: u64 = 0;
         for i in 0..8192 {
             let mut key;
@@ -560,7 +673,8 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         'outer: for _ in 0..ntables {
-            let ht = HashTable::new(tblsz,0);
+            let mut ht = HashTable::new(tblsz,0);
+            ht.forbid_resize();
             let mut inserted = 0;
             key = rng.gen::<u64>();
             loop {
@@ -589,7 +703,8 @@ mod tests {
         logger::enable();
         println!("");
 
-        let ht = HashTable::new(1<<20,0);
+        let mut ht = HashTable::new(1<<20,0);
+        ht.forbid_resize();
         let mut value: u64 = 0;
         let mut keys: HashSet<u64> = HashSet::with_capacity(8192);
 
@@ -627,7 +742,8 @@ mod tests {
         logger::enable();
         println!("");
 
-        let ht = HashTable::new(1<<20,0);
+        let mut ht = HashTable::new(1<<20,0);
+        ht.forbid_resize();
         let mut keys: Vec<u64> = Vec::new();
 
         let mut rng = rand::thread_rng();
@@ -665,7 +781,8 @@ mod tests {
         logger::enable();
         println!("");
 
-        let ht = HashTable::new(tblsz, 0);
+        let mut ht = HashTable::new(tblsz, 0);
+        ht.forbid_resize();
 
         let mut inserted: usize = 0;
         for key in 1..(tblsz+1) {
@@ -733,7 +850,8 @@ mod tests {
         logger::enable();
         println!("");
 
-        let ht = HashTable::new(tblsz, 0);
+        let mut ht = HashTable::new(tblsz, 0);
+        ht.forbid_resize();
         let total = tblsz;// >> 1; // no. keys to use
         let keys_per = total / nthreads;
         println!("keys_per {}", keys_per);
@@ -853,6 +971,49 @@ mod tests {
     #[test]
     fn threads_rw() {
         threads_rw_n(1usize<<20, 16);
+    }
+
+    #[test]
+    fn lock_all() {
+        logger::enable();
+        let entries: usize = 1usize<<20;
+        let mut ht = HashTable::new(entries, 0);
+        ht.lock_all();
+        let buckets: &[Bucket] = ht.as_slice();
+        for b in buckets {
+            assert_eq!(b.read_version().is_odd(), true);
+        }
+    }
+
+    #[test]
+    fn resize_single_thread() {
+        logger::enable();
+
+        let entries: usize = 1usize<<20;
+        let mut ht = HashTable::new(entries, 0);
+        let len = ht.len;
+        let nbuckets = ht.nbuckets;
+
+        for k in 0..(1u64<<15) {
+            ht.put(k+1, k+1); // 0 not a valid key..
+        }
+
+        ht.resize();
+        assert_eq!(ht.len, len*2);
+        assert_eq!(ht.nbuckets, nbuckets*2);
+
+        let buckets: &[Bucket] = ht.as_slice();
+
+        for b in buckets {
+            assert_eq!(b.read_version().is_even(), true);
+        }
+
+        debug!("checking values");
+        let mut value: u64 = 0;
+        for k in 0..(1u64<<15) {
+            assert_eq!(ht.get(k+1, &mut value), true);
+            assert_eq!(value, k+1);
+        }
     }
 
     // TODO many threads

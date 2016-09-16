@@ -121,7 +121,9 @@ impl MemMap {
     // map and allocate anon memory, bound to a socket
     // shm segments + hugepg + numa on Linux asinine to get working
     // alignment must be power of two
-    pub fn numa(len: usize, node: NodeId, align: usize) -> Self {
+    pub fn numa(len: usize, node: NodeId,
+                align: usize, alloc: bool) -> Self {
+
         assert!(align.is_power_of_two());
         assert!(align >= 4096);
         assert!(align < len);
@@ -162,15 +164,17 @@ impl MemMap {
             assert_eq!(ret, 0, "mbind: {}", ret);
         }
 
-        // allocate pages by faulting
-        let now = Instant::now();
-        unsafe {
-            for pg in 0..(len>>12) {
-                let pos: usize = addr + (pg<<12);
-                ptr::write(pos as *mut usize, 0_usize);
+        // fault pages in
+        if alloc {
+            let now = Instant::now();
+            unsafe {
+                for pg in 0..(len>>12) {
+                    let pos: usize = addr + (pg<<12);
+                    ptr::write(pos as *mut usize, 0_usize);
+                }
             }
+            info!("alloc node {}: {} sec", node, now.elapsed().as_secs());
         }
-        info!("alloc node {}: {} sec", node, now.elapsed().as_secs());
         MemMap { addr: addr, len: len }
     }
 
@@ -180,6 +184,14 @@ impl MemMap {
     /// Wipe the memory region to zeros.
     pub unsafe fn clear(&mut self) {
         ptr::write_bytes(self.addr as *mut u8, 0 as u8, self.len);
+    }
+
+    /// Wipe a subset of the map with zeros
+    pub unsafe fn clear_region(&self, offset: usize, len: usize) {
+        let addr: *mut u8 = (self.addr + offset)
+            as *const usize as *mut usize as *mut u8;
+        debug!("clearing {:?} at {:?} len {}",self.addr, addr, len);
+        ptr::write_bytes(addr, 0u8, len);
     }
 }
 
