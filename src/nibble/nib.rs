@@ -324,11 +324,16 @@ impl Nibble {
     }
 
     // Delete key from index.
-    pub fn free(&self, key: u64) {
-        // epoch::pin();
+    pub fn free(&self, key: u64) -> bool {
+        // we need to pin the epoch, because we use the VA to lookup
+        // the containing segment
+        epoch::pin();
 
         // 1. remove key and acquire old
         let res = self.index.remove(key);
+        if res.is_none() {
+            return false;
+        }
         let ientry: IndexEntry = res.unwrap();
         let (socket,va) = extract(ientry);
 
@@ -341,7 +346,8 @@ impl Nibble {
         self.nodes[socket as usize].seginfo
             .decr_live(idx, head.len_with_header());
 
-        // epoch::quiesce();
+        epoch::quiesce();
+        true
     }
 
     pub fn pin(key: u64) {

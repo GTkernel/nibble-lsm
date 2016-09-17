@@ -82,7 +82,8 @@ typedef uint32_t u32;
 // Exposed Rust functions for use to use a Nibble object.
 extern void  nibble_default();
 extern void* nibble_alloc(u64 key, u64 bytes, u32 sock);
-extern void  nibble_free(u64 key);
+// must_exist = 1 -> fail if key not found
+extern void  nibble_free(u64 key, int must_exist);
 
 pid_t gettid() {
     return syscall(SYS_gettid);
@@ -332,11 +333,16 @@ void* consumer(void *args_) {
     struct drand48_data rdata;
     srand48_r((ul)args, &rdata);
 
+#if defined(PRINT_PROGRESS)
+    ul last_print_time = 0ul;
+    ul partial_many = 0ul;
+#endif
+
     atomic_sub_fetch(&warmup_barrier, 1);
     while (atomic_load(&warmup_barrier) > 0)
         ;
 
-#define FREE(ii)    nibble_free(b->keys[ii])
+#define FREE(ii)    nibble_free(b->keys[ii], 1)
 
     ul start = rdtsc();
     struct batch *b;
@@ -359,10 +365,22 @@ void* consumer(void *args_) {
             }
             b->status = ALLOC_OK; // we're done
             many += NPTRS;
+#if defined(PRINT_PROGRESS)
+            partial_many += NPTRS;
+#endif
             if (0 == (++iters & 0xff)) {
                 ul sec = (rdtsc()-start) / ticks_per_sec;
                 if (sec < TEST_SKIP_FIRST_SEC)
                     many = 0ul;
+#if defined(PRINT_PROGRESS)
+                if (args->id < 2 && sec >= last_print_time) {
+                    float ops = (partial_many/1e3) /
+                        (sec - last_print_time);
+                    printf("c %lu kops/sec: %.2f\n", args->id, ops);
+                    last_print_time = sec;
+                    partial_many = 0ul;
+                }
+#endif
             }
         }
         if (stop)

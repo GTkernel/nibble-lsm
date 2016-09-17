@@ -51,8 +51,10 @@ fn nibble_alloc(key: u64, len: u64, sock: u32) -> *const u8 {
 }
 
 #[no_mangle] pub extern
-fn nibble_free(key: u64) {
+fn nibble_free(key: u64, fail: i32) {
 	let nib: &Nibble = unsafe { &*NIBBLE.0 };
 	// println!("free {:x}", key);
-	nib.free(key);
+	let ret = nib.free(key);
+    assert!((1 == fail) && ret,
+        "key {} not found upon deletion", key);
 }
