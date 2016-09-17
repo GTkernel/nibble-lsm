@@ -224,7 +224,8 @@ fn __compact(state: &Arc<pl::RwLock<Worker>>) {
         ratio < 0.5
     };
     if run {
-        info!("compaction initiated");
+        info!("node-{} compaction initiated",
+             s.manager.socket().unwrap());
         let now = clock::now();
         s.do_compact();
         info!("node-{} compaction: {} ms",
@@ -620,12 +621,13 @@ impl Worker {
             None => { debug!("no candidates"); return; },
             Some(x) => x,
         };
-        debug!("candidates: # {} livebytes {}", segs.len(), livebytes);
+        debug!("candidates: # {} livebytes {}",
+               segs.len(), livebytes);
 
         //self.verify(&segref, slot, &update_fn);
 
-        // livebytes may be stale by the time we start cleaning (it's ok)
-        // if significant, we may TODO free more blocks after
+        // livebytes may be stale by the time we start cleaning (it's
+        // ok) if significant, we may TODO free more blocks after
         // compaction
 
         //let mut used_reserve = false;
