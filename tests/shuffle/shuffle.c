@@ -45,7 +45,7 @@ enum {
 
     // total set of batches held by each worker
     // need a lot to satisfy the hungry consumers
-    NBATCHES = 1<<12, // 16
+    NBATCHES = 1<<8, // 16
 
     // number of objects within each batch
     // large enough to reduce pushing/popping frequency
