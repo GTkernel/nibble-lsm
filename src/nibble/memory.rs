@@ -178,6 +178,18 @@ impl MemMap {
         MemMap { addr: addr, len: len }
     }
 
+    /// Tell the operating system that, upon a crash, to exclude this
+    /// memory mapping from a core dump file.
+    pub fn exclude_corefile(&self) {
+        unsafe {
+            let addr = self.addr as *const usize as *mut usize
+                as *mut libc::c_void;
+            let ret = libc::madvise(addr, self.len,
+                                    libc::MADV_DONTDUMP);
+            assert_eq!(ret, 0, "madvise: {}", ret);
+        }
+    }
+
     pub fn addr(&self) -> usize { self.addr }
     pub fn len(&self) -> usize { self.len }
 

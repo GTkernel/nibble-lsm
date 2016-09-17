@@ -193,11 +193,13 @@ impl BlockAllocator {
 
     pub fn numa(bytes: usize, node: NodeId) -> Self {
         let mmap = MemMap::numa(bytes, node, BLOCK_SIZE, true);
+        mmap.exclude_corefile();
         Self::__new(bytes, mmap)
     }
 
     pub fn new(bytes: usize) -> Self {
         let mmap = MemMap::new(bytes);
+        mmap.exclude_corefile();
         Self::__new(bytes, mmap)
     }
 
