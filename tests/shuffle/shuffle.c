@@ -18,9 +18,9 @@
 
 #define PRINT_PROGRESS
 
- #if defined(RELEASE_SELF)
- #error shuffle benchmark not supported with Nibble
- #endif
+#if defined(RELEASE_SELF)
+#error shuffle benchmark not supported with Nibble
+#endif
 
 //////////////////////////////
 // Some tunables

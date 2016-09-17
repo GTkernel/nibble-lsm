@@ -474,6 +474,10 @@ impl HashTable {
                     return true;
                 }
             }
+            if bucket.read_version() != bver {
+                trace!("bucket modified while searching, retrying");
+                continue 'retry;
+            }
             if unlikely!(self.version() != tver) {
                 // key may have been moved to another bucket
                 trace!("key not found; may have been moved, retrying");
@@ -493,6 +497,7 @@ impl HashTable {
         let mut bver: u64;
         let mut opts: find_ops;
 
+        // before reading bucket, you must save table version
         let mut tver = self.version();
 
         bidx = (hash % (self.nbuckets() as u64)) as usize;
@@ -509,28 +514,43 @@ impl HashTable {
                 tver = v;
             }
 
-            bver = bucket.read_version();
-
-            let mut opts = bucket.find_key(key);
-            let (e,inv) = opts;
-            if e.is_none() {
-                return false;
-            }
+            // This is code which may have a bug, in that a key cannot
+            // be found for deletion (but does exist) when the table
+            // undergoes resizing. We do probably want to first scan
+            // the bucket before locking, in case the key doesn't
+            // exist. But, would someone try to delete a key that
+            // doesn't exist?
+            //
+            // bver = bucket.read_version();
+            // let mut opts = bucket.find_key(key);
+            // let (e,inv) = opts;
+            // if e.is_none() {
+            //     if unlikely!(self.version() != tver) ||
+            //         unlikely!(bucket.read_version() != bver) {
+            //             continue 'retry;
+            //         }
+            //     info!("key {} not found without locking bucket",
+            //           key);
+            //     return false;
+            // }
 
             bucket.wait_lock();
+            opts = bucket.find_key(key);
 
             if unlikely!(tver != self.version()) {
                 bucket.unlock();
                 continue 'retry;
             }
 
-            if bucket.read_version() != bver {
-                opts = bucket.find_key(key);
-            }
+            // if bucket.read_version() != bver {
+            //     opts = bucket.find_key(key);
+            // }
 
             let (e,inv) = opts;
             if e.is_none() {
                 bucket.unlock();
+                info!("key {} not found after locking bucket!",
+                      key);
                 return false;
             }
 
