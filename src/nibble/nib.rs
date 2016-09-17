@@ -343,8 +343,7 @@ impl Nibble {
 
         // 3. decrement live size of segment
         let idx: usize = node.manager.segment_of(va as usize);
-        self.nodes[socket as usize].seginfo
-            .decr_live(idx, head.len_with_header());
+        node.seginfo.decr_live(idx, head.len_with_header());
 
         epoch::quiesce();
         true
