@@ -190,7 +190,6 @@ impl MemMap {
     pub unsafe fn clear_region(&self, offset: usize, len: usize) {
         let addr: *mut u8 = (self.addr + offset)
             as *const usize as *mut usize as *mut u8;
-        debug!("clearing {:?} at {:?} len {}",self.addr, addr, len);
         ptr::write_bytes(addr, 0u8, len);
     }
 }

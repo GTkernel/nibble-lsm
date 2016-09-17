@@ -244,9 +244,13 @@ impl Drop for LockedBucket {
 }
 
 pub struct HashTable {
-    allow_resize: bool,
     buckets: Pointer<Bucket>,
     bucket_mmap: MemMap,
+
+    allow_resize: bool,
+    resizing: AtomicBool,
+    version: u64,
+
     /// Current number of buckets in the MemMap.
     nbuckets: usize,
     /// Bytes used by nbuckets (must be <= MemMap.len)
@@ -277,11 +281,46 @@ impl HashTable {
         }
         // TODO use threads to populate the arrays.
         HashTable {
-            allow_resize: true,
             buckets: p,
-            nbuckets: nbuckets,
             bucket_mmap: mmap,
+
+            allow_resize: true,
+            resizing: AtomicBool::new(false),
+            version: 0u64,
+
+            nbuckets: nbuckets,
             len: len,
+        }
+    }
+
+    /// Need this to be a volatile read, as a resize may change it.
+    #[inline(always)]
+    pub fn nbuckets(&self) -> usize {
+        let n = &self.nbuckets as *const usize;
+        unsafe {
+            ptr::read_volatile(n)
+        }
+    }
+
+    /// Need this to be a volatile read, as a resize may change it.
+    /// If the version changes, clients must recompute the bucket
+    /// for their key.
+    #[inline(always)]
+    fn version(&self) -> u64 {
+        let n = &self.version as *const u64;
+        unsafe {
+            ptr::read_volatile(n)
+        }
+    }
+
+    fn bump_version(&self) {
+        let loc = &self.version as *const u64 as *mut u64;
+        unsafe { atomic_add(loc, 1u64); }
+    }
+
+    fn wait_resizing(&self) {
+        while self.resizing.load(Ordering::Relaxed) {
+            ;
         }
     }
 
@@ -291,7 +330,7 @@ impl HashTable {
 
     #[inline(always)]
     pub fn prefetchw(&self, hash: u64) {
-        let bidx = (hash % (self.nbuckets as u64)) as usize;
+        let bidx = (hash % (self.nbuckets() as u64)) as usize;
         let buckets: &[Bucket] = self.as_slice();
         let bucket: &Bucket = &buckets[bidx];
         let addr: *const u8 = unsafe {
@@ -304,7 +343,7 @@ impl HashTable {
     #[inline(always)]
     fn as_slice(&self) -> &[Bucket] {
         unsafe {
-            slice::from_raw_parts(self.buckets.0, self.nbuckets)
+            slice::from_raw_parts(self.buckets.0, self.nbuckets())
         }
     }
 
@@ -323,111 +362,183 @@ impl HashTable {
         let mut bidx: usize;
         let mut buckets: &[Bucket];
         let mut bucket: &Bucket;
-        let mut v: u64;
+        let mut bver: u64;
         let mut opts: find_ops;
 
-        'retry: loop {
-            //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
-            bidx = (hash % (self.nbuckets as u64)) as usize;
-            buckets = self.as_slice();
-            bucket = &buckets[bidx];
+        let mut tver = self.version();
 
-            v = bucket.read_version();
+        bidx = (hash % (self.nbuckets() as u64)) as usize;
+        buckets = self.as_slice();
+        bucket = &buckets[bidx];
+
+        'retry: loop {
+
+            // if table version changes, recompute bucket index
+            let v = self.version();
+            if unlikely!(v != tver) {
+                bidx = (hash % (self.nbuckets() as u64)) as usize;
+                buckets = self.as_slice();
+                bucket = &buckets[bidx];
+                tver = v;
+            }
+
+            bver = bucket.read_version();
+
             opts = bucket.find_key(key);
             let (e,inv) = opts;
             if unlikely!(e.is_none() && inv.is_none()) {
                 if !self.allow_resize {
                     return (false, None);
                 }
-                self.resize();
-                // whether we win or lose the race to resize,
-                // always retry again as buckets will change
-            } else {
-                break;
+                if !self.resize() {
+                    self.wait_resizing();
+                }
+                continue 'retry;
             }
-        }
 
-        bucket.wait_lock();
-        if bucket.read_version() != v {
-            opts = bucket.find_key(key);
-        }
+            // this will block an in-progress resize on this bucket
+            // (prevents table version from incrementing)
+            bucket.wait_lock();
 
-        let (e,inv) = opts;
-        let mut old: Option<u64> = None;
-        let mut ok: bool = false;
+            // re-examine if table has changed.. if so, restart
+            // (a table resize won't grab the bucket lock from us)
+            if unlikely!(tver != self.version()) {
+                bucket.unlock();
+                continue 'retry;
+            }
 
-        // if exists, overwrite
-        if let Some(i) = e {
-            old = Some(bucket.set_value(i, value));
-            ok = true;
-        }
-        // else if there is an empty slot, use that
-        else if let Some(i) = inv {
-            bucket.set_key(i, key);
-            bucket.set_value(i, value);
-            ok = true;
-        }
+            // table has not changed, check if bucket has
+            if bucket.read_version() != bver {
+                opts = bucket.find_key(key);
+            }
 
-        bucket.unlock();
-        (ok,old)
+            let (e,inv) = opts;
+            let mut old: Option<u64> = None;
+            let mut ok: bool = false;
+
+            // if exists, overwrite
+            if let Some(i) = e {
+                old = Some(bucket.set_value(i, value));
+                ok = true;
+            }
+            // else if there is an empty slot, use that
+            else if let Some(i) = inv {
+                bucket.set_key(i, key);
+                bucket.set_value(i, value);
+                ok = true;
+            }
+
+            bucket.unlock();
+            return (ok,old);
+        }
+        assert!(false, "Unreachable path");
     }
 
     #[inline(always)]
     pub fn get(&self, key: u64, value: &mut u64) -> bool {
         let hash = Self::make_hash(key);
 
-        //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
-        let bidx = (hash % (self.nbuckets as u64)) as usize;
-        let buckets: &[Bucket] = self.as_slice();
-        let bucket: &Bucket = &buckets[bidx];
+        let mut bidx: usize;
+        let mut buckets: &[Bucket];
+        let mut bucket: &Bucket;
+        let mut bver: u64;
+        let mut opts: find_ops;
 
         // TODO if we retry too many times, perhaps forcefully lock
 
+        let mut tver = self.version();
+
+        bidx = (hash % (self.nbuckets() as u64)) as usize;
+        buckets = self.as_slice();
+        bucket = &buckets[bidx];
+
         'retry: loop {
-            let v = bucket.wait_version();
+
+            let v = self.version();
+            if unlikely!(v != tver) {
+                bidx = (hash % (self.nbuckets() as u64)) as usize;
+                buckets = self.as_slice();
+                bucket = &buckets[bidx];
+                tver = v;
+            }
+
+            let bver = bucket.wait_version();
             for i in 0..ENTRIES_PER_BUCKET {
                 if bucket.read_key(i) == key {
                     *value = bucket.read_value(i);
-                    if v != bucket.read_version() {
+                    let must_retry = (bucket.read_version() != bver)
+                        || unlikely!(self.version() != tver);
+                    if must_retry {
                         continue 'retry;
                     }
                     return true;
                 }
             }
+            if unlikely!(self.version() != tver) {
+                // key may have been moved to another bucket
+                trace!("key not found; may have been moved, retrying");
+                continue 'retry;
+            }
             return false;
-        }
+        } // retry loop
     }
 
     #[inline(always)]
     pub fn del(&self, key: u64, old: &mut u64) -> bool {
         let hash = Self::make_hash(key);
 
-        //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
-        let bidx = (hash % (self.nbuckets as u64)) as usize;
-        let buckets: &[Bucket] = self.as_slice();
-        let bucket: &Bucket = &buckets[bidx];
+        let mut bidx: usize;
+        let mut buckets: &[Bucket];
+        let mut bucket: &Bucket;
+        let mut bver: u64;
+        let mut opts: find_ops;
 
-        let v = bucket.read_version();
-        let mut opts = bucket.find_key(key);
-        let (e,inv) = opts;
-        if unlikely!(e.is_none()) {
-            return false;
-        }
+        let mut tver = self.version();
 
-        bucket.wait_lock();
-        if bucket.read_version() != v {
-            opts = bucket.find_key(key);
-        }
+        bidx = (hash % (self.nbuckets() as u64)) as usize;
+        buckets = self.as_slice();
+        bucket = &buckets[bidx];
 
-        let (e,inv) = opts;
-        if e.is_none() {
+        'retry: loop {
+
+            let v = self.version();
+            if unlikely!(v != tver) {
+                bidx = (hash % (self.nbuckets() as u64)) as usize;
+                buckets = self.as_slice();
+                bucket = &buckets[bidx];
+                tver = v;
+            }
+
+            bver = bucket.read_version();
+
+            let mut opts = bucket.find_key(key);
+            let (e,inv) = opts;
+            if e.is_none() {
+                return false;
+            }
+
+            bucket.wait_lock();
+
+            if unlikely!(tver != self.version()) {
+                bucket.unlock();
+                continue 'retry;
+            }
+
+            if bucket.read_version() != bver {
+                opts = bucket.find_key(key);
+            }
+
+            let (e,inv) = opts;
+            if e.is_none() {
+                bucket.unlock();
+                return false;
+            }
+
+            bucket.del_key(e.unwrap(), old);
             bucket.unlock();
-            return false;
+            return true;
         }
-
-        bucket.del_key(e.unwrap(), old);
-        bucket.unlock();
-        return true;
+        assert!(false, "Unreachable path");
     }
 
     /// Grab the lock on the bucket holding the key only if the
@@ -439,8 +550,7 @@ impl HashTable {
 
         let hash = Self::make_hash(key);
 
-        //let bidx = (hash & (self.nbuckets-1) as u64) as usize;
-        let bidx = (hash % (self.nbuckets as u64)) as usize;
+        let bidx = (hash % (self.nbuckets() as u64)) as usize;
         let buckets: &[Bucket] = self.as_slice();
         let bucket: &Bucket = &buckets[bidx];
 
@@ -479,7 +589,28 @@ impl HashTable {
         }
     }
 
-    pub fn resize(&self) {
+    /// Return true if we acquired the lock.
+    /// TODO make RAII
+    fn lock_for_resize(&self) -> bool {
+       !self.resizing.compare_and_swap(false, true,
+            Ordering::SeqCst)
+    }
+
+    fn unlock_for_resize(&self) -> bool {
+        self.resizing.compare_and_swap(true, false,
+            Ordering::SeqCst)
+    }
+
+    /// Return false if we raced to lock for resizing but failed.
+    pub fn resize(&self) -> bool {
+        // Threads which lose the race to resize will simply keep
+        // trying to insert to the bucket, again trying to lock.
+        // Eventually the bucket will be locked by us. After we resize
+        // and unlock the bucket, the failed threads will resume.
+        if !self.lock_for_resize() {
+            return false;
+        }
+
         // grow by this amount
         let factor: usize = 2;
 
@@ -550,13 +681,22 @@ impl HashTable {
         let end = clock::now();
         debug!("resizing {} µs", clock::to_usec(end-start));
 
+        // update version before ANY thread is able to proceed
+        self.bump_version();
+
+        // ensure bucket data and version are visible
+        // before upper buckets become visible
         unsafe {
             asm!("sfence" : : : "memory");
+        }
 
-            let me: &mut Self =
-                &mut *(self as *const _ as *mut _);
+        unsafe {
+            let me: &mut Self = &mut *(self as *const _ as *mut _);
+            // once we mutate these, the upper buckets are open
             me.nbuckets = nbuckets;
             me.len = len;
+            // ensure these are visible before unlocking lower buckets
+            asm!("sfence" : : : "memory");
         }
 
         // at this point, the upper buckets are now accessible,
@@ -566,6 +706,7 @@ impl HashTable {
         for bucket in old_buckets {
             bucket.unlock();
         }
+        assert_eq!(self.unlock_for_resize(), true);
         let end = clock::now();
         debug!("unlocking {} µs", clock::to_usec(end-start));
 
@@ -578,6 +719,8 @@ impl HashTable {
         // for bucket in new_buckets {
         //     println!("NEW {:?}", bucket);
         // }
+
+        true
     }
 
     #[inline(always)]
@@ -619,6 +762,7 @@ mod tests {
     use std::thread::{self,JoinHandle};
     use std::collections::HashSet;
     use std::ptr;
+    use std::sync::{Arc,Barrier};
     use std::sync::atomic::{AtomicUsize,Ordering};
 
     use rand::{self,Rng};
@@ -1016,5 +1160,87 @@ mod tests {
         }
     }
 
-    // TODO many threads
+    #[test]
+    fn resize_many_threads() {
+        logger::enable();
+
+        let nthreads = 12;
+        info!("creating hash table");
+        let ht = HashTable::new(1<<20, 0);
+        let tids = AtomicUsize::new(1);
+
+        let mut guards = vec![];
+        crossbeam::scope(|scope| {
+            for _ in 0..nthreads {
+
+                let guard = scope.spawn(|| {
+
+                    // add keys in phases
+                    let tid = tids.fetch_add(1,
+                        Ordering::Relaxed) as u64 + 1u64;
+                    info!("tid {} up", tid);
+
+                    // use large enough offset to avoid overlap
+                    let start_key = (1u64<<40) * tid;
+                    let first_nkeys = start_key + (1u64<<16) * tid;
+                    let max_nkeys = nthreads * (1u64<<18);
+                    let my_max_key = start_key + max_nkeys;
+                    let mut value: u64 = 0;
+                    info!("tid {} start {} firstn {} maxn {} max {}",
+                        tid, start_key, first_nkeys, max_nkeys,
+                        my_max_key);
+
+                    // each thread puts a different amount, so some
+                    // will finish early and begin reading the table
+                    // while others are still writing.
+                    for key in start_key..first_nkeys {
+                        assert_eq!(ht.put(key, key), (true, None));
+                        assert!(ht.get(key, &mut value),
+                            "tid {} key {} not found", tid, key);
+                    }
+                    info!("tid {} done inserting first", tid);
+                    for key in start_key..first_nkeys {
+                        assert_eq!(ht.get(key, &mut value), true);
+                        assert_eq!(key, value);
+                    }
+                    info!("tid {} done check first", tid);
+
+                    // Overlap deletes with resizing by allowing tid 0
+                    // to continue inserting while all others delete
+                    // and reinsert the keys they just inserted.
+                    if tid > 0 {
+                        for _ in 0..4 {
+                            info!("tid {} deleting first set", tid);
+                            for key in start_key..first_nkeys {
+                                assert_eq!(ht.del(key,&mut value), true);
+                            }
+                            info!("tid {} reinserting first set", tid);
+                            for key in start_key..first_nkeys {
+                                assert_eq!(ht.put(key,key), (true,None));
+                            }
+                        }
+                    }
+                    info!("------------------------------------");
+
+                    // insert the remainder
+                    for key in first_nkeys..my_max_key {
+                        assert_eq!(ht.put(key, key), (true, None));
+                        assert_eq!(ht.get(key, &mut value), true);
+                    }
+                    info!("tid {} done inserting all", tid);
+                    // check all keys
+                    for key in start_key..my_max_key {
+                        assert_eq!(ht.get(key, &mut value), true);
+                        assert_eq!(key, value);
+                    }
+                    info!("tid {} done check all", tid);
+                });
+                guards.push(guard);
+            }
+        });
+
+        for guard in guards {
+            guard.join();
+        }
+    }
 }
