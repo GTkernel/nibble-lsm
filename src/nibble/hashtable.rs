@@ -261,12 +261,11 @@ impl HashTable {
 
     pub fn new(entries: usize, sock: usize) -> Self {
         let nbuckets = entries / ENTRIES_PER_BUCKET;
-        let mut len = nbuckets * mem::size_of::<Bucket>();
+        let len = nbuckets * mem::size_of::<Bucket>();
         info!("new table on socket {} len {}", sock, len);
         let align: usize = 1usize<<21;
-        // round up to next alignment
-        len = (len + align - 1) & !(align-1);
-        let mmap = MemMap::numa(TABLE_VLEN, NodeId(sock), align, false);
+        let mmap = MemMap::numa(TABLE_VLEN,
+                                NodeId(sock), align, false);
         let p = Pointer(mmap.addr() as *const Bucket);
 
         let sl: &mut [Bucket] = unsafe {
@@ -291,6 +290,10 @@ impl HashTable {
             nbuckets: nbuckets,
             len: len,
         }
+    }
+
+    pub fn default(sock: usize) -> Self {
+        Self::new( 1usize << 20, sock )
     }
 
     /// Need this to be a volatile read, as a resize may change it.
