@@ -580,36 +580,65 @@ impl HashTable {
 
         let hash = Self::make_hash(key);
 
-        let bidx = (hash % (self.nbuckets() as u64)) as usize;
-        let buckets: &[Bucket] = self.as_slice();
-        let bucket: &Bucket = &buckets[bidx];
+        let mut bidx: usize;
+        let mut buckets: &[Bucket];
+        let mut bucket: &Bucket;
+        let mut bver: u64;
+        let mut opts: find_ops;
 
-        let v = bucket.read_version();
-        let mut opts = bucket.find_key(key);
-        let (e,inv) = opts;
-        if e.is_none() {
-            return None;
-        }
+        let mut tver = self.version();
 
-        bucket.wait_lock();
-        if bucket.read_version() != v {
+        bidx = (hash % (self.nbuckets() as u64)) as usize;
+        buckets = self.as_slice();
+        bucket = &buckets[bidx];
+
+        'retry: loop {
+
+            let v = self.version();
+            if unlikely!(v != tver) {
+                bidx = (hash % (self.nbuckets() as u64)) as usize;
+                buckets = self.as_slice();
+                bucket = &buckets[bidx];
+                tver = v;
+            }
+
+            // let v = bucket.read_version();
+            // let mut opts = bucket.find_key(key);
+            // let (e,inv) = opts;
+            // if e.is_none() {
+            //     return None;
+            // }
+
+            bucket.wait_lock();
+
+            if unlikely!(tver != self.version()) {
+                bucket.unlock();
+                continue 'retry;
+            }
+
             opts = bucket.find_key(key);
-        }
 
-        let (e,inv) = opts;
-        if e.is_none() {
-            bucket.unlock();
-            return None;
-        }
+            // if bucket.read_version() != v {
+            //     opts = bucket.find_key(key);
+            // }
 
-        let i = e.unwrap();
-        if old == bucket.read_value(i) {
-            bucket.set_value(i, new);
-            Some(LockedBucket::new(&bucket))
-        } else {
-            bucket.unlock();
-            None
+            let (e,inv) = opts;
+            if e.is_none() {
+                bucket.unlock();
+                return None;
+            }
+
+            let i = e.unwrap();
+            if old == bucket.read_value(i) {
+                bucket.set_value(i, new);
+                return Some(LockedBucket::new(&bucket));
+            } else {
+                bucket.unlock();
+                return None;
+            }
+            assert!(false, "Unreachable path");
         }
+        assert!(false, "Unreachable path");
     }
 
     fn lock_all(&self) {
