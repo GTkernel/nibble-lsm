@@ -794,10 +794,10 @@ impl HashTable {
 
     #[inline(always)]
     pub fn make_hash(value: u64) -> u64 {
-        fnv1a(value)
+        //fnv1a(value)
 
-        //let mut sip = hash::SipHasher::default();
-        //Self::make_sip(&mut sip, value)
+        let mut sip = hash::SipHasher::new();
+        Self::make_sip(&mut sip, value)
     }
 
     //
