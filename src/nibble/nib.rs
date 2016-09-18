@@ -57,6 +57,21 @@ impl Nibble {
     /// sockets. You must create an instance with at least enough
     /// memory per-socket to hold some minimum of segments.
     pub fn new(capacity: usize) -> Self {
+        Self::__new(capacity, Self::default_ht_nitems() )
+    }
+
+    pub fn new2(capacity: usize, ht_nitems: usize) -> Self {
+        Self::__new(capacity, ht_nitems)
+    }
+
+    /// Allocate Nibble with a default (small) amount of memory.
+    pub fn default() -> Self {
+        Self::new2(
+            Self::default_capacity(),
+            Self::default_ht_nitems() )
+    }
+
+    fn __new(capacity: usize, ht_nitems: usize) -> Self {
         let nnodes = numa::NODE_MAP.sockets();
         let mincap = min_log_size!(nnodes);
         assert!(capacity >= mincap,
@@ -73,9 +88,11 @@ impl Nibble {
         //let ntables: usize = 64;
 
         let ntables: usize = 16 * numa::NODE_MAP.sockets();
-
-        let nitems = 1usize << 26;
+        let nitems = ht_nitems; //1usize << 30;
         let n_per  = nitems / ntables;
+
+        assert!(ntables.is_power_of_two());
+
         info!("     nitems:     {}", nitems);
         info!("     Tables:     {}", ntables);
         info!("        per:     {}", n_per);
@@ -135,9 +152,8 @@ impl Nibble {
         min_log_size!( numa::NODE_MAP.sockets() )
     }
 
-    /// Allocate Nibble with a default (small) amount of memory.
-    pub fn default() -> Self {
-        Nibble::new( Self::default_capacity() )
+    pub fn default_ht_nitems() -> usize {
+        1usize << 25
     }
 
     pub fn capacity(&self) -> usize {
