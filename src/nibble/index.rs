@@ -4,7 +4,7 @@ use crossbeam;
 use parking_lot as pl;
 
 use hashtable::*;
-use common::{Pointer};
+use common::{self,Pointer};
 use numa::{self,NodeId};
 use sched;
 
@@ -47,6 +47,8 @@ impl Index {
         let nsockets = numa::NODE_MAP.sockets();
         assert!(0 == (n % nsockets),
             "Number of tables must evenly divide among sockets");
+        assert!(n.is_power_of_two(),
+            "Number of tables must be a power of two.");
 
         // wrap it up for sharing
         let sharedq = pl::Mutex::new(tables);
@@ -87,8 +89,7 @@ impl Index {
     #[inline(always)]
     pub fn get(&self, key: u64) -> Option<IndexEntry> {
         debug_assert!(key > 0);
-        let hash = HashTable::make_hash(key);
-        let tidx = self.table_idx(hash);
+        let tidx = self.table_idx(key);
         debug_assert!(tidx < self.tables.len());
         let ref p = self.tables[tidx];
         debug_assert!(!p.0 .is_null());
@@ -111,8 +112,7 @@ impl Index {
         -> (bool,Option<IndexEntry>) {
 
         debug_assert!(key > 0);
-        let hash = HashTable::make_hash(key);
-        let tidx = self.table_idx(hash);
+        let tidx = self.table_idx(key);
         debug_assert!(tidx < self.tables.len());
         let ref p = self.tables[tidx];
         debug_assert!(!p.0 .is_null());
@@ -128,8 +128,7 @@ impl Index {
     #[inline(always)]
     pub fn remove(&self, key: u64) -> Option<IndexEntry> {
         debug_assert!(key > 0);
-        let hash = HashTable::make_hash(key);
-        let tidx = self.table_idx(hash);
+        let tidx = self.table_idx(key);
         debug_assert!(tidx < self.tables.len());
         let ref p = self.tables[tidx];
         debug_assert!(!p.0 .is_null());
@@ -148,8 +147,7 @@ impl Index {
         -> Option<LockedBucket> {
 
         debug_assert!(key > 0);
-        let hash = HashTable::make_hash(key);
-        let tidx = self.table_idx(hash);
+        let tidx = self.table_idx(key);
         debug_assert!(tidx < self.tables.len());
         let ref p = self.tables[tidx];
         debug_assert!(!p.0 .is_null());
@@ -167,9 +165,11 @@ impl Index {
     // Priate methods
     //
 
+    /// See comment for HashTable::index()
     #[inline(always)]
-    fn table_idx(&self, hash: u64) -> usize {
-        (hash % (self.tables.len() as u64)) as usize
+    fn table_idx(&self, key: u64) -> usize {
+        let hash = common::fnv1a(key);
+        ((hash >> 29) & (self.tables.len() as u64 - 1)) as usize
     }
 }
 
