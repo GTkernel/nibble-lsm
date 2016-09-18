@@ -38,10 +38,10 @@ use clock;
 // as mmap does not scale with many threads.
 
 /// Over-allocate virtual memory to avoid invoking mmap.
-const TABLE_VLEN: usize = 1usize << 38;
+const TABLE_VLEN: usize = 1usize << 34;
 
 const VERSION_MASK: u64 = 0x1;
-const ENTRIES_PER_BUCKET: usize = 3;
+const ENTRIES_PER_BUCKET: usize = 7;
 
 /// We reserve this value to indicate the bucket slot is empty.
 const INVALID_KEY: u64 = 0u64;
