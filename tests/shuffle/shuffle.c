@@ -33,11 +33,11 @@ enum {
 
     // only begin measuring after this many seconds
     // to wait for test to stabilize
-    TEST_SKIP_FIRST_SEC = 5,
+    TEST_SKIP_FIRST_SEC = 10,
 
     // whole test runs this long
     // make this at least 30 seconds greater than the skip length
-    TEST_LEN_SEC = 6000 + TEST_SKIP_FIRST_SEC,
+    TEST_LEN_SEC = 30 + TEST_SKIP_FIRST_SEC,
 
     // shift between object sizes every this many seconds
     // make this larger than the test runtime to disable
