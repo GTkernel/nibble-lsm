@@ -44,13 +44,10 @@ enum {
     SIZE_SHIFT_SEC = 5,
 
     // total set of batches held by each worker
-    // need a lot to satisfy the hungry consumers
-    // (don't make too many or workers will endlessly allocate)
     NBATCHES = 1<<4,
 
     // number of objects within each batch
     // large enough to reduce pushing/popping frequency
-    // 4k seems to be a good amount (keep as power of two)
     NPTRS = 1<<14,
 };
 
@@ -149,7 +146,7 @@ void* worker(void *args_) {
     // to reuse keys :)
     ul startkey = (u64)gettid() * (1ul << 44);
     ul key = startkey;
-    ul maxkeys = 1ul<<23;
+    ul maxkeys = 1ul<<18;
 
     for (ul q = 0; q < npairs; q++) {
         cq_init(&args->queues[q]);
@@ -473,7 +470,7 @@ int main(int narg, char *args[]) {
     }
 #endif
 
-    ul nitems = 1ul<<28;
+    ul nitems = 1ul<<27;
     nitems *= (log2f(nthreads) + 1);
     printf("nthreads %lu nitems %lu\n", nthreads, nitems);
     nibble_init(1ul<<38, nitems);

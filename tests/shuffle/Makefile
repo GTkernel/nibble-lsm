@@ -1,5 +1,8 @@
 CC := gcc
-CFLAGS := -Ofast -Wall -Wextra -pthread -ggdb -floop-optimize -funroll-loops -std=gnu11
+CFLAGS := -Wall -Wextra -pthread -std=gnu11
+CFLAGS += -Ofast
+CFLAGS += -floop-optimize -funroll-loops
+CFLAGS += -ggdb
 LDFLAGS := 
 # rustc told me to link against these for libffi.a
 LIBS := -lutil -ldl -lpthread -lgcc_s -lc -lm -lrt -lutil -lnuma
