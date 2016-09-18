@@ -334,7 +334,7 @@ impl HashTable {
 
     #[inline(always)]
     pub fn prefetchw(&self, hash: u64) {
-        let bidx = (hash % (self.nbuckets() as u64)) as usize;
+        let bidx = self.index(hash);
         let buckets: &[Bucket] = self.as_slice();
         let bucket: &Bucket = &buckets[bidx];
         let addr: *const u8 = unsafe {
@@ -354,6 +354,11 @@ impl HashTable {
     // TODO numa init method
     // mmap the bucket array and treat as a slice
 
+    #[inline(always)]
+    fn index(&self, hash: u64) -> usize {
+        (hash & (self.nbuckets() as u64 - 1)) as usize
+    }
+
     /// does work of both insert and update
     /// (true,None) -> insertion
     /// (true,Some(x)) -> update existing, x is old value
@@ -371,7 +376,7 @@ impl HashTable {
 
         let mut tver = self.version();
 
-        bidx = (hash % (self.nbuckets() as u64)) as usize;
+        bidx = self.index(hash);
         buckets = self.as_slice();
         bucket = &buckets[bidx];
 
@@ -380,7 +385,7 @@ impl HashTable {
             // if table version changes, recompute bucket index
             let v = self.version();
             if unlikely!(v != tver) {
-                bidx = (hash % (self.nbuckets() as u64)) as usize;
+                bidx = self.index(hash);
                 buckets = self.as_slice();
                 bucket = &buckets[bidx];
                 tver = v;
@@ -459,7 +464,7 @@ impl HashTable {
 
         let mut tver = self.version();
 
-        bidx = (hash % (self.nbuckets() as u64)) as usize;
+        bidx = self.index(hash);
         buckets = self.as_slice();
         bucket = &buckets[bidx];
 
@@ -467,7 +472,7 @@ impl HashTable {
 
             let v = self.version();
             if unlikely!(v != tver) {
-                bidx = (hash % (self.nbuckets() as u64)) as usize;
+                bidx = self.index(hash);
                 buckets = self.as_slice();
                 bucket = &buckets[bidx];
                 tver = v;
@@ -511,7 +516,7 @@ impl HashTable {
         // before reading bucket, you must save table version
         let mut tver = self.version();
 
-        bidx = (hash % (self.nbuckets() as u64)) as usize;
+        bidx = self.index(hash);
         buckets = self.as_slice();
         bucket = &buckets[bidx];
 
@@ -519,7 +524,7 @@ impl HashTable {
 
             let v = self.version();
             if unlikely!(v != tver) {
-                bidx = (hash % (self.nbuckets() as u64)) as usize;
+                bidx = self.index(hash);
                 buckets = self.as_slice();
                 bucket = &buckets[bidx];
                 tver = v;
@@ -589,7 +594,7 @@ impl HashTable {
 
         let mut tver = self.version();
 
-        bidx = (hash % (self.nbuckets() as u64)) as usize;
+        bidx = self.index(hash);
         buckets = self.as_slice();
         bucket = &buckets[bidx];
 
@@ -597,7 +602,7 @@ impl HashTable {
 
             let v = self.version();
             if unlikely!(v != tver) {
-                bidx = (hash % (self.nbuckets() as u64)) as usize;
+                bidx = self.index(hash);
                 buckets = self.as_slice();
                 bucket = &buckets[bidx];
                 tver = v;
