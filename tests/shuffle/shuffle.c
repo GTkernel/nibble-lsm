@@ -80,7 +80,7 @@ typedef uint64_t u64;
 typedef uint32_t u32;
 
 // Exposed Rust functions for use to use a Nibble object.
-extern void  nibble_default();
+extern void  nibble_init(size_t cap, size_t nitem);
 extern void* nibble_alloc(u64 key, u64 bytes, u32 sock);
 // must_exist = 1 -> fail if key not found
 extern void  nibble_free(u64 key, int must_exist);
@@ -146,13 +146,16 @@ void* worker(void *args_) {
     // Thus, the starting key is (thread id) * 2**44.
     // Of course, this assumes threads don't come and go
     // to reuse keys :)
-    ul key = (u64)gettid() * (2ul << 44);
+    ul startkey = (u64)gettid() * (1ul << 44);
+    ul key = startkey;
+    ul maxkeys = 1ul<<23;
 
     for (ul q = 0; q < npairs; q++) {
         cq_init(&args->queues[q]);
         //printf("worker %lu queue %p\n", args->id, &args->queues[q]);
     }
 
+    //printf("w %lu init batches\n", args->id);
     struct batch *batches = calloc(NBATCHES, sizeof(*batches));
     assert(batches);
     for (ul i = 0; i < NBATCHES; i++) {
@@ -166,11 +169,13 @@ void* worker(void *args_) {
     struct drand48_data rdata;
     srand48_r((ul)batches, &rdata);
 
+    //printf("w %lu init sizes arrays\n", args->id);
     const ul nsizes = 256; // keep as power of two
     ul sizes_mask = nsizes-1;
     ul sizes1[nsizes], sizes2[nsizes];
     setup_sizes(nsizes, sizes1, sizes2, &rdata);
 
+    //printf("w %lu shuffle q idxs\n", args->id);
     // offset our starting queue to push to;
     // can also randomize if you wish
     ul *qs = calloc(npairs, sizeof(*qs));
@@ -184,6 +189,7 @@ void* worker(void *args_) {
     atomic_sub_fetch(&warmup_barrier, 1);
     while (atomic_load(&warmup_barrier) > 0)
         ;
+    //printf("w %lu starting!\n", args->id);
 
     ul next_q = 0;
     ul next_b = 0;
@@ -459,7 +465,10 @@ int main(int narg, char *args[]) {
     }
 #endif
 
-    nibble_default();
+    ul nitems = 1ul<<28;
+    nitems *= (log2f(nthreads) + 1);
+    printf("nthreads %lu nitems %lu\n", nthreads, nitems);
+    nibble_init(1ul<<38, nitems);
 
     atomic_sub_fetch(&warmup_barrier, 1);
     while (atomic_load(&warmup_barrier) > 0)

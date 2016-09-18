@@ -27,11 +27,11 @@ use std::ptr::null;
 static mut NIBBLE: Pointer<Nibble> = Pointer(null::<Nibble>());
 
 #[no_mangle] pub extern
-fn nibble_default() {
+fn nibble_init(cap: usize, nitems: usize) {
 	logger::enable();
 	println!("# Nibble allocating...");
 	//let nib: Box<Nibble> = Box::new(Nibble::default());
-	let nib: Box<Nibble> = Box::new(Nibble::new(1usize<<38));
+	let nib: Box<Nibble> = Box::new(Nibble::new2(cap,nitems));
 	println!("# Nibble enabling compaction");
 	for sock in 0..numa::NODE_MAP.sockets() {
 		nib.enable_compaction(NodeId(sock));
