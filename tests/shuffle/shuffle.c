@@ -45,12 +45,13 @@ enum {
 
     // total set of batches held by each worker
     // need a lot to satisfy the hungry consumers
-    NBATCHES = 1<<8, // 16
+    // (don't make too many or workers will endlessly allocate)
+    NBATCHES = 1<<4,
 
     // number of objects within each batch
     // large enough to reduce pushing/popping frequency
     // 4k seems to be a good amount (keep as power of two)
-    NPTRS = 1<<14, // 10
+    NPTRS = 1<<14,
 };
 
 // Given command arguments (no need to modify here)
