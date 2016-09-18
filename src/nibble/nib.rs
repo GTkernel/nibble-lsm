@@ -87,7 +87,7 @@ impl Nibble {
         //let ntables = numa::NODE_MAP.ncpus();
         //let ntables: usize = 64;
 
-        let ntables: usize = 16 * numa::NODE_MAP.sockets();
+        let ntables: usize = 128 * numa::NODE_MAP.sockets();
         let nitems = ht_nitems; //1usize << 30;
         let n_per  = nitems / ntables;
 
