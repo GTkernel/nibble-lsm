@@ -317,11 +317,19 @@ impl Nibble {
     // Insert key into index; write object header into log, but
     // do not write actual object itself.
     // This version of alloc acts like an explicit insert.
+    // NOTE: this is only used for the shuffle benchmark for now.
+    // It will block if key already exists, and fail if key wasn't
+    // able to insert, or was an update
     pub fn alloc(&self, key: u64, len: u64, sock: u32) -> Pointer<u8> {
         // epoch::pin();
         let va: usize;
 
         let obj = ObjDesc::null(key, len as usize);
+
+        // make sure we wait for key to be deleted before adding again
+        while let Some(_) = self.index.get(obj.key) {
+            ;
+        }
 
         let res = self.nodes[sock as usize].log.append(&obj);
         debug_assert_eq!(res.is_ok(), true);
@@ -332,7 +340,9 @@ impl Nibble {
         // 2. update reference to object
         let (ok,opt) = self.index.update(obj.key, ientry);
         // verify this inserted, and was not an update
-        debug_assert_eq!(ok, true);
+        debug_assert_eq!(ok, true,
+                        "Table insert failed; can it resize?");
+        // XXX
         debug_assert_eq!(opt.is_none(), true);
 
         // epoch::quiesce();
