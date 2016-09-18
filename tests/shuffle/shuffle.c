@@ -250,6 +250,11 @@ found:;
             ALLOC(i+14 ); ALLOC(i+15 );
         }
         many += NPTRS;
+        if (key >= (startkey + maxkeys)) {
+            //printf("w %lu restarting keys\n", args->id);
+            //fflush(stdout);
+            key = startkey;
+        }
 #if defined(PRINT_PROGRESS)
         partial_many += NPTRS;
 #endif
