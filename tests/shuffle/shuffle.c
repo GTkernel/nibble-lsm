@@ -272,8 +272,8 @@ found:;
 #endif
 
         // hand it off
-        b->status = FREE_OK;
         fullfence();
+        b->status = FREE_OK;
         cq_push(&args->queues[qs[next_q]], (ul)b);
         next_q = (next_q + 1) % nqs;
 
@@ -375,6 +375,8 @@ void* consumer(void *args_) {
                 FREE(i+12); FREE(i+13);
                 FREE(i+14); FREE(i+15);
             }
+            memset(b->keys, 0, sizeof(ul)*NPTRS);
+            fullfence();
             b->status = ALLOC_OK; // we're done
             many += NPTRS;
 #if defined(PRINT_PROGRESS)
