@@ -351,12 +351,13 @@ impl HashTable {
         }
     }
 
-    // TODO numa init method
-    // mmap the bucket array and treat as a slice
-
+    /// Compute the index of the bucket from the hash of the key.
+    /// I am unconvinced my FNV1a implementation is correct, as
+    /// it results in constant growth of the hash table. We use
+    /// mid-order bits as the index to avoid any collusion.
     #[inline(always)]
     fn index(&self, hash: u64) -> usize {
-        (hash & (self.nbuckets() as u64 - 1)) as usize
+        ((hash >> 23) & (self.nbuckets() as u64 - 1)) as usize
     }
 
     /// does work of both insert and update
