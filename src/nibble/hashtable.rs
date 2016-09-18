@@ -260,9 +260,10 @@ pub struct HashTable {
 impl HashTable {
 
     pub fn new(entries: usize, sock: usize) -> Self {
-        let nbuckets = entries / ENTRIES_PER_BUCKET;
+        let nbuckets =
+            (entries / ENTRIES_PER_BUCKET).next_power_of_two();
         let len = nbuckets * mem::size_of::<Bucket>();
-        info!("new table on socket {} len {}", sock, len);
+        info!("new table on sock {} nbucket {}", sock, nbuckets);
         let align: usize = 1usize<<21;
         let mmap = MemMap::numa(TABLE_VLEN,
                                 NodeId(sock), align, false);
