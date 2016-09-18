@@ -1,8 +1,12 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize,Ordering};
+use crossbeam;
+use parking_lot as pl;
 
 use hashtable::*;
-use numa;
 use common::{Pointer};
+use numa::{self,NodeId};
+use sched;
 
 //==----------------------------------------------------==//
 //      Index
@@ -41,12 +45,38 @@ impl Index {
         let mut tables: Vec<Pointer<HashTable>>;
         tables = Vec::with_capacity(n);
         let nsockets = numa::NODE_MAP.sockets();
-        for i in 0..n {
-            let sock = i % nsockets;
-            let t = Box::new(HashTable::new(per, sock));
-            let p = Pointer(Box::into_raw(t));
-            tables.push(p);
+        assert!(0 == (n % nsockets),
+            "Number of tables must evenly divide among sockets");
+
+        // wrap it up for sharing
+        let sharedq = pl::Mutex::new(tables);
+
+        let tables_per = n / nsockets;
+        let mut guards = vec![];
+        let socket = AtomicUsize::new(0);
+        crossbeam::scope(|scope| {
+            for _ in 0..nsockets {
+                let guard = scope.spawn(|| {
+                    let sock = socket.fetch_add(1, Ordering::Relaxed);
+                    info!("Creating tables on socket {}", sock);
+                    // pin on appropriate socket to speed up init
+                    let cpu = numa::NODE_MAP.cpus_of(NodeId(sock)).start;
+                    unsafe { sched::pin_cpu(cpu); }
+                    for _ in 0..tables_per {
+                        let t = Box::new(HashTable::new(per,sock));
+                        let p = Pointer(Box::into_raw(t));
+                        sharedq.lock().push(p);
+                    }
+                });
+                guards.push(guard);
+            }
+        });
+        for guard in guards {
+            guard.join();
         }
+
+        let tables = sharedq.into_inner();
+
         Index {
             nnodes: numa::NODE_MAP.sockets(),
             tables: tables,
