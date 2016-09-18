@@ -683,8 +683,9 @@ impl HashTable {
         let len = self.len * factor;
         assert!(len <= self.bucket_mmap.len(),
             "Resizing table cannot grow beyond mmap area");
+        debug_assert!(nbuckets.is_power_of_two());
 
-        info!("resizing table 0x{:x}", self.bucket_mmap.addr());
+        info!("table 0x{:x} resizing", self.bucket_mmap.addr());
 
         // for bucket in self.as_slice() {
         //     println!("BEF {:?}", bucket);
@@ -776,7 +777,9 @@ impl HashTable {
         debug!("unlocking {} µs", clock::to_usec(end-start));
 
         let end = clock::now();
-        debug!("resize total {} µs", clock::to_usec(end-begin));
+        info!("table 0x{:x} resized {} µs",
+              self.bucket_mmap.addr(),
+              clock::to_usec(end-begin));
 
         // for bucket in old_buckets {
         //     println!("OLD {:?}", bucket);
