@@ -18,7 +18,7 @@ use parking_lot as pl;
 pub const BLOCK_SHIFT:      usize = 16;
 pub const BLOCK_SIZE:       usize = 1 << BLOCK_SHIFT;
 pub const BLOCK_OFF_MASK:   usize = BLOCK_SIZE - 1;
-pub const SEGMENT_SHIFT:    usize = 21;
+pub const SEGMENT_SHIFT:    usize = 25;
 pub const SEGMENT_SIZE:     usize = 1 << SEGMENT_SHIFT;
 pub const BLOCKS_PER_SEG:   usize = SEGMENT_SIZE / BLOCK_SIZE;
 
