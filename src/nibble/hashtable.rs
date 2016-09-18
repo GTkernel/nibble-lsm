@@ -778,9 +778,9 @@ impl HashTable {
         debug!("unlocking {} µs", clock::to_usec(end-start));
 
         let end = clock::now();
-        info!("table 0x{:x} resized {} µs",
+        info!("table 0x{:x} resized {} ms",
               self.bucket_mmap.addr(),
-              clock::to_usec(end-begin));
+              clock::to_msec(end-begin));
 
         // for bucket in old_buckets {
         //     println!("OLD {:?}", bucket);
