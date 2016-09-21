@@ -375,14 +375,7 @@ impl WorkloadGenerator {
                         while (now.elapsed().as_secs() as usize) < duration {
                             for _ in 0..1000usize {
                                 let isread = rwgen.next() < read_threshold as u32;
-                                let gkey = keygen.next() as usize;
-                                // NOTE local GET assumes PUT is local
-                                // (and that threads don't move), else
-                                // objects move and this no longer
-                                // works
-                                let key = if let KeyPolicy::Local = config.keyp {
-                                    sock.0*pernode + (gkey % pernode)
-                                } else { gkey };
+                                let key = keygen.next() as usize + 1;
                                 if isread {
                                     if let (Err(e),_) = nibble.get_object(key as u64) {
                                         panic!("Error: {:?}", e);
@@ -444,18 +437,6 @@ enum PutPolicy {
     Local,
 }
 
-#[derive(Clone,Copy,Debug)]
-enum KeyPolicy {
-    /// GETs access objects on all sockets according to Dist
-    Global,
-    /// Restrict GETs to objects local to the socket
-    /// (using same Dist if possible)
-    /// Currently this is implemented using modulus. Whether this is
-    /// appropriate for a given distribution, depends on the
-    /// distribution
-    Local,
-}
-
 #[derive(Debug,Clone,Copy)]
 enum Dist {
     /// Contained value is s (exponent modifier)
@@ -511,21 +492,6 @@ fn extract_puts(args: &clap::ArgMatches) -> PutPolicy {
     }
 }
 
-fn extract_keyp(args: &clap::ArgMatches) -> KeyPolicy {
-    match args.value_of("keyp") {
-        None => panic!("Specify key gen policy"),
-        Some(s) => {
-            if s == "global" {
-                KeyPolicy::Global
-            } else if s == "local" {
-                KeyPolicy::Local
-            } else {
-                panic!("invalid key gen policy");
-            }
-        },
-    }
-}
-
 // TODO: setup configuration, how to allocate objects across sockets
 #[derive(Debug,Clone,Copy)]
 struct Config {
@@ -544,7 +510,6 @@ struct Config {
     ops: u64,
     cpu: CPUPolicy,
     puts: PutPolicy,
-    keyp: KeyPolicy,
     /// Number of threads to run experiment with
     threads: usize,
     /// How long to run the experiment in seconds
@@ -557,19 +522,17 @@ impl Config {
 
     pub fn ycsb(total: usize, ops: u64, w: YCSB,
                 cpu: CPUPolicy, puts: PutPolicy,
-                keyp: KeyPolicy,
                 time: usize, threads: usize,
                 comp: bool) -> Self {
         let rc: usize = 1000;
         Self::ycsb_more(total, ops, w, rc, cpu,
-                        puts,keyp,time,threads, comp)
+                        puts,time,threads, comp)
     }
 
     // more records
     pub fn ycsb_more(total: usize, ops: u64, w: YCSB,
                      records: usize,
                      cpu: CPUPolicy, puts: PutPolicy,
-                     keyp: KeyPolicy,
                      time: usize, threads: usize,
                      comp: bool) -> Self {
         let rs: usize = 100;
@@ -589,7 +552,6 @@ impl Config {
             ops: ops,
             cpu: cpu,
             puts: puts,
-            keyp: keyp,
             threads: threads,
             dur: time,
             comp: comp,
@@ -601,7 +563,6 @@ impl Config {
                   size: usize, dist: Dist,
                   read_pct: usize,
                   cpu: CPUPolicy, puts: PutPolicy,
-                  keyp: KeyPolicy,
                   time: usize, threads: usize,
                   comp: bool) -> Self {
         Config {
@@ -614,7 +575,6 @@ impl Config {
             ops: ops,
             cpu: cpu,
             puts: puts,
-            keyp: keyp,
             threads: threads,
             dur: time,
             comp: comp,
@@ -654,8 +614,6 @@ fn main() {
              .long("ops").takes_value(true))
         .arg(Arg::with_name("put")
              .long("put").takes_value(true))
-        .arg(Arg::with_name("keyp")
-             .long("keyp").takes_value(true))
         .arg(Arg::with_name("cpu")
              .long("cpu").takes_value(true))
         .arg(Arg::with_name("time")
@@ -678,32 +636,15 @@ fn main() {
             let threads  = arg_as_num::<usize>(&matches, "threads");
             let time     = arg_as_num::<usize>(&matches, "time");
 
-            let keyp = extract_keyp(&matches);
             let puts = extract_puts(&matches);
             let cpu  = extract_cpu(&matches);
             let dist = extract_dist(&matches);
-
-            if let PutPolicy::GlobalRR = puts {
-                if let KeyPolicy::Local = keyp {
-                    assert!(false,
-                            "If PUT policy is global, {}",
-                            "KeyGen must not be local");
-                }
-            }
-
-            // TODO enable correct Local + Zipfian
-            if let Dist::Zipfian(_) = dist {
-                if let KeyPolicy::Local = keyp {
-                    panic!("Cannot combine DIST::Zipfian and KeyGen::Local.");
-                }
-            }
 
             let comp = matches.is_present("compaction");
 
             Config::custom(capacity, ops, records,
                            size, dist, readpct, cpu,
-                           puts, keyp,
-                           time, threads, comp)
+                           puts, time, threads, comp)
         },
 
         // YCSB-Specific Configuration
@@ -724,9 +665,6 @@ fn main() {
             let cpu = extract_cpu(&matches);
             let puts = extract_puts(&matches);
 
-            // KeyPolicy is ignored TODO fix this (see above)
-            let keyp = KeyPolicy::Global;
-
             // optional argument
             let records = match matches.value_of("records") {
                 None => None,
@@ -740,10 +678,10 @@ fn main() {
 
             match records {
                 None => Config::ycsb(capacity, ops, ycsb,
-                                     cpu, puts, keyp, time,threads,comp),
+                                     cpu, puts, time,threads,comp),
                 Some(r) => Config::ycsb_more(capacity,
                                              ops, ycsb, r, cpu,
-                                             puts,keyp,time,threads,comp),
+                                             puts,time,threads,comp),
             }
         },
     };
