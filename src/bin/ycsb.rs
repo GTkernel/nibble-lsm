@@ -214,7 +214,7 @@ impl WorkloadGenerator {
         let mut handles: Vec<JoinHandle<()>> =
             Vec::with_capacity(self.sockets);
         for sock in 0..self.sockets {
-            let start_key: u64 = (sock*pernode) as u64;
+            let start_key: u64 = (sock*pernode) as u64 + 1;
             let end_key: u64   = start_key + (pernode as u64);
             let arc = self.nibble.clone();
             handles.push( thread::spawn( move || {
