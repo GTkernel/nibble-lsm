@@ -32,6 +32,124 @@ use std::sync::Arc;
 use std::sync::atomic::*;
 use std::thread::{self,JoinHandle};
 use std::time::{Instant,Duration};
+use std::ptr;
+
+//==----------------------------------------------------------------==
+//  Build-based functions
+//  Compile against Nibble, or exported functions.
+//==----------------------------------------------------------------==
+
+//
+// Nibble redirection
+//
+
+#[cfg(not(feature = "extern_ycsb"))]
+static mut NIBBLE: Pointer<Nibble> = Pointer(0 as *const Nibble);
+
+#[cfg(not(feature = "extern_ycsb"))]
+fn kvs_init(config: &Config) {
+    let mut nibble = Box::new(Nibble::new(config.total));
+    if config.comp {
+        info!("Enabling compaction");
+        for node in 0..numa::NODE_MAP.sockets() {
+            nibble.enable_compaction(NodeId(node));
+        }
+    }
+    unsafe {
+        let p = Box::into_raw(nibble);
+        NIBBLE = Pointer(p);
+    }
+}
+
+#[cfg(not(feature = "extern_ycsb"))]
+fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
+    let nibble: &Nibble = unsafe { &*NIBBLE.0 };
+    let obj = ObjDesc::new(key, value, len);
+    let nibnode = nib::PutPolicy::Specific(sock);
+    while let Err(e) = nibble.put_where(&obj, nibnode) {
+        match e {
+            ErrorCode::OutOfMemory => {},
+            _ => panic!("Error: {:?}", e),
+        }
+    }
+}
+
+#[cfg(not(feature = "extern_ycsb"))]
+fn get_object(key: u64) {
+    let nibble: &Nibble = unsafe { &*NIBBLE.0 };
+    if let (Err(e),_) = nibble.get_object(key) {
+        panic!("Error: {:?}", e);
+    }
+}
+
+//
+// Other KVS redirection (external library)
+//
+
+// Link against libmicaext.so which is built in
+// mica-kvs.git
+// and installed to /usr/local/lib/
+#[link(name = "micaext")]
+#[cfg(feature = "mica")]
+#[cfg(feature = "extern_ycsb")]
+extern {
+    fn extern_kvs_init();
+    fn extern_kvs_put();
+    fn extern_kvs_del();
+    fn extern_kvs_get();
+}
+
+// Link against libramcloudext.so which is built in
+// make -C ramcloud-scale-hacks.git/src/
+// and installed to /usr/local/lib/
+#[link(name = "ramcloudext")]
+#[cfg(feature = "rc")]
+#[cfg(feature = "extern_ycsb")]
+extern {
+    // must match signatures in ObjectManagerExported.cc
+    fn extern_kvs_init();
+    fn extern_kvs_put(key: u64, len: u64, buf: *const u8);
+    fn extern_kvs_del(key: u64);
+    fn extern_kvs_get(key: u64);
+}
+
+#[cfg(feature = "extern_ycsb")]
+fn kvs_init(config: &Config) {
+    unsafe {
+        extern_kvs_init();
+    }
+}
+
+#[cfg(feature = "extern_ycsb")]
+fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
+    // we ignore 'sock' b/c RAMCloud is NUMA-agnostic
+    // (MICA might, though...)
+    unsafe {
+        trace!("PUT {:x} len {}", key, len);
+        extern_kvs_put(key, len as u64, value.0);
+    }
+}
+
+#[cfg(feature = "extern_ycsb")]
+fn get_object(key: u64) {
+    unsafe {
+        trace!("GET {:x}", key);
+        extern_kvs_get(key);
+    }
+}
+
+#[cfg(feature = "extern_ycsb")]
+fn del_object(key: u64) {
+    unsafe {
+        trace!("DEL {:x}", key);
+        extern_kvs_del(key);
+    }
+}
+
+
+//==----------------------------------------------------------------==
+//  The rest of the benchmark
+//==----------------------------------------------------------------==
 
 trait DistGenerator {
     fn next(&mut self) -> u32;
@@ -179,7 +297,6 @@ enum YCSB {
 }
 
 struct WorkloadGenerator {
-    nibble: Arc<Nibble>,
     config: Config,
     sockets: usize,
 }
@@ -188,16 +305,9 @@ impl WorkloadGenerator {
 
     pub fn new(config: Config) -> Self {
         let n = config.records;
-        let mut nibble = Nibble::new(config.total);
-        if config.comp {
-            info!("Enabling compaction");
-            for node in 0..numa::NODE_MAP.sockets() {
-                nibble.enable_compaction(NodeId(node));
-            }
-        }
+        kvs_init(&config);
         info!("WorkloadGenerator {:?}", config);
         WorkloadGenerator {
-            nibble: Arc::new(nibble),
             config: config,
             sockets: numa::NODE_MAP.sockets(),
         }
@@ -216,18 +326,13 @@ impl WorkloadGenerator {
         for sock in 0..self.sockets {
             let start_key: u64 = (sock*pernode) as u64 + 1;
             let end_key: u64   = start_key + (pernode as u64);
-            let arc = self.nibble.clone();
             handles.push( thread::spawn( move || {
                 let value = memory::allocate::<u8>(size);
                 let v = Pointer(value as *const u8);
                 info!("range [{},{}) on socket {}",
                 start_key, end_key, sock);
                 for key in start_key..end_key {
-                    let obj = ObjDesc::new(key, v, size);
-                    if let Err(code) = arc.put_where(&obj,
-                                          nib::PutPolicy::Specific(sock)) {
-                        panic!("{:?}", code)
-                    }
+                    put_object(key, v, size, sock);
                 }
                 unsafe { memory::deallocate(value, size); }
             }));
@@ -328,7 +433,6 @@ impl WorkloadGenerator {
                 let accum = accum.clone();
                 let cpu = cpus.pop_front().unwrap();
                 let config = self.config.clone();
-                let nibble = self.nibble.clone();
 
                 handles.push( thread::spawn( move || {
                     accum.fetch_sub(1, Ordering::Relaxed);
@@ -338,7 +442,8 @@ impl WorkloadGenerator {
                     let v = Pointer(value as *const u8);
 
                     let sock = numa::NODE_MAP.sock_of(cpu);
-                    info!("thread {} on cpu {} sock {:?}", t, cpu, sock);
+                    info!("thread {} on cpu {} sock {:?} setup...",
+                          t, cpu, sock);
 
                     // make your own generator for key accesses
                     let mut keygen: Box<DistGenerator> =
@@ -371,44 +476,47 @@ impl WorkloadGenerator {
                     //loop {
                         let mut ops = 0usize;
                         let now = Instant::now();
+                        let iters = 1000usize;
 
-                        while (now.elapsed().as_secs() as usize) < duration {
-                            for _ in 0..1000usize {
-                                let isread = rwgen.next() < read_threshold as u32;
-                                let key = keygen.next() as usize + 1;
+                        while (now.elapsed().as_secs() as usize)
+                                < duration {
+                            for _ in 0..iters {
+                                let isread = rwgen.next()
+                                    < read_threshold as u32;
+                                let key = keygen.next() as u64 + 1;
                                 if isread {
-                                    if let (Err(e),_) = nibble.get_object(key as u64) {
-                                        panic!("Error: {:?}", e);
-                                    }
+                                    get_object(key);
                                 } else {
-                                    let put_sock = match config.puts {
+                                    let sock = match config.puts {
                                         PutPolicy::GlobalRR => {
-                                            sockn = (sockn + 1) % sockets; sockn
+                                            sockn = (sockn + 1)
+                                                % sockets; sockn
                                         },
                                         PutPolicy::Local => sock.0,
                                     };
-                                    let obj = ObjDesc::new(key as u64, v,
-                                                           config.size);
-                                    let nibnode = nib::PutPolicy::Specific(put_sock);
-                                    while let Err(e) = nibble.put_where(&obj, nibnode) {
-                                        match e {
-                                            ErrorCode::OutOfMemory => {},
-                                            _ => panic!("Error: {:?}", e),
-                                        }
-                                    }
-                                } // put or get
-                                ops += 1;
-                            } // for 1000
+                                    put_object(key,v,config.size,sock);
+                                }
+                            }
+                            ops += iters;
+
+                            // throttling, if enabled
+                            if cpo > 0 {
+                                let next = start + ops as u64 * cpo;
+                                while unsafe { clock::rdtsc() } < next {;}
+                            }
+
                         } // while some time
 
                         if x == 1 {
                             let dur = now.elapsed();
                             let nsec = dur.as_secs() * 1000000000u64
                                 + dur.subsec_nanos() as u64;
-                            let kops = ((ops as f64)/1e3)/((nsec as f64)/1e9);
+                            let kops = ((ops as f64)/1e3) /
+                                ((nsec as f64)/1e9);
                             println!("# {} {} {:.3}", t, nthreads, kops);
                             // aggregate the performance
-                            accum.fetch_add(kops as usize, Ordering::Relaxed);
+                            accum.fetch_add(kops as usize,
+                                            Ordering::Relaxed);
                         }
                 }}));
             }

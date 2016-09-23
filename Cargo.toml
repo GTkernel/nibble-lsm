@@ -22,6 +22,9 @@ parking_lot = "0.2.6"
 
 [features]
 default = ["epoch-tsc"]
+extern_ycsb = ["epoch-tsc"]
+rc = ["epoch-tsc"]
+mica = ["epoch-tsc"]
 # Epoch Options
 epoch-tsc = []
 epoch-atomic = []   # not implemented

@@ -22,6 +22,42 @@ either it interleaves itself on all nodes, or binds to socket 0.
 Currently, we cannot compact multiple segments if their total live
 size exceeds the maximum size of one segment.
 
+--- SHUFFLE ---
+
+To run the 'shuffling' benchmark, (which was copied from
+malloc-tests.git/src/shuffle/), enter tests/shuffle/ and:
+
+    make
+
+It should build the nibble library and a proxy library that allows C
+to invoke Rust code.
+
+--- YCSB ---
+
+Build the ycsb benchmark code with these instructions. You can link it
+with Nibble, RAMCloud, or MICA. The latter two require you
+build/install the respective shared libraries.
+
+Nibble:
+
+    cargo build --bin ycsb [--release]
+
+RAMCloud:
+
+    (download/compile/install ramcloud-scale-hacks.git)
+    cargo build --features "extern_ycsb rc" --bin ycsb [--release]
+
+    RAMCLOUD_ARGV="-t MB -h % [...]" RAMCLOUD_NARG=N \
+                   target/[debug|release]/ycsb [args]
+
+MICA:
+
+    (download/compile/install mica-kvs.git)
+    cargo build --features "extern_ycsb mica" --bin ycsb [--release]
+
+    TODO execution instructions
+
+
 ----------------------------------------------------------------------
 --- Self notes below
 ----------------------------------------------------------------------
