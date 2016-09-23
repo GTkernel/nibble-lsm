@@ -313,36 +313,67 @@ impl WorkloadGenerator {
         }
     }
 
-    pub fn setup(&mut self) {
+    fn __setup(&mut self, parallel: bool) {
         let size = self.config.size;
 
         info!("Inserting {} objects of size {}",
               self.config.records, self.config.size);
 
         let now = Instant::now();
-        let pernode = self.config.records / self.sockets;
-        let mut handles: Vec<JoinHandle<()>> =
-            Vec::with_capacity(self.sockets);
-        for sock in 0..self.sockets {
-            let start_key: u64 = (sock*pernode) as u64 + 1;
-            let end_key: u64   = start_key + (pernode as u64);
-            handles.push( thread::spawn( move || {
-                let value = memory::allocate::<u8>(size);
-                let v = Pointer(value as *const u8);
-                info!("range [{},{}) on socket {}",
-                start_key, end_key, sock);
-                for key in start_key..end_key {
-                    put_object(key, v, size, sock);
-                }
-                unsafe { memory::deallocate(value, size); }
-            }));
+        if parallel {
+            let pernode = self.config.records / self.sockets;
+            let mut handles: Vec<JoinHandle<()>> =
+                Vec::with_capacity(self.sockets);
+            for sock in 0..self.sockets {
+                let start_key: u64 = (sock*pernode) as u64 + 1;
+                let end_key: u64   = start_key + (pernode as u64);
+                handles.push( thread::spawn( move || {
+                    let value = memory::allocate::<u8>(size);
+                    let v = Pointer(value as *const u8);
+                    info!("range [{},{}) on socket {}",
+                        start_key, end_key, sock);
+                    for key in start_key..end_key {
+                        put_object(key, v, size, sock);
+                    }
+                    unsafe { memory::deallocate(value, size); }
+                }));
+            }
+            for handle in handles {
+                let _ = handle.join();
+            }
         }
-        for handle in handles {
-            let _ = handle.join();
+
+        // use one thread to insert all keys
+        else {
+            let start_key: u64 = 1u64;
+            let end_key: u64 = self.config.records as u64;
+            let value = memory::allocate::<u8>(size);
+            let v = Pointer(value as *const u8);
+            info!("range [{},{})", start_key, end_key);
+            for key in start_key..end_key {
+                // NOTE socket param unused b/c we assume
+                // RAMCloud is unaware and also has a single lock for
+                // insertion (many threads inserting would be slow)
+                put_object(key, v, size, 0 /* unused */);
+            }
+            unsafe { memory::deallocate(value, size); }
         }
 
         let sec = now.elapsed().as_secs();
         info!("insertion took {} seconds", sec);
+    }
+
+    // sequential insertion (ramcloud)
+    #[cfg(feature = "rc")]
+    #[cfg(feature = "extern_ycsb")]
+    pub fn setup(&mut self) {
+        self.__setup(false);
+    }
+
+    // parallel insertion (nibble, mica)
+    #[cfg(any(feature = "mica", not(feature = "extern_ycsb")))]
+    pub fn setup(&mut self) {
+        self.__setup(true);
     }
 
     /// Run at specified op per second (ops).
@@ -375,7 +406,14 @@ impl WorkloadGenerator {
         let accum = Arc::new(AtomicUsize::new(0));
         let mut threadcount: Vec<usize>;
 
-        threadcount = vec![self.config.threads];
+        let cpus_pernode = numa::NODE_MAP.cpus_in(NodeId(0));
+        let sockets = numa::NODE_MAP.sockets();
+        let ncpus = cpus_pernode * sockets;
+        info!("cpus per node: {}", cpus_pernode);
+        info!("sockets:       {}", sockets);
+        info!("ncpus:         {}", ncpus);
+
+        //threadcount = vec![self.config.threads];
         // specific number of threads only
         //threadcount = vec![6];
         // power of 2   1, 2, 4, 8, 16, 32, 64, 128, 256
@@ -397,9 +435,6 @@ impl WorkloadGenerator {
             accum.store(nthreads, Ordering::Relaxed);
 
             // Create CPU binding strategy
-            let cpus_pernode = numa::NODE_MAP.cpus_in(NodeId(0));
-            let sockets = numa::NODE_MAP.sockets();
-            let ncpus = cpus_pernode * sockets;
             let mut cpus: VecDeque<usize> = VecDeque::with_capacity(ncpus);
             match self.config.cpu {
                 CPUPolicy::Global => {
@@ -431,7 +466,10 @@ impl WorkloadGenerator {
             // Spawn each of the threads in this set
             for t in 0..nthreads {
                 let accum = accum.clone();
-                let cpu = cpus.pop_front().unwrap();
+                let cpu = match cpus.pop_front() {
+                    None => panic!("No cpu for this thread?"),
+                    Some(c) => c,
+                };
                 let config = self.config.clone();
 
                 handles.push( thread::spawn( move || {
