@@ -165,9 +165,11 @@ impl Nibble {
     }
 
     pub fn enable_compaction(&self, node: NodeId) {
-        let mut comp = self.nodes[node.0].compactor.lock();
-        comp.spawn(WorkerRole::Reclaim);
-        comp.spawn(WorkerRole::Compact);
+        for _ in 0..4 {
+            let mut comp = self.nodes[node.0].compactor.lock();
+            //comp.spawn(WorkerRole::Reclaim);
+            comp.spawn(WorkerRole::Compact);
+        }
     }
 
     #[allow(unused_variables)]
