@@ -11,6 +11,8 @@ use std::mem;
 use std::mem::size_of;
 use std::ptr;
 use std::sync::{atomic, Arc};
+use std::thread;
+use std::time::Duration;
 
 use crossbeam::sync::SegQueue;
 use parking_lot as pl;
@@ -204,18 +206,38 @@ impl BlockAllocator {
     }
 
     pub fn alloc(&self, count: usize) -> Option<BlockRefPool> {
-        let mut guard = self.freepool.write();
-        let len = guard.len();
-        match len {
-            0 => {
-                warn!("freepool is empty");
-                None
-            },
-            len =>
-                if count <= len {
-                    Some(guard.split_off(len-count))
-                } else { None },
+        let mut blocks: Option<BlockRefPool> = None;
+        let mut wait: bool = false;
+        'retry: loop {
+            if wait {
+                let dur = Duration::from_millis(100);
+                thread::sleep(dur);
+                wait = false;
+            }
+            let mut guard = self.freepool.write();
+            let len = guard.len();
+            match len {
+                0 => {
+                    warn!("freepool is empty");
+                    break;
+                },
+                len =>
+                    // spin until enough blocks are free. allow some
+                    // to exist for compaction work to proceed
+                    if len < 128 * BLOCKS_PER_SEG {
+                        wait = true;
+                        continue 'retry;
+                    }
+                    else if count <= len {
+                        blocks = Some(guard.split_off(len-count));
+                        break;
+                    }
+                    else {
+                        break;
+                    },
+            }
         }
+        blocks
     }
 
     pub fn free(&self, pool: &mut BlockRefPool) {
