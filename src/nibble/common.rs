@@ -96,10 +96,10 @@ fn fnv1a(value: u64) -> u64 {
 pub
 fn shuffle<T: num::Integer>(vec: &mut Vec<T>) {
     if vec.is_empty() { return; }
-    let mut rng = rand::thread_rng();
+    //let mut rng = rand::thread_rng(); // doesn't scale!
     let n = vec.len();
     for i in 0..(n-1) {
-        let ii = (i+1) + (rng.next_u32() as usize % (n-i-1));
+        let ii = (i+1) + (unsafe { rdrand() } as usize % (n-i-1));
         vec.swap(i, ii);
     }
 }

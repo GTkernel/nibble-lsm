@@ -11,13 +11,15 @@ extern crate log;
 extern crate time;
 extern crate clap;
 extern crate num;
+extern crate crossbeam;
+extern crate parking_lot as pl;
 
 extern crate nibble;
 
 use clap::{Arg, App, SubCommand};
 use log::LogLevel;
 use nibble::clock;
-use nibble::common::{Pointer,ErrorCode,rdrand,rdrandq};
+use nibble::common::{self,Pointer,ErrorCode,rdrand,rdrandq};
 use nibble::epoch;
 use nibble::logger;
 use nibble::memory;
@@ -48,7 +50,8 @@ static mut NIBBLE: Pointer<Nibble> = Pointer(0 as *const Nibble);
 
 #[cfg(not(feature = "extern_ycsb"))]
 fn kvs_init(config: &Config) {
-    let mut nibble = Box::new(Nibble::new(config.total));
+    let mut nibble =
+        Box::new(Nibble::new2(config.total, 1usize<<30));
     if config.comp {
         info!("Enabling compaction");
         for node in 0..numa::NODE_MAP.sockets() {
@@ -153,6 +156,7 @@ fn del_object(key: u64) {
 
 trait DistGenerator {
     fn next(&mut self) -> u32;
+    fn reset(&mut self);
 }
 
 #[derive(Debug,Clone,Copy)]
@@ -202,6 +206,7 @@ impl DistGenerator for Zipfian {
              * (self.n as f64)) as u32
         }
     }
+    fn reset(&mut self) { }
 }
 
 struct ZipfianArray {
@@ -261,6 +266,9 @@ impl DistGenerator for ZipfianArray {
         }
         self.arr[self.next as usize] as u32
     }
+    fn reset(&mut self) {
+        self.next = 0;
+    }
 }
 
 struct Uniform {
@@ -276,8 +284,9 @@ impl Uniform {
         for x in 0..n {
             v.push(x as u32);
         }
-        let mut rng = rand::thread_rng();
-        rng.shuffle(&mut v);
+        //let mut rng = rand::thread_rng();
+        //rng.shuffle(&mut v);
+        common::shuffle(&mut v);
         Uniform { n: n, arr: v, next: 0 }
     }
 }
@@ -288,6 +297,10 @@ impl DistGenerator for Uniform {
     fn next(&mut self) -> u32 {
         self.next = (self.next + 1) % self.n;
         self.arr[self.next as usize]
+    }
+
+    fn reset(&mut self) {
+        self.next = 0;
     }
 }
 
@@ -325,7 +338,7 @@ impl WorkloadGenerator {
             let mut handles: Vec<JoinHandle<()>> =
                 Vec::with_capacity(self.sockets);
             for sock in 0..self.sockets {
-                let start_key: u64 = (sock*pernode) as u64 + 1;
+                let start_key: u64 = (sock*pernode) as u64;
                 let end_key: u64   = start_key + (pernode as u64);
                 handles.push( thread::spawn( move || {
                     let value = memory::allocate::<u8>(size);
@@ -333,7 +346,8 @@ impl WorkloadGenerator {
                     info!("range [{},{}) on socket {}",
                         start_key, end_key, sock);
                     for key in start_key..end_key {
-                        put_object(key, v, size, sock);
+                        // Avoid inserting value zero (0)
+                        put_object(key+1, v, size, sock);
                     }
                     unsafe { memory::deallocate(value, size); }
                 }));
@@ -354,7 +368,8 @@ impl WorkloadGenerator {
                 // NOTE socket param unused b/c we assume
                 // RAMCloud is unaware and also has a single lock for
                 // insertion (many threads inserting would be slow)
-                put_object(key, v, size, 0 /* unused */);
+                // Avoid inserting value zero (0)
+                put_object(key+1, v, size, 0 /* unused */);
             }
             unsafe { memory::deallocate(value, size); }
         }
@@ -424,11 +439,77 @@ impl WorkloadGenerator {
         //threadcount = (0usize..130).map(|e|if e==0 {1} else {2*e}).collect();
         // incr of 1    1, 2, 3, 4, 5, ...
         //threadcount = (1usize..261).collect();
+        // incr of 18    18,36,...
+        threadcount = (1_usize..(sockets+1))
+            .map(|e|cpus_pernode*e).collect();
+        info!("thread counts to use: {:?}", threadcount);
+        let max_threads: usize = *threadcount.last().unwrap() as usize;
 
+        // do setup once, to save on this cost across iterations
+        // need some hackiness because Rust makes it hard to share
+        // variables without synchronization. we're ok because each
+        // thread only accesses one slot
+        let mut gens: Vec<Box<DistGenerator>> =
+            Vec::with_capacity(max_threads);
+        unsafe {
+            gens.set_len(max_threads);
+        }
+        // as long as gens doesn't resize, this should be fine
+        let gens_ptr = Pointer(gens.as_ptr());
+
+        // used for threads to pick a slot and pin to CPU for
+        // forcing (hoping for) local page allocation
+        let idx = Arc::new(AtomicUsize::new(0));
+
+        info!("initializing all key generators...");
+        crossbeam::scope(|scope| {
+
+            let mut guards = vec![];
+
+            for _ in 0..max_threads {
+
+                let guard = scope.spawn(|| {
+                    let cpu = idx.fetch_add(1, Ordering::Relaxed);
+                    unsafe {
+                        pin_cpu(cpu);
+                    }
+
+                    // create the object
+                    let item: Box<DistGenerator>;
+                    item = match self.config.dist {
+                        Dist::Zipfian(s) =>
+                            Box::new(ZipfianArray::new_capped(
+                                self.config.records as u32, s,
+                                (self.config.dur as f64*(2f64*4e6)) as u32
+                                )),
+                        Dist::Uniform => {
+                            let n = self.config.records as u32;
+                            Box::new( Uniform::new(n) )
+                        },
+                    };
+
+                    // add it to the global vector
+                    unsafe {
+                        let mut slot = gens_ptr.0 .offset(cpu as isize)
+                            as *mut Box<DistGenerator>;
+                        ptr::write(slot, item);
+                    }
+                });
+                guards.push(guard);
+            }
+
+            // wait for all threads to complete
+            for g in guards {
+                g.join();
+            }
+        }); // whew! done
 
         // Run the experiment multiple times using different sets of
         // threads
         for nthreads in threadcount {
+            for g in &mut gens {
+                (**g).reset();
+            }
 
             let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(nthreads);
             info!("running with {} threads ---------", nthreads);
@@ -462,104 +543,105 @@ impl WorkloadGenerator {
                     }
                 },
             }
+            let cpus = pl::Mutex::new(cpus);
 
             // Spawn each of the threads in this set
-            for t in 0..nthreads {
-                let accum = accum.clone();
-                let cpu = match cpus.pop_front() {
-                    None => panic!("No cpu for this thread?"),
-                    Some(c) => c,
-                };
-                let config = self.config.clone();
+            let mut guards = vec![];
+            crossbeam::scope(|scope| {
 
-                handles.push( thread::spawn( move || {
-                    accum.fetch_sub(1, Ordering::Relaxed);
-                    unsafe { pin_cpu(cpu); }
+                for _ in 0..nthreads {
 
-                    let value = memory::allocate::<u8>(size);
-                    let v = Pointer(value as *const u8);
-
-                    let sock = numa::NODE_MAP.sock_of(cpu);
-                    info!("thread {} on cpu {} sock {:?} setup...",
-                          t, cpu, sock);
-
-                    // make your own generator for key accesses
-                    let mut keygen: Box<DistGenerator> =
-                        match config.dist {
-                            Dist::Zipfian(s) => Box::new(
-                                ZipfianArray::new_capped(
-                                    config.records as u32,s,
-                                    // hard assumption of max 7m op/sec
-                                    // the 2 from the warmup and exec phases
-                                    (config.dur as f64*(2.*7e6)) as u32)),
-                                Dist::Uniform => Box::new(
-                                    Uniform::new(config.records as u32)),
+                    let guard = scope.spawn( || {
+                        let cpu = match cpus.lock().pop_front() {
+                            None => panic!("No cpu for this thread?"),
+                            Some(c) => c,
                         };
-                    // make one for determining read/writes
-                    // don't want rdrand in the critical path.. slow
-                    let mut rwgen: Box<DistGenerator> =
-                        Box::new(Uniform::new(100));
-                    info!("done with setup; executing now");
+                        let config = self.config.clone();
 
-                    // wait for all other threads to spawn
-                    // after this, accum is zero
-                    while accum.load(Ordering::Relaxed) > 0 { ; }
+                        let laccum = accum.clone();
+                        laccum.fetch_sub(1, Ordering::Relaxed);
+                        unsafe { pin_cpu(cpu); }
 
-                    // socket to apply PUT
-                    let mut sockn = 0_usize;
+                        let value = memory::allocate::<u8>(size);
+                        let v = Pointer(value as *const u8);
 
-                    // main loop (do warmup first)
-                    for x in 0..2 {
-                    //let x = 1;
-                    //loop {
-                        let mut ops = 0usize;
-                        let now = Instant::now();
-                        let iters = 1000usize;
+                        let sock = numa::NODE_MAP.sock_of(cpu);
+                        info!("thread on cpu {} sock {:?} executing now...",
+                              cpu, sock);
 
-                        while (now.elapsed().as_secs() as usize)
-                                < duration {
-                            for _ in 0..iters {
-                                let isread = rwgen.next()
-                                    < read_threshold as u32;
-                                let key = keygen.next() as u64 + 1;
-                                if isread {
-                                    get_object(key);
-                                } else {
-                                    let sock = match config.puts {
-                                        PutPolicy::GlobalRR => {
-                                            sockn = (sockn + 1)
-                                                % sockets; sockn
-                                        },
-                                        PutPolicy::Local => sock.0,
-                                    };
-                                    put_object(key,v,config.size,sock);
+                        // use your own generator for key accesses
+                        let keygen: &mut Box<DistGenerator> = unsafe {
+                            &mut *(gens_ptr.0 .offset(cpu as isize)
+                                as *mut Box<DistGenerator>)
+                        };
+
+                        // make one for determining read/writes
+                        // don't want rdrand in the critical path.. slow
+                        let mut rwgen: Box<DistGenerator> =
+                            Box::new(Uniform::new(100));
+
+                        // wait for all other threads to spawn
+                        // after this, accum is zero
+                        while accum.load(Ordering::Relaxed) > 0 { ; }
+
+                        // socket to apply PUT
+                        let mut sockn = 0_usize;
+
+                        // main loop (do warmup first)
+                        for x in 0..2 {
+                        //let x = 1;
+                        //loop {
+                            let mut ops = 0usize;
+                            let now = Instant::now();
+                            let iters = 1000usize;
+
+                            while (now.elapsed().as_secs() as usize)
+                                    < duration {
+                                for _ in 0..iters {
+                                    let isread = rwgen.next()
+                                        < read_threshold as u32;
+                                    let key = keygen.next() as u64 + 1;
+                                    if isread {
+                                        get_object(key);
+                                    } else {
+                                        let sock = match config.puts {
+                                            PutPolicy::GlobalRR => {
+                                                sockn = (sockn + 1)
+                                                    % sockets; sockn
+                                            },
+                                            PutPolicy::Local => sock.0,
+                                        };
+                                        put_object(key,v,config.size,sock);
+                                    }
                                 }
+                                ops += iters;
+
+                                // throttling, if enabled
+                                if cpo > 0 {
+                                    let next = start + ops as u64 * cpo;
+                                    while unsafe { clock::rdtsc() } < next {;}
+                                }
+
+                            } // while some time
+
+                            if x == 1 {
+                                let dur = now.elapsed();
+                                let nsec = dur.as_secs() * 1000000000u64
+                                    + dur.subsec_nanos() as u64;
+                                let kops = ((ops as f64)/1e3) /
+                                    ((nsec as f64)/1e9);
+                                println!("# {} {} {:.3}", cpu, nthreads, kops);
+                                // aggregate the performance
+                                accum.fetch_add(kops as usize,
+                                                Ordering::Relaxed);
                             }
-                            ops += iters;
-
-                            // throttling, if enabled
-                            if cpo > 0 {
-                                let next = start + ops as u64 * cpo;
-                                while unsafe { clock::rdtsc() } < next {;}
-                            }
-
-                        } // while some time
-
-                        if x == 1 {
-                            let dur = now.elapsed();
-                            let nsec = dur.as_secs() * 1000000000u64
-                                + dur.subsec_nanos() as u64;
-                            let kops = ((ops as f64)/1e3) /
-                                ((nsec as f64)/1e9);
-                            println!("# {} {} {:.3}", t, nthreads, kops);
-                            // aggregate the performance
-                            accum.fetch_add(kops as usize,
-                                            Ordering::Relaxed);
                         }
-                }}));
-            }
-            for handle in handles {
-                let _ = handle.join();
+                    }); // spawn
+                guards.push(guard);
+                } // for threads
+            }); // crossbeam
+            for g in guards {
+                g.join();
             }
             println!("# total kops {}",
                      accum.load(Ordering::Relaxed));
