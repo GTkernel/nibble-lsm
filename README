@@ -68,6 +68,8 @@ Performance killers
     - hashes run over arbitrarily long buffers
 - too many function indirections
     - inline common paths
+- Using crate rand; rand::thread_rng() in parallel apparently has some
+kind of lock that slows everything down! Use rdrand instead...
 
 crates to consider
 
