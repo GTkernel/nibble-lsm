@@ -686,7 +686,9 @@ impl HashTable {
             "Resizing table cannot grow beyond mmap area");
         debug_assert!(nbuckets.is_power_of_two());
 
-        info!("table 0x{:x} resizing", self.bucket_mmap.addr());
+        info!("table 0x{:x} resizing, factor {} nb {} len {}",
+              self.bucket_mmap.addr(), factor,
+              nbuckets, len);
 
         // for bucket in self.as_slice() {
         //     println!("BEF {:?}", bucket);
