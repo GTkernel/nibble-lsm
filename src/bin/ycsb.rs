@@ -81,7 +81,7 @@ fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
 fn get_object(key: u64) {
     let nibble: &Nibble = unsafe { &*NIBBLE.0 };
     if let (Err(e),_) = nibble.get_object(key) {
-        panic!("Error: {:?}", e);
+        warn!("Error: {:?}", e);
     }
 }
 
