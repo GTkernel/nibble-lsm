@@ -1,10 +1,12 @@
 use libc;
 use syscall;
+use crossbeam;
 
 use std::mem;
 use std::ptr;
 use std::time::Instant;
 use std::slice;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use numa::{self,NodeId};
 use common::{Pointer,errno};
@@ -166,12 +168,33 @@ impl MemMap {
 
         // fault pages in
         if alloc {
+            let mut guards = vec![];
+            let idx = AtomicUsize::new(0);
             let now = Instant::now();
-            unsafe {
-                for pg in 0..(len>>12) {
-                    let pos: usize = addr + (pg<<12);
-                    ptr::write(pos as *mut usize, 0_usize);
+            let nthreads = 8;
+            info!("Using {} threads to fault in MemMap region",
+                  nthreads);
+            crossbeam::scope(|scope| {
+                for _ in 0..nthreads {
+                    let guard = scope.spawn(|| {
+                        let amt = len / nthreads;
+                        let o = Ordering::Relaxed;
+                        let i = idx.fetch_add(1, o);
+                        let offset = amt * i;
+                        unsafe {
+                            let startpg = offset>>12;
+                            let endpg   = (offset+amt)>>12;
+                            for pg in startpg..endpg {
+                                let pos: usize = addr + (pg<<12);
+                                ptr::write_volatile(pos as *mut usize, 0usize);
+                            }
+                        }
+                    });
+                    guards.push(guard);
                 }
+            });
+            for guard in guards {
+                guard.join();
             }
             info!("alloc node {}: {} sec", node, now.elapsed().as_secs());
         }

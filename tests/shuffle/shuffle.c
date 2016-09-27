@@ -291,6 +291,7 @@ found:;
                 float ops = (partial_many/1e3) /
                     (sec - last_print_time);
                 printf("w %lu kops/sec: %.2f\n", args->id, ops);
+                fflush(stdout);
                 last_print_time = sec;
                 partial_many = 0ul;
             }

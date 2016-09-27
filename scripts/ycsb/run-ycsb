@@ -1,0 +1,93 @@
+#! /usr/bin/env bash
+set -e
+set -u
+
+# not all options passed to ycsb are used (most are inherited from
+# when ycsb only ran with nibble), e.g. --put and --capacity are not
+# used when not running with Nibble, as such parameters are passed
+# through environment variables.
+#
+# If you modify src/bin/ycsb.rs to iterate over some number of
+# threads, you can save on avoiding repeated startup costs
+
+# in MiB
+#MEMSIZE=$((128*1024))
+MEMSIZE=$((9*(1<<40)))
+
+export NIBDEBUG=3
+
+export RAMCLOUD_ARGV="-t $MEMSIZE -h 10%"
+# number of args + 1 (like 'int argc' in C main)
+export RAMCLOUD_NARG=5
+
+# used only for RAMCloud
+#FEATURES="extern_ycsb rc"
+FEATURES=""
+
+# YCSB parameters
+#  C    size=1kb  1:0  zipfian
+#  B    size=1kb 95:05 zipfian
+#  A    size=1kb 50:50 zipfian
+# 'W'   size=1kb  0:1  zipfian
+#
+# and we can also do uniform for each of the above
+
+
+size=1000
+nkeys=$((2**26))
+# in MiB
+capacity=$MEMSIZE
+
+NSOCKETS=16
+NCPU=15
+
+# these will be modified
+readpct=0
+#for dist in uniform zipfian; do
+# for dist in zipfian; do
+#     #for T in C B; do
+#     for T in B; do
+#         [[ $T == "A" ]] && readpct=50
+#         [[ $T == "B" ]] && readpct=95
+#         [[ $T == "C" ]] && readpct=100
+#         [[ $T == "W" ]] && readpct=0
+#         echo ''; echo ''
+#         echo "# $T $dist"
+#         cargo run --features "$FEATURES" --release --bin ycsb -- \
+#             --dist $dist \
+#             --readpct $readpct \
+#             --records $nkeys \
+#             --capacity $capacity \
+#             --ops 0 \
+#             --threads 1 \
+#             --time 20 \
+#             --cpu incr \
+#             --size $size \
+#             --put local
+#         echo ''; echo ''
+#     done
+# done
+
+# XXX do write-heavy workloads last.. in case they crash
+for T in A W; do
+    for dist in uniform zipfian; do
+        [[ $T == "A" ]] && readpct=50
+        [[ $T == "W" ]] && readpct=0
+        for t in 1 2 3 4 16; do
+            echo ''; echo ''
+            echo "# $T $dist"
+            cargo run --features "$FEATURES" --release --bin ycsb -- \
+                --dist $dist \
+                --readpct $readpct \
+                --records $nkeys \
+                --capacity $capacity \
+                --ops 0 \
+                --threads $((t*$NCPU)) \
+                --time 20 \
+                --cpu incr \
+                --size $size \
+                --put local
+        done
+    done
+done
+
