@@ -97,9 +97,9 @@ fn get_object(key: u64) {
 #[cfg(feature = "extern_ycsb")]
 extern {
     fn extern_kvs_init();
-    fn extern_kvs_put();
-    fn extern_kvs_del();
-    fn extern_kvs_get();
+    fn extern_kvs_put(key: u64, len: u64, buf: *const u8);
+    fn extern_kvs_del(key: u64);
+    fn extern_kvs_get(key: u64);
 }
 
 // Link against libramcloudext.so which is built in
