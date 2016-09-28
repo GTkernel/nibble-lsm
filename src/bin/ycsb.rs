@@ -628,11 +628,11 @@ impl WorkloadGenerator {
                                 let dur = now.elapsed();
                                 let nsec = dur.as_secs() * 1000000000u64
                                     + dur.subsec_nanos() as u64;
-                                let kops = ((ops as f64)/1e3) /
+                                let ops = (ops as f64) /
                                     ((nsec as f64)/1e9);
-                                println!("# {} {} {:.3}", cpu, nthreads, kops);
+                                println!("# {} {} {:.3}", cpu, nthreads, ops);
                                 // aggregate the performance
-                                accum.fetch_add(kops as usize,
+                                accum.fetch_add(ops as usize,
                                                 Ordering::Relaxed);
                             }
                         }
@@ -643,7 +643,7 @@ impl WorkloadGenerator {
             for g in guards {
                 g.join();
             }
-            println!("# total kops {}",
+            println!("# total ops/sec {}",
                      accum.load(Ordering::Relaxed));
         }
 
