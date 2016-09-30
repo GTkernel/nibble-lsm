@@ -818,7 +818,7 @@ impl HashTable {
                     n += 1;
                 }
             }
-            println!("{},{}:", t.1, n);
+            println!("{} {}", t.1, n);
         }
     }
 }
@@ -1320,4 +1320,43 @@ mod tests {
             guard.join();
         }
     }
+
+    #[test]
+    fn fill_then_stats() {
+        logger::enable();
+
+        let entries: usize = 1usize<<12;
+        let mut ht = HashTable::new(entries, 0);
+        ht.forbid_resize();
+        let len = ht.len;
+        let nbuckets = ht.nbuckets;
+
+        let mut keys: Vec<u64> =
+            Vec::with_capacity(entries);
+
+        //for _ in 0..entries {
+        //    let mut v: u64 = unsafe { rdrandq() as u64 };
+        //    if v == 0 {
+        //        v += 1;
+        //    }
+        //    keys.push(v);
+        //}
+
+        for i in 0..entries {
+            let v: u64 = i as u64 + 1u64;
+            keys.push(v);
+        }
+
+        for k in keys {
+            match ht.put(k, k) {
+                (true,None) => continue, // inserted
+                (true,Some(_)) => assert!(false,"updated??"),
+                (false,None) => break, // table full
+                (false,Some(_)) => assert!(false), // not returned
+            }
+        }
+
+        ht.stats();
+    }
+
 }
