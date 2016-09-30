@@ -212,7 +212,6 @@ impl BlockAllocator {
             if wait {
                 let dur = Duration::from_millis(100);
                 thread::sleep(dur);
-                wait = false;
             }
             let mut guard = self.freepool.write();
             let len = guard.len();
