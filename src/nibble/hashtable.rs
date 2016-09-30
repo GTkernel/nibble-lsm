@@ -41,7 +41,7 @@ use clock;
 const TABLE_VLEN: usize = 1usize << 34;
 
 const VERSION_MASK: u64 = 0x1;
-const ENTRIES_PER_BUCKET: usize = 7;
+const ENTRIES_PER_BUCKET: usize = 15;
 
 /// We reserve this value to indicate the bucket slot is empty.
 const INVALID_KEY: u64 = 0u64;
@@ -352,12 +352,9 @@ impl HashTable {
     }
 
     /// Compute the index of the bucket from the hash of the key.
-    /// I am unconvinced my FNV1a implementation is correct, as
-    /// it results in constant growth of the hash table. We use
-    /// mid-order bits as the index to avoid any collusion.
     #[inline(always)]
     fn index(&self, hash: u64) -> usize {
-        ((hash >> 23) & (self.nbuckets() as u64 - 1)) as usize
+        (hash & (self.nbuckets() as u64 - 1)) as usize
     }
 
     /// does work of both insert and update
