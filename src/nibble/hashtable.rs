@@ -812,8 +812,17 @@ impl HashTable {
         her.finish()
     }
 
-    fn bucket_idx(&self, hash: u64) {
-        unimplemented!();
+    fn stats(&self) {
+        let buckets: &[Bucket] = self.as_slice();
+        for t in buckets.iter().zip(0..) {
+            let mut n = 0;
+            for i in 0..ENTRIES_PER_BUCKET {
+                if t.0 .key[i] != INVALID_KEY {
+                    n += 1;
+                }
+            }
+            println!("{},{}:", t.1, n);
+        }
     }
 }
 
