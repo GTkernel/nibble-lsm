@@ -993,9 +993,9 @@ impl SegmentManager {
         // or we only use a fixed amount of segment slots and
         // compactor always tries to fill exactly to SEGMENT_SIZE?
         if let Some(s) = self.free_slots.try_pop() {
-            let mut inner = self.inner.write();
             let slot = s as usize;
-            assert!(inner.segments[slot].is_none());
+            assert!(self.inner.read()
+                    .segments[slot].is_none());
             let mut blocks = match self.allocator.alloc(nblks) {
                 None => panic!("Could not allocate blocks"),
                 Some(b) => b,
@@ -1017,10 +1017,10 @@ impl SegmentManager {
             assert_eq!(list.ptr(), blocks.as_ptr(),
                 "segment {} block list resized!", slot);
 
+            let mut inner = self.inner.write();
             inner.segments[slot] =
                 Some(seg_ref!(id, self.socket.unwrap(), slot,blocks));
             ret = inner.segments[slot].clone();
-
         }
 
         ret
