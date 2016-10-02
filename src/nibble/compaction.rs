@@ -495,12 +495,14 @@ impl Worker {
             debug!("node-{:?} No candidates to return",
                    self.manager.socket().unwrap());
             None
-        } else if segs.len() == 1 {
-            debug!("node-{:?} Only 1 candidate, putting back",
-                   self.manager.socket().unwrap());
-            candidates.push(segs.remove(0));
-            None
-        } else {
+        }
+        // else if segs.len() == 1 {
+        //     debug!("node-{:?} Only 1 candidate, putting back",
+        //            self.manager.socket().unwrap());
+        //     candidates.push(segs.remove(0));
+        //     None
+        // }
+        else {
             debug!("node-{:?} Found {} candidates",
                    self.manager.socket().unwrap(), segs.len());
             Some( (segs,tally) )
