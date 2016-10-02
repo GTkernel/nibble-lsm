@@ -224,11 +224,11 @@ fn __compact(state: &Arc<pl::RwLock<Worker>>) {
         ratio < 0.5
     };
     if run {
-        info!("node-{} compaction initiated",
+        debug!("node-{} compaction initiated",
              s.manager.socket().unwrap());
         let now = clock::now();
         s.do_compact();
-        info!("node-{} compaction: {} ms",
+        debug!("node-{} compaction: {} ms",
               s.manager.socket().unwrap(),
               clock::to_msec(clock::now()-now));
         //let short = Duration::from_millis(100);
