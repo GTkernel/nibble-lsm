@@ -207,34 +207,10 @@ impl BlockAllocator {
 
     pub fn alloc(&self, count: usize) -> Option<BlockRefPool> {
         let mut blocks: Option<BlockRefPool> = None;
-        let mut wait: bool = false;
-        'retry: loop {
-            if wait {
-                let dur = Duration::from_millis(100);
-                thread::sleep(dur);
-            }
-            let mut guard = self.freepool.write();
-            let len = guard.len();
-            match len {
-                0 => {
-                    warn!("freepool is empty");
-                    break;
-                },
-                len =>
-                    // spin until enough blocks are free. allow some
-                    // to exist for compaction work to proceed
-                    if len < 128 * BLOCKS_PER_SEG {
-                        wait = true;
-                        continue 'retry;
-                    }
-                    else if count <= len {
-                        blocks = Some(guard.split_off(len-count));
-                        break;
-                    }
-                    else {
-                        break;
-                    },
-            }
+        let mut freepool = self.freepool.write();
+        let len = freepool.len();
+        if count <= len {
+            blocks = Some(freepool.split_off(len-count));
         }
         blocks
     }
@@ -984,46 +960,42 @@ impl SegmentManager {
 
     /// Allocate a segment with a specific number of blocks. Used by
     /// compaction code.
-    /// TODO wait/return if blocks aren't available (not panic)
     pub fn alloc_size(&self, nblks: usize) -> Option<SegmentRef> {
-        // TODO lock, unlock
         let mut ret: Option<SegmentRef> = None;
-        // XXX check allocator has enough blocks
-        // maybe we should assume there are sufficient segment slots?
-        // or we only use a fixed amount of segment slots and
-        // compactor always tries to fill exactly to SEGMENT_SIZE?
-        if let Some(s) = self.free_slots.try_pop() {
-            let slot = s as usize;
-            assert!(self.inner.read()
-                    .segments[slot].is_none());
-            let mut blocks = match self.allocator.alloc(nblks) {
-                None => panic!("Could not allocate blocks"),
-                Some(b) => b,
-            };
 
-            // some extra in case of overflow
-            blocks.reserve(8);
+        let mut blocks = match self.allocator.alloc(nblks) {
+            None => return None,
+            Some(b) => b,
+        };
+        // some extra in case of overflow
+        blocks.reserve(8);
 
-            let list = uslice::make(&blocks);
-            for t in (0..).zip(&blocks) {
-                unsafe {
-                    t.1 .set_segment(slot, t.0, list.clone());
-                }
-            }
-            let id = self.next_seg_id.fetch_add(1,
-                                     atomic::Ordering::Relaxed);
-            // Check we are not resizing, to avoid updating the
-            // Block::list pointer when we add new elements
-            assert_eq!(list.ptr(), blocks.as_ptr(),
-                "segment {} block list resized!", slot);
-
-            let mut inner = self.inner.write();
-            inner.segments[slot] =
-                Some(seg_ref!(id, self.socket.unwrap(), slot,blocks));
-            ret = inner.segments[slot].clone();
+        let slot;
+        match self.free_slots.try_pop() {
+            None => return None,
+            Some(s) => slot = s as usize,
         }
+        assert!(self.inner.read()
+                .segments[slot].is_none());
 
-        ret
+        let list = uslice::make(&blocks);
+        for t in (0..).zip(&blocks) {
+            unsafe {
+                t.1 .set_segment(slot, t.0, list.clone());
+            }
+        }
+        let id = self.next_seg_id.fetch_add(1,
+                                            atomic::Ordering::Relaxed);
+        // Check we are not resizing, to avoid updating the
+        // Block::list pointer when we add new elements
+        assert_eq!(list.ptr(), blocks.as_ptr(),
+            "segment {} block list resized!", slot);
+
+        let mut inner = self.inner.write();
+        inner.segments[slot] =
+            Some(seg_ref!(id, self.socket.unwrap(), slot,blocks));
+
+        inner.segments[slot].clone()
     }
 
     /// Allocate a segment with default size.

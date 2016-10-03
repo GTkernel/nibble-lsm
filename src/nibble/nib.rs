@@ -202,8 +202,7 @@ impl Nibble {
         // elsewhere?
         match self.nodes[socket].log.append(obj) {
             Err(code) => {
-                //trace!("log full: {} bytes",
-                      //self.nodes[socket].seginfo.live_bytes());
+                epoch::quiesce();
                 return Err(code);
             },
             Ok(v) => va = v,
@@ -218,6 +217,7 @@ impl Nibble {
             // no need to undo the log append;
             // entries are stale until we update the index
             warn!("index update returned false");
+            epoch::quiesce();
             return Err(ErrorCode::TableFull);
         }
 
