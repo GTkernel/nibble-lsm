@@ -319,9 +319,10 @@ impl Worker {
             let g = entry.read();
             let slot = g.slot();
             let live = self.seginfo.get_live(slot);
-            debug!("node-{:2?} [{:2}] slot {:4} sock {:4} live {}",
+            debug!("node-{:2?} [{:2}] sl {:4} so {:4} li {} ra {:.3}",
                    self.manager.socket().unwrap(),
-                   i, slot, g.socket(), live);
+                   i, slot, g.socket(), live,
+                   live as f64 / g.len() as f64);
             i += 1;
         }
     }
