@@ -792,12 +792,18 @@ mod tests {
     use std::ops;
     use std::slice::from_raw_parts;
     use std::sync::{Arc,Mutex};
+    use parking_lot as pl;
 
+    use clock;
     use memory::*;
     use segment::*;
     use thelog::*;
     use index::*;
     use common::*;
+    use nib::{Nibble};
+    use sched;
+    use numa::{NodeId};
+    use memory;
 
     use rand;
     use rand::Rng;
@@ -1021,5 +1027,64 @@ mod tests {
         // TODO verify we moved segments to reclaim list
 
     } // do_compact
+
+    #[test]
+    fn try_make_die() {
+        logger::enable();
+
+        unsafe { sched::pin_cpu(0); }
+
+        // let index = Arc::new(Index::new(2, 1<<20));
+        // let nseg = 32;
+        // let node = NodeId(0);
+        // let mgr = SegmentManager::numa( SEGMENT_SIZE,
+        //                                 nseg*SEGMENT_SIZE, node);
+        // let mref = Arc::new(mgr);
+        // let mut log = Log::new(mref.clone());
+
+        // let mut compactor = comp_ref!(&mref, &index);
+
+        let logsize = 1usize<<31;
+        let mut nib = Nibble::new2(logsize, 1<<20);
+        nib.enable_compaction(NodeId(0));
+        //nib.enable_compaction(NodeId(1));
+
+        println!("TEST STARTING");
+
+        let vlen = 1000;
+        let olen = vlen + 8 + mem::size_of::<EntryHeader>();
+        let nkeys = ((logsize / 2 / olen) as f64 * 0.7f64) as usize;
+        let mut keys: Vec<u64> =
+            Vec::with_capacity(nkeys);
+        for k in 0..nkeys {
+            keys.push( unsafe { rdrandq() } | 1 );
+        }
+
+        let value = memory::allocate::<u8>(vlen);
+
+        let mut now = clock::now();
+        let mut n = 0;
+
+        let niter = 1usize<<30;
+        for i in 0..niter {
+            let k = keys[i%nkeys];
+            let obj = ObjDesc::new(k,Pointer(value), vlen);
+            loop {
+                let dur = clock::to_secondsf(clock::now() - now);
+                if dur > 5f64 {
+                    let perf = (n as f64 / 1e3) / dur;
+                    println!("throughput: {:.2} kops/second", perf);
+                    n = 0;
+                    now = clock::now();
+                }
+                match nib.put_object(&obj) {
+                    Err(ErrorCode::OutOfMemory) => continue,
+                    Err(e) => panic!("Error: {:?}", e),
+                    Ok(_) => break,
+                }
+            }
+            n += 1;
+        }
+    }
 
 }

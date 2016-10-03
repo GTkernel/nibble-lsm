@@ -266,25 +266,22 @@ impl Log {
         // using processor ID should hopefully avoid conflicts
         // compared to random assignment and hoping for luck
         let (sockID,coreID) = clock::rdtscp_id();
-        let mut i = coreID as usize % self.nheads;
+        let i = coreID as usize % self.nheads;
 
         // TODO keep track of #times we had to iterate for avail head
 
         // 1. pick a log head and append
+        let mut opt;
         loop {
-            let mut opt = self.heads[i].try_lock();
-            if opt.is_none() {
-                continue;
+            opt = self.heads[i].try_lock();
+            if opt.is_some() {
+                break;
             }
-            let mut head = opt.unwrap();
-            match head.append(buf) {
-                e @ Err(_) => return e,
-                Ok(v) => {
-                    va = v;
-                    break;
-                },
-            }
-            i = (i + 1) % self.nheads;
+        }
+        let mut head = opt.unwrap();
+        match head.append(buf) {
+            e @ Err(_) => return e,
+            Ok(v) => va = v,
         }
 
         // 2. update segment info table

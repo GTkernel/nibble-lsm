@@ -575,6 +575,100 @@ impl HashTable {
         assert!(false, "Unreachable path");
     }
 
+    /// Grab the lock on the bucket which would hold the key, and
+    /// execute the given lambda.  Does not modify the bucket. We do
+    /// not need to search for the key; only lock the bucket.
+    /// Return Ok if we were able to perform the update; Err likely
+    /// means we are doing an insert but there is no space left.
+    /// If we are updating a value, we pass Some(old_value) to f, else
+    /// None to indicate an insertion.
+    /// FIXME can we just make this part of put() ? much of the code
+    /// is the same
+    #[inline(always)]
+    pub fn update_map<F>(&self, key: u64, new: u64, f: F) -> bool
+        where F: Fn(Option<u64>) {
+
+        let hash = Self::make_hash(key);
+
+        let mut bidx: usize;
+        let mut buckets: &[Bucket];
+        let mut bucket: &Bucket;
+        let mut bver: u64;
+        let mut opts: find_ops;
+
+        let mut tver = self.version();
+
+        bidx = self.index(hash);
+        buckets = self.as_slice();
+        bucket = &buckets[bidx];
+
+        'retry: loop {
+
+            // if table version changes, recompute bucket index
+            let v = self.version();
+            if unlikely!(v != tver) {
+                bidx = self.index(hash);
+                buckets = self.as_slice();
+                bucket = &buckets[bidx];
+                tver = v;
+            }
+
+            bver = bucket.read_version();
+
+            opts = bucket.find_key(key);
+            let (e,inv) = opts;
+            if unlikely!(e.is_none() && inv.is_none()) {
+                if !self.allow_resize {
+                    return false;
+                }
+                if !self.resize() {
+                    self.wait_resizing();
+                }
+                continue 'retry;
+            }
+
+            bucket.wait_lock();
+
+            if unlikely!(tver != self.version()) {
+                bucket.unlock();
+                continue 'retry;
+            }
+
+            // table has not changed, check if bucket has
+            if bucket.read_version() != bver {
+                opts = bucket.find_key(key);
+            }
+
+            let (e,inv) = opts;
+
+            // if exists, overwrite
+            if let Some(i) = e {
+                f(Some(bucket.set_value(i, new)));
+                bucket.unlock();
+                return true;
+            }
+            // else if there is an empty slot, use that
+            else if let Some(i) = inv {
+                bucket.set_key(i, key);
+                bucket.set_value(i, new);
+                f(None);
+                bucket.unlock();
+                return true;
+            }
+
+            // hm..  again no space. we must resize
+            bucket.unlock();
+            if !self.allow_resize {
+                return false;
+            }
+            if !self.resize() {
+                self.wait_resizing();
+            }
+            // now loop around and retry
+        }
+        assert!(false, "Unreachable path");
+    }
+
     /// Grab the lock on the bucket holding the key only if the
     /// existing value matches one specified. Before returning,
     /// replace existing value with new.

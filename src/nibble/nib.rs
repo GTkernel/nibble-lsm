@@ -211,8 +211,24 @@ impl Nibble {
         //trace!("key {} va 0x{:x} ientry 0x{:x}",
                //obj.getkey(), va, ientry);
 
-        // 2. update reference to object
-        let (ok,opt) = self.index.update(obj.getkey(), ientry);
+        // 2. add to index; if we are updating it, remove live state from
+        // prior segment. running a lambda while we hold the item's
+        // lock avoids race conditions with the cleaner
+
+        let key = obj.getkey();
+        let ok: bool = self.index.update_map(key, va as u64, |old| {
+            // decrement live size of segment if we overwrite object
+            // old=None if this was an insertion
+            if let Some(ientry) = old {
+                let (socket,va) = extract(ientry);
+                let node = &self.nodes[socket as usize];
+                let idx: usize = node.manager.segment_of(va as usize);
+                let head = node.log.copy_header(va as usize);
+                // decrement live bytes
+                self.nodes[socket as usize].seginfo
+                    .decr_live(idx, head.len_with_header());
+            }
+        });
         if !ok {
             // no need to undo the log append;
             // entries are stale until we update the index
@@ -221,17 +237,6 @@ impl Nibble {
             return Err(ErrorCode::TableFull);
         }
 
-        // 3. decrement live size of segment if we overwrite object
-        if let Some(old_ientry) = opt {
-            // read header
-            let (old_sock,old_va) = extract(old_ientry);
-            let node = &self.nodes[old_sock as usize];
-            let idx: usize = node.manager.segment_of(old_va as usize);
-            let head = node.log.copy_header(old_va as usize);
-            // decrement live bytes
-            self.nodes[old_sock as usize].seginfo
-                .decr_live(idx, head.len_with_header());
-        }
         epoch::quiesce();
         Ok(1)
     }
