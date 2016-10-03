@@ -394,14 +394,18 @@ impl Worker {
         // FIXME can we just extract all slot# and sort an array of
         // integer values instead?
         let pred = | a: &SegmentRef, b: &SegmentRef | {
-            let (sa,sb) = {
-                let guarda = a.read();
-                let guardb = b.read();
-                (guarda.slot(),guardb.slot())
+            let live_a: f64 = {
+                let seg = a.read();
+                let slot = seg.slot();
+                self.seginfo.get_live(slot) as f64 / seg.len() as f64
+            };
+            let live_b: f64 = {
+                let seg = b.read();
+                let slot = seg.slot();
+                self.seginfo.get_live(slot) as f64 / seg.len() as f64
             };
             // descending sort so we can use pop instead of remove(0)
-            self.seginfo.get_live(sb)
-                .cmp(&self.seginfo.get_live(sa))
+            live_b.partial_cmp(&live_a).unwrap()
         };
 
         quicksort::quicksort_by(candidates.as_mut_slice(), pred);
