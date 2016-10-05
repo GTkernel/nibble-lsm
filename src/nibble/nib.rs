@@ -444,6 +444,7 @@ mod tests {
     use segment;
     use segment::*;
     use std::slice;
+    use sched;
 
     // test with one simple object
     #[test]
@@ -571,14 +572,16 @@ mod tests {
         let obj = ObjDesc::new(key, vptr, vlen);
         let size = obj.len_with_header();
 
+        unsafe { sched::pin_cpu(0); }
+
         // do first insertion, grab head idx used
-        assert!(nib.put_object(&obj).is_ok());
+        assert!(nib.put_where(&obj, PutPolicy::Specific(0)).is_ok());
         let head = segment_of(&nib, key);
         assert_eq!(nib.nodes[0].seginfo.get_live(head), size);
 
         // insert until the head rolls
         loop {
-            assert!(nib.put_object(&obj).is_ok());
+            assert!(nib.put_where(&obj, PutPolicy::Specific(0)).is_ok());
             // FIXME assumes the segment index we compare to doesn't
             // change sockets
             let segidx = segment_of(&nib, key);
@@ -668,7 +671,7 @@ mod tests {
         let mut nib = Nibble::default();
 
         let key: u64 = 1;
-        let len = segment::SEGMENT_SIZE;
+        let len = 2 * segment::SEGMENT_SIZE;
         let value = memory::allocate::<u8>(len);
 
         let v = common::Pointer(value as *const u8);
