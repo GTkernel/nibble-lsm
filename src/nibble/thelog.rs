@@ -147,7 +147,6 @@ impl LogHead {
 
         // check if head exists
         if let None = self.segment {
-            trace!("head doesn't exist");
             roll = true;
         }
         // check if the object can fit in remaining space
@@ -155,9 +154,6 @@ impl LogHead {
             roll = self.segment.as_ref().map(|seg|
                 !seg.read().can_hold(buf)
             ).unwrap();
-            if roll {
-                debug!("rolling: head cannot hold new object");
-            }
         }
         if roll {
             trace!("rolling head, socket {:?}",
