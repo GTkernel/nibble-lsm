@@ -633,7 +633,12 @@ impl Segment {
     }
 
     #[inline(always)]
-    pub fn close(&mut self) { self.closed = true; }
+    pub fn close(&mut self) {
+        atomic::fence(Ordering::SeqCst); // TODO needed?
+        self.closed = true;
+
+    }
+
     #[inline(always)]
     pub fn nobjects(&self) -> usize { self.nobj }
     #[inline(always)]
