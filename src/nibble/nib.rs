@@ -5,7 +5,7 @@ use segment::*;
 use index::*;
 use compaction::*;
 use numa::{self,NodeId};
-use epoch;
+use meta;
 
 use std::sync::Arc;
 use std::thread::{self,JoinHandle};
@@ -33,7 +33,7 @@ pub struct NibblePerNode {
     socket: usize,
     manager: SegmentManagerRef,
     log: Log,
-    seginfo: epoch::SegmentInfoTableRef,
+    seginfo: meta::SegmentInfoTableRef,
     compactor: CompactorRef, // TODO move to segmgr instead?
 }
 
@@ -189,7 +189,7 @@ impl Nibble {
 
     #[inline(always)]
     fn __put(&self, obj: &ObjDesc, hint: PutPolicy) -> Status {
-        epoch::pin();
+        meta::pin();
         let va: usize;
 
         let socket: usize = match hint {
@@ -208,7 +208,7 @@ impl Nibble {
         // elsewhere?
         match self.nodes[socket].log.append(obj) {
             Err(code) => {
-                epoch::quiesce();
+                meta::quiesce();
                 return Err(code);
             },
             Ok(v) => va = v,
@@ -239,11 +239,11 @@ impl Nibble {
             // no need to undo the log append;
             // entries are stale until we update the index
             warn!("index update returned false");
-            epoch::quiesce();
+            meta::quiesce();
             return Err(ErrorCode::TableFull);
         }
 
-        epoch::quiesce();
+        meta::quiesce();
         Ok(1)
     }
 
@@ -275,7 +275,7 @@ impl Nibble {
     /// FIXME invoke some method in thelog that copies out data
     #[inline(always)]
     pub fn get_object(&self, key: u64) -> (Status,Option<Buffer>) {
-        epoch::pin();
+        meta::pin();
 
         // 1. lookup the key and get the entry
         let ientry: IndexEntry = match self.index.get(key) {
@@ -293,13 +293,13 @@ impl Nibble {
         let buf = self.nodes[socket as usize]
                             .log.get_entry(va as usize);
 
-        epoch::quiesce();
+        meta::quiesce();
         (Ok(1),Some(buf))
     }
 
     #[inline(always)]
     pub fn del_object(&self, key: u64) -> Status {
-        epoch::pin();
+        meta::pin();
 
         // 1. remove key and acquire old
         let ientry: IndexEntry = match self.index.remove(key) {
@@ -319,7 +319,7 @@ impl Nibble {
         self.nodes[socket as usize].seginfo
             .decr_live(idx, head.len_with_header());
 
-        epoch::quiesce();
+        meta::quiesce();
         Ok(1)
     }
 
@@ -334,7 +334,7 @@ impl Nibble {
     // It will block if key already exists, and fail if key wasn't
     // able to insert, or was an update
     pub fn alloc(&self, key: u64, len: u64, sock: u32) -> Pointer<u8> {
-        // epoch::pin();
+        // meta::pin();
         let va: usize;
 
         let obj = ObjDesc::null(key, len as usize);
@@ -358,7 +358,7 @@ impl Nibble {
         // XXX
         debug_assert_eq!(opt.is_none(), true);
 
-        // epoch::quiesce();
+        // meta::quiesce();
         Pointer(va as *const u8)
     }
 
@@ -366,7 +366,7 @@ impl Nibble {
     pub fn free(&self, key: u64) -> bool {
         // we need to pin the epoch, because we use the VA to lookup
         // the containing segment
-        epoch::pin();
+        meta::pin();
 
         // 1. remove key and acquire old
         let res = self.index.remove(key);
@@ -384,7 +384,7 @@ impl Nibble {
         let idx: usize = node.manager.segment_of(va as usize);
         node.seginfo.decr_live(idx, head.len_with_header());
 
-        epoch::quiesce();
+        meta::quiesce();
         true
     }
 
@@ -416,7 +416,7 @@ impl Nibble {
     #[cfg(IGNORE)]
     #[inline(always)]
     pub fn seg_of(&mut self, key: u64) -> Option<usize> {
-        epoch::pin();
+        meta::pin();
         let va: usize;
         match self.index.get(key) {
             None => return None,

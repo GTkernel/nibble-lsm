@@ -3,7 +3,7 @@
 use common::*;
 use thelog::*;
 use memory::*;
-use epoch::*;
+use meta::*;
 use numa::{NodeId};
 
 use std::cmp;

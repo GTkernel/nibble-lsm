@@ -1,7 +1,7 @@
 use common::*;
 use segment;
 use segment::*;
-use epoch::*;
+use meta::*;
 use memory::*;
 use clock;
 use numa::{self,NodeId};

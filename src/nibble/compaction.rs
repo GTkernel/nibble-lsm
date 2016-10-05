@@ -56,7 +56,7 @@ use segment::*;
 use index::*;
 use thelog::*;
 use clock;
-use epoch;
+use meta;
 
 use std::collections::VecDeque;
 use std::mem;
@@ -80,7 +80,7 @@ use parking_lot as pl;
 //pub type UpdateFn = Box<Fn(&EntryReference, Arc<Index>, usize) -> bool>;
 
 pub type CompactorRef = Arc<pl::Mutex< Compactor >>;
-type EpochSegment = (epoch::EpochRaw, SegmentRef);
+type EpochSegment = (meta::EpochRaw, SegmentRef);
 type ReclaimQueue = SegQueue<EpochSegment>;
 type ReclaimQueueRef = Arc<ReclaimQueue>;
 
@@ -96,7 +96,7 @@ pub struct Compactor {
     candidates: Arc<pl::Mutex<Vec<SegmentRef>>>,
     manager: SegmentManagerRef,
     index: IndexRef,
-    seginfo: epoch::SegmentInfoTableRef,
+    seginfo: meta::SegmentInfoTableRef,
     /// The set of worker threads doing compaction.
     workers: SegQueue<(Arc<pl::RwLock<Worker>>,Handle)>,
     /// Global reclamation queue
@@ -257,7 +257,7 @@ struct Worker {
     /// cache of SegmentManager.size
     mgrsize: usize,
     index: IndexRef,
-    seginfo: epoch::SegmentInfoTableRef,
+    seginfo: meta::SegmentInfoTableRef,
     park: AtomicBool,
     /// This thread's private set of to-be-reclaimed segments
     /// Used only if thread role is Reclaim
@@ -403,7 +403,7 @@ impl Worker {
         let mut tally: usize = 0;
 
         // our own reclamation list
-        let mut empties: VecDeque< (epoch::EpochRaw,SegmentRef) >;
+        let mut empties: VecDeque< (meta::EpochRaw,SegmentRef) >;
         empties = VecDeque::with_capacity(32);
 
         // non-candidates
@@ -429,8 +429,8 @@ impl Worker {
                 debug!("node-{:?} slot {} zero bytes -> reclamation",
                        self.manager.socket().unwrap(), slot);
                 //assert_eq!(self.nlive(&seg), 0usize);
-                //self.reclaim_glob.push( (epoch::next(), seg) );
-                empties.push_back( (epoch::next(),seg) );
+                //self.reclaim_glob.push( (meta::next(), seg) );
+                empties.push_back( (meta::next(),seg) );
             }
             // skip if it has no free space
             else if too_full {
@@ -467,7 +467,7 @@ impl Worker {
                     None => break,
                     Some(item) => item,
                 };
-                while let Some(current) = epoch::min() {
+                while let Some(current) = meta::min() {
                     if current > tuple.0 { break; }
                 }
                 self.manager.free(tuple.1);
@@ -657,7 +657,7 @@ impl Worker {
             }
 
             let ret = self.compact(&segs, &newseg);
-            epoch::next();
+            meta::next();
             if ret.is_err() { panic!("compact failed"); }
 
             // monitor the new segment, too
@@ -670,7 +670,7 @@ impl Worker {
         self.do_reclaim_blocking();
 
         //let epoch = EPOCH.fetch_add(1, atomic::Ordering::Relaxed);
-        let ep = epoch::next();
+        let ep = meta::next();
         for segref in segs {
             let slot = segref.read().slot();
             debug!("adding slot {} to reclamation", slot);
@@ -694,8 +694,8 @@ impl Worker {
         }
 
         // find relevant segments locally
-        let min = epoch::min();
-        debug_assert!(min != Some(epoch::EPOCH_QUIESCE));
+        let min = meta::min();
+        debug_assert!(min != Some(meta::EPOCH_QUIESCE));
         let mut release: Vec<EpochSegment> = Vec::new();
         if min.is_none() {
             // we take all waiting segments
@@ -733,7 +733,7 @@ impl Worker {
         let mut any = 0usize;
         while let Some(epseg) = self.reclaim_glob.try_pop() {
             let (ep,segref) = epseg;
-            while let Some(current) = epoch::min() {
+            while let Some(current) = meta::min() {
                 if current > ep { break; }
             }
             self.manager.free(segref);
