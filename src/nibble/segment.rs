@@ -1086,9 +1086,14 @@ impl SegmentManager {
         assert_eq!(list.ptr(), blocks.as_ptr(),
             "segment {} block list resized!", slot);
 
+        let seg = seg_ref!(id, self.socket.unwrap(), slot, blocks);
+
+        // indicate when we created this segment
+        self.seginfo.set_epoch(slot, meta::next());
+
+        // store it into the global array
         let mut inner = self.inner.write();
-        inner.segments[slot] =
-            Some(seg_ref!(id, self.socket.unwrap(), slot,blocks));
+        inner.segments[slot] = Some(seg);
 
         inner.segments[slot].clone()
     }
