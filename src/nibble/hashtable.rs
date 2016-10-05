@@ -1332,12 +1332,12 @@ mod tests {
     fn resize_single_thread() {
         logger::enable();
 
-        let entries: usize = 1usize<<20;
+        let entries: usize = 1usize<<12;
         let mut ht = HashTable::new(entries, 0);
         let len = ht.len;
         let nbuckets = ht.nbuckets;
 
-        for k in 0..(1u64<<15) {
+        for k in 0..(1u64<<12) {
             ht.put(k+1, k+1); // 0 not a valid key..
         }
 
@@ -1354,8 +1354,11 @@ mod tests {
         debug!("checking values");
         let mut value: u64 = 0;
         for k in 0..(1u64<<15) {
-            assert_eq!(ht.get(k+1, &mut value), true);
-            assert_eq!(value, k+1);
+            assert!(ht.get(k+1, &mut value),
+                "key {} not found", k+1);
+            assert!(value == k+1,
+                    "value for key {} is bad: {}",
+                    k+1, value);
         }
     }
 
