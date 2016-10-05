@@ -234,6 +234,34 @@ impl LockedBucket {
         }
     }
 
+//    /// Same as hashtable::put() except the bucket is already locked
+//    pub fn update(&self, key: u64, new: u64) -> (bool,Option<u64>) {
+//        let mut opts: find_ops =
+//            opts = bucket.find_key(key);
+//        let (e,inv) = opts;
+//
+//        let opt =
+//            if e.is_some() { e }
+//            else if inv.is_some() { inv }
+//            else { None };
+//
+//        // do update or insert
+//        if opt.is_some() {
+//            let i = opt.unwrap();
+//            unsafe {
+//                let mut bucket: &Bucket =
+//                    &mut *self.bucket.0;
+//                (true,Some(bucket.set_value(i, new)))
+//            }
+//        }
+//        // XXX invoke resize instead of failing.. this is
+//        // too complicated
+//        // else no space in hash table
+//        else {
+//            (false,None)
+//        }
+//    }
+
 }
 
 impl Drop for LockedBucket {
