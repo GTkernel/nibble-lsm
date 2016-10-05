@@ -1021,7 +1021,7 @@ impl SegmentManager {
              b: BlockAllocator) -> Self {
         info!("SEGMENT_SIZE {} BLOCK_SIZE {}",
               SEGMENT_SIZE, BLOCK_SIZE);
-        let num = len / segsz;
+        let num = 2 * len / segsz;
         let mut segments: Vec<Option<SegmentRef>>
             = Vec::with_capacity(num);
         for _ in 0..num {
