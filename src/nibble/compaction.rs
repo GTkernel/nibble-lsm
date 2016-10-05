@@ -420,9 +420,9 @@ impl Worker {
             };
 
             let live = self.seginfo.get_live(slot);
-            // arbitrary for now FIXME
-            let too_full: bool = (len - live) <
-                (mem::size_of::<EntryHeader>() << 3);
+            // if < 2% then do not compact
+            let too_full: bool = ((len - live) as f64 /
+                len as f64) <= 0.02_f64;
 
             // filter out segments that cannot be compacted
             if live == 0 {
@@ -683,6 +683,8 @@ impl Worker {
 
     /// Called by WorkerRole::Reclaim
     pub fn do_reclaim(&mut self) {
+        assert!(false, "don't use reclaim threads");
+
         let mut reclaim = self.reclaim.as_mut().unwrap();
 
         // pull any new items off the global list
