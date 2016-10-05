@@ -80,7 +80,7 @@ impl SegmentInfoTable {
     }
 
     pub fn reset_epoch(&self, index: usize) {
-        self.table[index].epoch.store(next(), self.ordering);
+        self.table[index].epoch.store(next() as usize, self.ordering);
     }
 
     pub fn get_live(&self, index: usize) -> usize {

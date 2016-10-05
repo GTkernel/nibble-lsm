@@ -4,6 +4,7 @@ use common::*;
 use thelog::*;
 use memory::*;
 use meta::*;
+use meta;
 use numa::{NodeId};
 
 use std::cmp;
@@ -1055,6 +1056,10 @@ impl SegmentManager {
         Self::__new(None,segsz,len,b)
     }
 
+    pub fn get_nseg(&self) -> usize {
+        self.inner.read().segments.len()
+    }
+
     /// Make a Copy of the Block containing this VA (not cloning the
     /// Arc holding the Block).
     #[inline(always)]
@@ -1089,7 +1094,7 @@ impl SegmentManager {
         let seg = seg_ref!(id, self.socket.unwrap(), slot, blocks);
 
         // indicate when we created this segment
-        self.seginfo.set_epoch(slot, meta::next());
+        self.seginfo.reset_epoch(slot);
 
         // store it into the global array
         let mut inner = self.inner.write();

@@ -253,6 +253,10 @@ struct Worker {
     // FIXME Vec is not efficient as a candidates list
     // popping first element is slow; shifts N-1 left
     candidates: Arc<pl::Mutex<Vec<SegmentRef>>>,
+    /// Recording of last known live bytes for each Segment, used to
+    /// throttle when the candidate metric is recomputed for each.
+    /// TODO make u32?
+    liveness: Vec<usize>,
     manager: SegmentManagerRef,
     /// cache of SegmentManager.size
     mgrsize: usize,
@@ -276,9 +280,11 @@ impl Worker {
             _ => None,
         };
         let size = compactor.manager.len();
+        let nseg = compactor.manager.get_nseg();
         Worker {
             role: *role,
             candidates: compactor.candidates.clone(),
+            liveness: Vec::with_capacity(nseg),
             manager: compactor.manager.clone(),
             mgrsize: size,
             index: compactor.index.clone(),
@@ -372,10 +378,33 @@ impl Worker {
             return None;
         }
 
+        // We must decide how to select segments for cleaning. Lots of
+        // prior work in RAMCloud discussing this. We have a greedy
+        // algorithm that sorts by segment free space.
+        //
+        // In RAMCloud, they use the following to pick segments:
+        //
+        //      benefit         (1 - u) * seg_age
+        //      -------     =   -----------------
+        //       cost                 1 + u
+        //
+        // where u = (live / len), for the segment
+        //
+        // I am not sure if this is appropriate here, as we do not
+        // have to clean segments on disk (thus do not have two-level
+        // cleaning).
+
         // FIXME try to acquire the slot# without locking
         // FIXME can we just extract all slot# and sort an array of
-        // integer values instead?
-        let pred = | a: &SegmentRef, b: &SegmentRef | {
+        // I think quicksort will repeatedly call this lambda, so we
+        // end up recomputing the information for a segment many
+        // times. Export to some array, computing each value once,
+        // then sort based on that.
+
+        //let mut recomp: Vec<u32> = Vec::with_capacity(1024);
+        //for i in 0..self.seginfo
+
+        let greedy = | a: &SegmentRef, b: &SegmentRef | {
             let live_a: f64 = {
                 let seg = a.read();
                 let slot = seg.slot();
@@ -390,7 +419,7 @@ impl Worker {
             live_b.partial_cmp(&live_a).unwrap()
         };
 
-        quicksort::quicksort_by(candidates.as_mut_slice(), pred);
+        quicksort::quicksort_by(candidates.as_mut_slice(), greedy);
         self.__dump_candidates(&candidates);
 
         // grab enough candidates to fill one segment
