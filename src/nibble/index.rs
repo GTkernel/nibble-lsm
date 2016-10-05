@@ -159,6 +159,7 @@ impl Index {
 
     /// Lock the bucket which would hold the key and execute the given
     /// lambda while holding the lock
+    #[inline(always)]
     pub fn update_map<F>(&self, key: u64, new: u64, f: F) -> bool
         where F: Fn(Option<u64>) {
 
