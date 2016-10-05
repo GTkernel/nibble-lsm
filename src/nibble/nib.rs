@@ -21,7 +21,7 @@ macro_rules! min_log_size {
     ( $nsockets:expr ) => {
         (num_log_heads() * MIN_SEG_PER_SOCKET)
             * SEGMENT_SIZE * $nsockets
-            + COMPACTION_RESERVE_SEGMENTS
+            + RESERVE_SEGS
     }
 }
 

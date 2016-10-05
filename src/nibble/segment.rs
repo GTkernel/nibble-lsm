@@ -24,6 +24,11 @@ pub const SEGMENT_SHIFT:    usize = 25;
 pub const SEGMENT_SIZE:     usize = 1 << SEGMENT_SHIFT;
 pub const BLOCKS_PER_SEG:   usize = SEGMENT_SIZE / BLOCK_SIZE;
 
+/// Number of blocks reserved (per BlockAllocator) for use by
+/// compaction when memory is scarce.
+pub const RESERVE_SEGS:     usize = 2;
+pub const RESERVE_BLOCKS:   usize = RESERVE_SEGS * BLOCKS_PER_SEG;
+
 //==----------------------------------------------------==//
 //      Utility functions
 //==----------------------------------------------------==//
@@ -169,27 +174,60 @@ pub type BlockRefPool = Vec<BlockRef>;
 //==----------------------------------------------------==//
 
 pub struct BlockAllocator {
+    /// All the blocks
     pool: BlockRefPool,
     mmap: MemMap,
+    /// Blocks allowed for general allocation
     freepool: pl::RwLock<BlockRefPool>,
+    /// Set of reserve blocks used by compaction
+    reserve: pl::RwLock<BlockRefPool>,
+    /// Number of blocks that must be in the reserve pool before we
+    /// release blocks to the general pool.
+    reserve_nblks: usize,
+}
+
+impl fmt::Debug for BlockAllocator {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "BlockAllocator {{ #free {} #res {} }}",
+               self.freepool.read().len(),
+               self.reserve.read().len())
+    }
 }
 
 impl BlockAllocator {
 
     fn __new(bytes: usize, mmap: MemMap) -> Self {
+
         let count = bytes / BLOCK_SIZE;
-        let mut pool: Vec<Arc<Block>> = Vec::with_capacity(count);
-        let mut freepool: Vec<Arc<Block>> = Vec::with_capacity(count);
+        let mut pool:       Vec<Arc<Block>> =
+            Vec::with_capacity(count);
+        let mut freepool:   Vec<Arc<Block>> =
+            Vec::with_capacity(count);
+
+        let mut reserve:    Vec<Arc<Block>> =
+            Vec::with_capacity(RESERVE_BLOCKS);
+
+        let general_blks = count - RESERVE_BLOCKS;
+
+        debug!("Reserving {} blocks for compaction, {} for logs",
+               RESERVE_BLOCKS, general_blks);
+
         for b in 0..count {
             let addr = mmap.addr() + b*BLOCK_SIZE;
-            let b = Arc::new(Block::new(addr, b, BLOCK_SIZE));
-            pool.push(b.clone());
-            freepool.push(b.clone());
+            let blk = Arc::new(Block::new(addr, b, BLOCK_SIZE));
+            pool.push(blk.clone());
+            if b < general_blks {
+                freepool.push(blk.clone());
+            } else {
+                reserve.push(blk.clone());
+            }
         }
         BlockAllocator {
             pool: pool,
             mmap: mmap,
-            freepool: pl::RwLock::new(freepool)
+            freepool: pl::RwLock::new(freepool),
+            reserve:  pl::RwLock::new(reserve),
+            reserve_nblks: RESERVE_BLOCKS,
         }
     }
 
@@ -215,8 +253,39 @@ impl BlockAllocator {
         blocks
     }
 
+    pub fn reserve_alloc(&self, count: usize)
+        -> Option<BlockRefPool> {
+
+        let mut blocks: Option<BlockRefPool> = None;
+        let mut reserve = self.reserve.write();
+        let len = reserve.len();
+        if count <= len {
+            blocks = Some(reserve.split_off(len-count));
+        }
+        blocks
+    }
+
+    // Release a set of blocks back to the allocator.
+    // Check if the reserve pool needs filling. If so, put new blocks
+    // into that first, then the remainder into the general pool.
     pub fn free(&self, pool: &mut BlockRefPool) {
-        self.freepool.write().append(pool);
+        let mut reserve = self.reserve.write();
+        let mut nr = cmp::min(pool.len(),
+            self.reserve_nblks - reserve.len());
+        if unlikely!(nr > 0) {
+            debug!("releasing {} blks back to reserve", nr);
+        }
+        for _ in 0..nr {
+            reserve.push(pool.pop().unwrap());
+        }
+        drop(reserve); // unlock it
+        if !pool.is_empty() {
+            self.freepool.write().append(pool);
+        }
+    }
+
+    pub fn reserve_free(&self, pool: &mut BlockRefPool) {
+        self.reserve.write().append(pool);
     }
 
     pub fn len(&self) -> usize {
@@ -958,17 +1027,8 @@ impl SegmentManager {
         self.allocator.block_of(va)
     }
 
-    /// Allocate a segment with a specific number of blocks. Used by
-    /// compaction code.
-    pub fn alloc_size(&self, nblks: usize) -> Option<SegmentRef> {
-        let mut ret: Option<SegmentRef> = None;
-
-        let mut blocks = match self.allocator.alloc(nblks) {
-            None => return None,
-            Some(b) => b,
-        };
-        // some extra in case of overflow
-        blocks.reserve(8);
+    fn make_segment(&self, mut blocks: Vec<BlockRef>)
+        -> Option<SegmentRef> {
 
         let slot;
         match self.free_slots.try_pop() {
@@ -985,7 +1045,7 @@ impl SegmentManager {
             }
         }
         let id = self.next_seg_id.fetch_add(1,
-                                            atomic::Ordering::Relaxed);
+                            atomic::Ordering::Relaxed);
         // Check we are not resizing, to avoid updating the
         // Block::list pointer when we add new elements
         assert_eq!(list.ptr(), blocks.as_ptr(),
@@ -998,11 +1058,42 @@ impl SegmentManager {
         inner.segments[slot].clone()
     }
 
+    /// Allocate a segment with a specific number of blocks. Used by
+    /// compaction code.
+    pub fn alloc_size(&self, nblks: usize) -> Option<SegmentRef> {
+        let mut ret: Option<SegmentRef> = None;
+
+        let mut blocks = match self.allocator.alloc(nblks) {
+            None => return None,
+            Some(b) => b,
+        };
+        // some extra in case of overflow
+        blocks.reserve(8);
+
+        let opt = self.make_segment(blocks);
+        assert!(opt.is_some(), "no segment slots available?");
+        opt
+    }
+
     /// Allocate a segment with default size.
     pub fn alloc(&self) -> Option<SegmentRef> {
-        // TODO use config obj
         let nblks = (SEGMENT_SIZE - 1) / BLOCK_SIZE + 1;
         self.alloc_size(nblks)
+    }
+
+    pub fn reserve_alloc(&self, nblks: usize) -> Option<SegmentRef> {
+        let mut ret: Option<SegmentRef> = None;
+
+        let mut blocks = match self.allocator.reserve_alloc(nblks) {
+            None => return None,
+            Some(b) => b,
+        };
+        // some extra in case of overflow
+        blocks.reserve(8);
+
+        let opt = self.make_segment(blocks);
+        assert!(opt.is_some(), "no segment slots available?");
+        opt
     }
 
     // Consume the reference and release its blocks

@@ -71,12 +71,6 @@ use quicksort;
 use parking_lot as pl;
 
 //==----------------------------------------------------==//
-//      Constants
-//==----------------------------------------------------==//
-
-pub const COMPACTION_RESERVE_SEGMENTS: usize = 0;
-
-//==----------------------------------------------------==//
 //      Compactor types, macros
 //==----------------------------------------------------==//
 
@@ -107,8 +101,6 @@ pub struct Compactor {
     workers: SegQueue<(Arc<pl::RwLock<Worker>>,Handle)>,
     /// Global reclamation queue
     reclaim: ReclaimQueueRef,
-    /// Reserve segments
-    reserve: Arc<SegQueue<SegmentRef>>,
 }
 
 // TODO metrics for when compaction should begin
@@ -118,22 +110,6 @@ impl Compactor {
     pub fn new(manager: &SegmentManagerRef,
                index: &IndexRef) -> Self {
         let seginfo = manager.seginfo();
-        let reserve: SegQueue<SegmentRef>;
-        reserve = SegQueue::new();
-        {
-            for _ in 0..COMPACTION_RESERVE_SEGMENTS {
-                let opt = manager.alloc();
-                assert!(opt.is_some(),
-                    "cannot allocate reserve segment");
-                let segref = opt.unwrap();
-                let slot = {
-                    let manager = segref.read();
-                    manager.slot()
-                };
-                debug!("have reserve seg {}", slot);
-                reserve.push(segref);
-            }
-        }
         Compactor {
             candidates: Arc::new(pl::Mutex::new(Vec::new())),
             manager: manager.clone(),
@@ -141,7 +117,6 @@ impl Compactor {
             seginfo: seginfo,
             workers: SegQueue::new(),
             reclaim: Arc::new(SegQueue::new()),
-            reserve: Arc::new(reserve),
         }
     }
 
@@ -281,8 +256,6 @@ struct Worker {
     /// Compaction threads push to this, Reclaim threads move SegRefs
     /// from this to their private set to manipulate
     reclaim_glob: ReclaimQueueRef,
-    /// Shared access to the reserve segments.
-    reserve: Arc<SegQueue<SegmentRef>>,
 }
 
 impl Worker {
@@ -303,7 +276,6 @@ impl Worker {
             park: AtomicBool::new(false),
             reclaim: reclaim,
             reclaim_glob: compactor.reclaim.clone(),
-            reserve: compactor.reserve.clone(),
         }
     }
 
@@ -645,39 +617,26 @@ impl Worker {
             debug!("allocating new segment #blks {}",nblks);
             let mut retries = 0;
             let start = Instant::now();
-            loop {
+            'alloc: loop {
                 let opt = self.manager.alloc_size(nblks);
                 match opt {
                     Some(s) => { newseg = s; break; },
                     None => {
-                        // FIXME we should know (for this socket) when
-                        // it is futile to even try compacting, and
-                        // return to caller to append elsewhere.
-                        
-                        // 1. try reclaim enqueued segments
-                        let nr = self.do_reclaim_blocking();
-                        debug!("released {} segments", nr);
+                        // no memory for clean segments...
 
-                        // 2. use reserve to compact TODO
+                        // try to reclaim enqueued segments
+                        if 0 < self.do_reclaim_blocking() {
+                            retries += 1;
+                            continue 'alloc;
+                        }
 
-                        // used_reserve = true;
-                        // let r = self.reserve.try_pop();
-                        // // FIXME we can spin a little if this fails,
-                        // // but only if there are >1 compaction threads
-                        // // since one may release a reserve soon.
-                        // assert!(r.is_some(),
-                        //     "no reserve segments");
-                        // neweg = r.unwrap();
+                        // or use a reserve segment to compact
+                        debug!("using reserve segment, nblks {}", nblks);
+                        let mut s = self.manager.reserve_alloc(nblks);
+                        assert!(s.is_some(), "reserve segments depleted");
+                        newseg = s.unwrap();
+                        break;
                     },
-                }
-                // yielding and retrying only works if there are other
-                // compaction threads running :D FIXME
-                thread::yield_now();
-                retries += 1;
-                if start.elapsed().as_secs() > 4 {
-                    epoch::__dump();
-                    panic!("waiting too long {}",
-                           "for new segment: deadlock?");
                 }
             }
             if retries > 0 {
