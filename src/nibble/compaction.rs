@@ -1004,6 +1004,8 @@ mod tests {
 
     } // do_compact
 
+    // This test runs with 95% utilization and attempts to get Nibble
+    // to choke. If it keeps printing non-zero throughput, we're ok :D
     #[test]
     fn try_make_die() {
         logger::enable();
@@ -1020,46 +1022,64 @@ mod tests {
 
         // let mut compactor = comp_ref!(&mref, &index);
 
-        let logsize = 1usize<<31;
-        let mut nib = Nibble::new2(logsize, 1<<20);
+        let logsize = 1usize<<34;
+        let mut nib = Nibble::new2(logsize, 1<<22);
         nib.enable_compaction(NodeId(0));
         //nib.enable_compaction(NodeId(1));
 
         println!("TEST STARTING");
 
+        // XXX with 6GB of data (which seems to be correct) why is
+        // nothing being migrated? 2GB remain.. that should be plenty
+
         let vlen = 1000;
         let olen = vlen + 8 + mem::size_of::<EntryHeader>();
-        let nkeys = ((logsize / 2 / olen) as f64 * 0.7f64) as usize;
+        let nkeys = ((logsize / 2 / olen) as f64 * 0.90f64) as usize;
+        println!("wss {} nkeys {}", nkeys * olen, nkeys);
         let mut keys: Vec<u64> =
             Vec::with_capacity(nkeys);
         for k in 0..nkeys {
             keys.push( unsafe { rdrandq() } | 1 );
         }
+        let mut keys2 = keys.clone();
+        shuffle(&mut keys2);
 
         let value = memory::allocate::<u8>(vlen);
 
         let mut now = clock::now();
         let mut n = 0;
 
-        let niter = 1usize<<30;
-        for i in 0..niter {
-            let k = keys[i%nkeys];
-            let obj = ObjDesc::new(k,Pointer(value), vlen);
-            loop {
-                let dur = clock::to_secondsf(clock::now() - now);
-                if dur > 5f64 {
-                    let perf = (n as f64 / 1e3) / dur;
-                    println!("throughput: {:.2} kops/second", perf);
-                    n = 0;
-                    now = clock::now();
+        for ii in 0..5 {
+            let keys_ =
+                if 0 == (ii % 2) { &keys }
+                else { &keys2 };
+            for i in 0..nkeys {
+                let k = keys_[i];
+                //println!("i {} key {}", i, k);
+                let obj = ObjDesc::new(k,Pointer(value), vlen);
+                loop {
+                    let dur = clock::to_secondsf(clock::now() - now);
+                    if dur > 5f64 {
+                        let perf = (n as f64 / 1e3) / dur;
+                        println!("throughput: {:.2} kops/second (i {})",
+                        perf, i);
+                        n = 0;
+                        now = clock::now();
+                        if perf < 1f64 {
+                            nib.dump_segments(0);
+                        }
+                    }
+                    match nib.put_object(&obj) {
+                        Err(ErrorCode::OutOfMemory) => continue,
+                        Err(e) => panic!("Error: {:?}", e),
+                        Ok(_) => break,
+                    }
                 }
-                match nib.put_object(&obj) {
-                    Err(ErrorCode::OutOfMemory) => continue,
-                    Err(e) => panic!("Error: {:?}", e),
-                    Ok(_) => break,
+                n += 1;
+                if i == (nkeys-1) {
+                    println!("inserted wss");
                 }
             }
-            n += 1;
         }
     }
 
