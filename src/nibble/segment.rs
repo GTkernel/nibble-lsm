@@ -10,9 +10,12 @@ use std::cmp;
 use std::mem;
 use std::mem::size_of;
 use std::ptr;
-use std::sync::{atomic, Arc};
+use std::sync::{Arc};
+use std::sync::atomic::{self, Ordering};
 use std::thread;
 use std::time::Duration;
+use std::intrinsics;
+use std::fmt;
 
 use crossbeam::sync::SegQueue;
 use parking_lot as pl;
@@ -455,6 +458,14 @@ pub struct Segment {
     /// compiler does not allow sharing of raw pointers.
     front: Option<usize>,
     blocks: BlockRefPool,
+}
+
+impl fmt::Debug for Segment {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Seg {{ id {} sock {:?} slot {} closed {:?} len {} rem {} }}",
+               self.id, self.socket, self.slot,
+               self.closed, self.len, self.rem)
+    }
 }
 
 // TODO create a wrapper type that implements sorting of a segment
@@ -981,6 +992,25 @@ pub struct SegmentManager {
 
 // TODO reclaim segments function and thread
 impl SegmentManager {
+
+    pub fn dump_segments(&self) {
+        let inner = self.inner.read();
+        println!("SEGMGR: there are {} segments",
+                 inner.segments.len());
+        println!("SEGMGR: {} recently closed",
+                 inner.closed.len());
+        for tuple in (&inner.segments).iter().zip(0..) {
+            let opt = tuple.0;
+            if opt.is_none() {
+                println!("[{:5}] None", tuple.1);
+            } else {
+                // opt is Option<RwLock<SegmentRef>>
+                let seg = opt.as_ref().unwrap().read();
+                println!("[{:5}] {:?}", tuple.1, &*seg);
+            }
+        }
+        println!("{:?}", self.allocator);
+    }
 
     fn __new(sock: Option<NodeId>, segsz: usize, len: usize,
              b: BlockAllocator) -> Self {

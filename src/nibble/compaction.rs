@@ -107,6 +107,15 @@ pub struct Compactor {
 
 impl Compactor {
 
+    pub fn dump(&self) {
+        let cand = self.candidates.lock();
+        println!("COMPACTOR: cand {}", cand.len());
+        for seg in &*cand {
+            let s = seg.read();
+            println!("{:?}", &*s);
+        }
+    }
+
     pub fn new(manager: &SegmentManagerRef,
                index: &IndexRef) -> Self {
         let seginfo = manager.seginfo();
@@ -128,7 +137,8 @@ impl Compactor {
     // segment then added back to the log.
 
     pub fn spawn(&mut self, role: WorkerRole) {
-        let state = Arc::new(pl::RwLock::new(Worker::new(&role, self)));
+        let w = Worker::new(&role, self);
+        let state = Arc::new(pl::RwLock::new(w));
         let give = state.clone();
         let name = format!("compaction::worker::{:?}", role);
         let handle = match thread::Builder::new()
@@ -651,8 +661,8 @@ impl Worker {
             if ret.is_err() { panic!("compact failed"); }
 
             // monitor the new segment, too
-            let newslot = newseg.read().slot();
-            debug!("adding slot {} to candidates", newslot);
+            debug!("adding slot {} to candidates",
+                newseg.read().slot());
             self.add_candidate(&newseg);
         }
 

@@ -53,6 +53,12 @@ pub enum PutPolicy {
 
 impl Nibble {
 
+    pub fn dump_segments(&self, node: usize) {
+        println!("NIBBLE: DUMPING SEGMENT INFO NODE {}", node);
+        self.nodes[node].manager.dump_segments();
+        self.nodes[node].compactor.lock().dump();
+    }
+
     /// Create new instance of Nibble. It partitions itself across the
     /// sockets. You must create an instance with at least enough
     /// memory per-socket to hold some minimum of segments.
