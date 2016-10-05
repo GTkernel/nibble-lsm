@@ -1070,7 +1070,7 @@ impl SegmentManager {
             None => return None,
             Some(s) => slot = s as usize,
         }
-        assert!(self.inner.read()
+        debug_assert!(self.inner.read()
                 .segments[slot].is_none());
 
         let list = uslice::make(&blocks);
@@ -1083,7 +1083,7 @@ impl SegmentManager {
                             atomic::Ordering::Relaxed);
         // Check we are not resizing, to avoid updating the
         // Block::list pointer when we add new elements
-        assert_eq!(list.ptr(), blocks.as_ptr(),
+        debug_assert_eq!(list.ptr(), blocks.as_ptr(),
             "segment {} block list resized!", slot);
 
         let seg = seg_ref!(id, self.socket.unwrap(), slot, blocks);
