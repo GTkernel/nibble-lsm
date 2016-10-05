@@ -697,7 +697,8 @@ impl Worker {
             self.add_candidate(&newseg);
         }
 
-        // XXX how do we reclaim segments for the reserve?
+        // must do this even when we have no candidates!
+        self.do_reclaim_blocking();
 
         //let epoch = EPOCH.fetch_add(1, atomic::Ordering::Relaxed);
         let ep = epoch::next();
