@@ -15,11 +15,11 @@ set -u
 
 # in MiB
 #MEMSIZE=$((128*1024))
-#MEMSIZE=$((9*(1<<40)))
+MEMSIZE=$((5*(1<<40)))
 # MICA doesn't use log-structured allocators for its "store mode" so
 # we needn't allocate so much space for the given keyspace
 # 64mil keys * 1000b = 64GiB
-MEMSIZE=$((512*(1<<30)))
+#MEMSIZE=$((512*(1<<30)))
 
 export NIBDEBUG=3
 
@@ -30,9 +30,9 @@ export RAMCLOUD_NARG=5
 # used only for RAMCloud
 #FEATURES="extern_ycsb rc"
 # used only for MICA
-FEATURES="extern_ycsb mica"
+#FEATURES="extern_ycsb mica"
 # used only for Nibble
-#FEATURES=""
+FEATURES=""
 
 # YCSB parameters
 #  C    size=1kb  1:0  zipfian
@@ -42,19 +42,26 @@ FEATURES="extern_ycsb mica"
 #
 # and we can also do uniform for each of the above
 
-
 size=1000
 nkeys=$((2**26))
-# in MiB
-capacity=$MEMSIZE
+#size=100
+#nkeys=$((2**30))
 
 NSOCKETS=16
 NCPU=15
 
-# these will be modified
+######################################################################
+
+# in MiB
+
+capacity=$MEMSIZE
+
+## # these will be modified
 readpct=0
-for dist in uniform zipfian; do
-    for T in C B; do
+#for dist in uniform zipfian; do
+for dist in zipfian; do
+    #for T in C B; do
+    for T in B; do
         [[ $T == "C" ]] && readpct=100
         [[ $T == "B" ]] && readpct=95
         echo ''; echo ''
@@ -82,34 +89,33 @@ for dist in uniform zipfian; do
     done
 done
 
+exit 0
+
 # XXX do write-heavy workloads last.. in case they crash
 for T in A W; do
     for dist in uniform zipfian; do
         [[ $T == "A" ]] && readpct=50
         [[ $T == "W" ]] && readpct=0
-        for t in 1 2 3 4 16; do
-            echo ''; echo ''
-            echo "# $T $dist"
+        echo ''; echo ''
+        echo "# $T $dist"
+        # MICA environment vars. keep regardless of which KVS we use.
+        # MICA only supports one object size...
+        export MICA_VAL_LEN=$size
+        # Used for creating the hash table.. make large enough
+        export MICA_ITEMS=$((nkeys*2))
+        export MICA_CAPACITY=$capacity
 
-            # MICA environment vars. keep regardless of which KVS we use.
-            # MICA only supports one object size...
-            export MICA_VAL_LEN=$size
-            # Used for creating the hash table.. make large enough
-            export MICA_ITEMS=$((nkeys*2))
-            export MICA_CAPACITY=$capacity
-
-            cargo run --features "$FEATURES" --release --bin ycsb -- \
-                --dist $dist \
-                --readpct $readpct \
-                --records $nkeys \
-                --capacity $capacity \
-                --ops 0 \
-                --threads $((t*$NCPU)) \
-                --time 20 \
-                --cpu incr \
-                --size $size \
-                --put local
-        done
+        cargo run --features "$FEATURES" --release --bin ycsb -- \
+            --dist $dist \
+            --readpct $readpct \
+            --records $nkeys \
+            --capacity $capacity \
+            --ops 0 \
+            --threads 1 \
+            --time 20 \
+            --cpu incr \
+            --size $size \
+            --put local
     done
 done
 
