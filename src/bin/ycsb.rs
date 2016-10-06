@@ -51,7 +51,8 @@ static mut NIBBLE: Pointer<Nibble> = Pointer(0 as *const Nibble);
 #[cfg(not(feature = "extern_ycsb"))]
 fn kvs_init(config: &Config) {
     let mut nibble =
-        Box::new(Nibble::new2(config.total, 1usize<<30));
+        Box::new(Nibble::new2(config.total, config.records*2));
+        //Box::new(Nibble::new2(config.total, 1usize<<30));
     if config.comp {
         info!("Enabling compaction");
         for node in 0..numa::NODE_MAP.sockets() {
@@ -588,9 +589,13 @@ impl WorkloadGenerator {
                         let mut sockn = 0_usize;
 
                         // main loop (do warmup first)
+                        // pick one of the loop headers (inf vs 2x iters)
+
                         for x in 0..2 {
+
                         //let x = 1;
                         //loop {
+
                             let mut ops = 0usize;
                             let now = Instant::now();
                             let iters = 1000usize;
