@@ -93,7 +93,6 @@ type ReclaimQueueRef = Arc<ReclaimQueue>;
 type Handle = thread::JoinHandle<()>;
 
 pub struct Compactor {
-    candidates: Arc<pl::Mutex<Vec<SegmentRef>>>,
     manager: SegmentManagerRef,
     index: IndexRef,
     seginfo: meta::SegmentInfoTableRef,
@@ -107,6 +106,7 @@ pub struct Compactor {
 
 impl Compactor {
 
+    #[cfg(IGNORE)]
     pub fn dump(&self) {
         let cand = self.candidates.lock();
         println!("COMPACTOR: cand {}", cand.len());
@@ -120,7 +120,6 @@ impl Compactor {
                index: &IndexRef) -> Self {
         let seginfo = manager.seginfo();
         Compactor {
-            candidates: Arc::new(pl::Mutex::new(Vec::new())),
             manager: manager.clone(),
             index: index.clone(),
             seginfo: seginfo,
@@ -247,16 +246,30 @@ pub enum WorkerRole {
     Compact,
 }
 
+/// Cache of static info about a segment that we need to recall often
+/// (to avoid locking the segment each time).
+#[derive(Debug,Clone,Copy)]
+struct SegCache {
+    len: usize,
+    slot: usize,
+    /// when segment was created
+    alive: usize,
+    /// last known live bytes size
+    live_size: usize,
+    /// metric used for determinine which to compact
+    metric: f64,
+}
+type Candidate = (SegCache, SegmentRef);
+
 #[allow(dead_code)]
 struct Worker {
     role: WorkerRole,
-    // FIXME Vec is not efficient as a candidates list
-    // popping first element is slow; shifts N-1 left
-    candidates: Arc<pl::Mutex<Vec<SegmentRef>>>,
-    /// Recording of last known live bytes for each Segment, used to
-    /// throttle when the candidate metric is recomputed for each.
-    /// TODO make u32?
-    liveness: Vec<usize>,
+
+    /// Set of (immutable) candidate segments to clean. We cache the
+    /// slot for each, as it otherwise requires locking the seg each
+    /// time.
+    candidates: pl::Mutex<Vec<Candidate>>,
+
     manager: SegmentManagerRef,
     /// cache of SegmentManager.size
     mgrsize: usize,
@@ -283,8 +296,7 @@ impl Worker {
         let nseg = compactor.manager.get_nseg();
         Worker {
             role: *role,
-            candidates: compactor.candidates.clone(),
-            liveness: Vec::with_capacity(nseg),
+            candidates: pl::Mutex::new(Vec::with_capacity(512)),
             manager: compactor.manager.clone(),
             mgrsize: size,
             index: compactor.index.clone(),
@@ -295,27 +307,55 @@ impl Worker {
         }
     }
 
+    #[inline(always)]
+    fn update_metric(&self, time: u64, cand: &mut Candidate) {
+        let slot = cand.0 .slot;
+        let live = self.seginfo.get_live(slot);
+        if cand.0 .live_size != live {
+            cand.0 .live_size = live;
+            // NOTE segments are variable length
+            let u = live as f64 / cand.0 .len as f64; //SEGMENT_SIZE as f64;
+            let bene = (1f64 - u) * (time as f64 - cand.0 .alive as f64);
+            cand.0 .metric = bene / (1f64 + u);
+        }
+    }
+
     pub fn add_candidate(&mut self, seg: &SegmentRef) {
-        self.candidates.lock().push(seg.clone());
+        let mut cache = {
+            let seg = seg.read();
+            SegCache {
+                len: seg.len(),
+                slot: seg.slot(),
+                alive: self.seginfo.get_epoch(seg.slot()),
+                live_size: self.seginfo.get_live(seg.slot()),
+                metric: 0f64,
+            }
+        };
+        let mut candidate = (cache, seg.clone());
+        self.update_metric(clock::now(), &mut candidate);
+        self.candidates.lock().push(candidate);
     }
 
     //#[cfg(IGNORE)]
-    pub fn __dump_candidates(&self, guard: &pl::MutexGuard<Vec<SegmentRef>>) {
+    pub fn __dump_candidates(&self, guard: &pl::MutexGuard<Vec<Candidate>>) {
         debug!("node-{:?} candidates:", self.manager.socket().unwrap());
         let mut i: usize = 0;
+        let now = clock::now();
         for entry in &**guard {
-            let g = entry.read();
-            let slot = g.slot();
-            let live = self.seginfo.get_live(slot);
-            debug!("node-{:2?} [{:2}] sl {:4} so {:4} li {} ra {:.3}",
+            let cache: &SegCache = &entry.0;
+            debug!("node-{:2?} [{:2}] age {} ms slot {:4} live {:.1} MiB m {:.2} ra {:.3}",
                    self.manager.socket().unwrap(),
-                   i, slot, g.socket(), live,
-                   live as f64 / g.len() as f64);
+                   i,
+                   clock::to_msec(now-cache.alive as u64),
+                   cache.slot,
+                   cache.live_size as f64 / (1usize<<20) as f64,
+                   cache.metric,
+                   cache.live_size as f64 / cache.len as f64);
             i += 1;
         }
     }
     #[cfg(IGNORE)]
-    fn __dump_candidates(&self, guard: &pl::MutexGuard<Vec<SegmentRef>>) { ; }
+    fn __dump_candidates(&self, guard: &pl::MutexGuard<Vec<Candidate>>) { ; }
 
     #[cfg(IGNORE)]
     fn nlive(&self, seg: &SegmentRef) -> usize {
@@ -368,7 +408,10 @@ impl Worker {
     /// a knapsack problem). All we do now is sort segments and pick
     /// the top N that roughly fit within a new segment.
     pub fn next_candidates(&mut self)
-        -> Option<(Vec<SegmentRef>,usize)> {
+        -> Option<(Vec<Candidate>,usize)> {
+
+        // look for enough live space to fill up to this amount
+        let max_size = 3 * SEGMENT_SIZE;
 
         let mut candidates = self.candidates.lock();
 
@@ -379,8 +422,7 @@ impl Worker {
         }
 
         // We must decide how to select segments for cleaning. Lots of
-        // prior work in RAMCloud discussing this. We have a greedy
-        // algorithm that sorts by segment free space.
+        // prior work in RAMCloud discussing this.
         //
         // In RAMCloud, they use the following to pick segments:
         //
@@ -401,85 +443,76 @@ impl Worker {
         // times. Export to some array, computing each value once,
         // then sort based on that.
 
-        //let mut recomp: Vec<u32> = Vec::with_capacity(1024);
-        //for i in 0..self.seginfo
+        let time = clock::now();
+        for cand in &mut *candidates {
+            self.update_metric(time, cand);
+        }
 
-        let greedy = | a: &SegmentRef, b: &SegmentRef | {
-            let live_a: f64 = {
-                let seg = a.read();
-                let slot = seg.slot();
-                self.seginfo.get_live(slot) as f64 / seg.len() as f64
-            };
-            let live_b: f64 = {
-                let seg = b.read();
-                let slot = seg.slot();
-                self.seginfo.get_live(slot) as f64 / seg.len() as f64
-            };
-            // descending sort so we can use pop instead of remove(0)
-            live_b.partial_cmp(&live_a).unwrap()
+        let predicate = | a: &Candidate, b: &Candidate | {
+            (a.0 .metric).partial_cmp(&b.0 .metric).unwrap()
         };
 
-        quicksort::quicksort_by(candidates.as_mut_slice(), greedy);
+        {
+            let t = clock::now();
+            quicksort::quicksort_by(candidates.as_mut_slice(), predicate);
+            info!("quicksort {:.2} ms", clock::to_msec(clock::now()-t));
+        }
         self.__dump_candidates(&candidates);
 
         // grab enough candidates to fill one segment
 
         // pre-allocate to avoid resizing
-        let mut segs: Vec<SegmentRef>;
+        let mut segs: Vec<Candidate>;
         segs = Vec::with_capacity(32);
 
         // total live bytes in candidates we return
         let mut tally: usize = 0;
 
         // our own reclamation list
-        let mut empties: VecDeque< (meta::EpochRaw,SegmentRef) >;
+        let mut empties: VecDeque< (meta::EpochRaw,Candidate) >;
         empties = VecDeque::with_capacity(32);
 
         // non-candidates
-        let mut nc: Vec<SegmentRef> = Vec::with_capacity(32);
+        let mut nc: Vec<Candidate> = Vec::with_capacity(32);
 
-        while tally < SEGMENT_SIZE {
-            let seg = match candidates.pop() {
+        while tally < max_size {
+            let cand = match candidates.pop() {
                 None => break, // none left
                 Some(s) => s,
             };
-            let (slot,len) = {
-                let guard = seg.read();
-                (guard.slot(),guard.len())
-            };
 
-            let live = self.seginfo.get_live(slot);
+            let live = cand.0 .live_size;
             // if < 2% then do not compact
-            let too_full: bool = ((len - live) as f64 /
-                len as f64) <= 0.02_f64;
+            let too_full: bool = ((cand.0 .len - live) as f64 /
+                cand.0 .len as f64) <= 0.02_f64;
 
             // filter out segments that cannot be compacted
             if live == 0 {
                 debug!("node-{:?} slot {} zero bytes -> reclamation",
-                       self.manager.socket().unwrap(), slot);
+                       self.manager.socket().unwrap(), cand.0 .slot);
                 //assert_eq!(self.nlive(&seg), 0usize);
                 //self.reclaim_glob.push( (meta::next(), seg) );
-                empties.push_back( (meta::next(),seg) );
+                empties.push_back( (meta::next(),cand) );
             }
             // skip if it has no free space
             else if too_full {
                 debug!("node-{:?} slot {} not enough free space: {}",
-                       self.manager.socket().unwrap(), slot, len-live);
-                nc.push(seg);
+                       self.manager.socket().unwrap(), cand.0 .slot, cand.0 .len-live);
+                nc.push(cand);
             }
             // too much, put it back
-            else if (tally + live) > SEGMENT_SIZE {
+            else if (tally + live) > max_size {
                 debug!("node-{:?} slot {} would cause overflow, skipping",
-                       self.manager.socket().unwrap(), slot);
-                nc.push(seg);
+                       self.manager.socket().unwrap(), cand.0 .slot);
+                nc.push(cand);
                 break;
             }
             // viable candidate to compact
             else {
                 debug!("node-{:?} slot {} is good candidate",
-                       self.manager.socket().unwrap(), slot);
+                       self.manager.socket().unwrap(), cand.0 .slot);
                 tally += live;
-                segs.push(seg);
+                segs.push(cand);
             }
         }
 
@@ -499,7 +532,8 @@ impl Worker {
                 while let Some(current) = meta::min() {
                     if current > tuple.0 { break; }
                 }
-                self.manager.free(tuple.1);
+                let segref = tuple.1 .1;
+                self.manager.free(segref);
             }
             let end = unsafe { clock::rdtsc() };
             let tim = clock::to_nano(end-start);
@@ -532,7 +566,7 @@ impl Worker {
     /// address points within OLD segment), then update.  If we
     /// eventually use DMA, we'll need to do the latter method,
     /// because the DMA is specifically asynchronous.
-    pub fn compact(&mut self, dirty: &Vec<SegmentRef>,
+    pub fn compact(&mut self, dirty: &Vec<Candidate>,
                new: &SegmentRef) -> Status
     {
         let status: Status = Ok(1);
@@ -543,7 +577,8 @@ impl Worker {
         assert_eq!(self.seginfo.get_live(new.slot()), 0usize);
 
         let mut bytes_appended = 0usize;
-        for segref in dirty {
+        for candidate in dirty {
+            let segref = &candidate.1;
             let dirt = segref.read();
             debug!("compaction {} (live {} total {} entries {}) -> {}",
                    dirt.slot(), self.seginfo.get_live(dirt.slot()),
@@ -635,12 +670,12 @@ impl Worker {
     /// segment from candidates and notify segment manager it must be
     /// reclaimed. 
     pub fn do_compact(&mut self) {
-        let (segs,livebytes) = match self.next_candidates() {
+        let (candidates,livebytes) = match self.next_candidates() {
             None => { debug!("no candidates"); return; },
             Some(x) => x,
         };
         debug!("candidates: # {} livebytes {}",
-               segs.len(), livebytes);
+               candidates.len(), livebytes);
 
         //self.verify(&segref, slot, &update_fn);
 
@@ -685,7 +720,7 @@ impl Worker {
                       dur.subsec_nanos() / 1000u32);
             }
 
-            let ret = self.compact(&segs, &newseg);
+            let ret = self.compact(&candidates, &newseg);
             meta::next();
             if ret.is_err() { panic!("compact failed"); }
 
@@ -700,7 +735,8 @@ impl Worker {
 
         //let epoch = EPOCH.fetch_add(1, atomic::Ordering::Relaxed);
         let ep = meta::next();
-        for segref in segs {
+        for cand in candidates {
+            let segref = cand.1;
             let slot = segref.read().slot();
             debug!("adding slot {} to reclamation", slot);
             self.reclaim_glob.push( (ep, segref) );
@@ -774,8 +810,12 @@ impl Worker {
     /// Look in segment manager for newly closed segments. If any,
     /// move to our candidates list. Returns number of segments moved.
     pub fn check_new(&mut self) -> usize {
-        let mut cand = self.candidates.lock();
-        self.manager.grab_closed(&mut *cand)
+        let mut new: Vec<SegmentRef> = Vec::with_capacity(32);
+        let n = self.manager.grab_closed(&mut new);
+        for mut s in new {
+            self.add_candidate(&mut s);
+        }
+        n
     }
 
     #[cfg(IGNORE)]
