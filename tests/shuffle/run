@@ -3,35 +3,25 @@ set -e
 set -u
 
 SOCKETS=16
-CPUSPER=14
+CPUSPER=18
 PAIRSPER=$(($CPUSPER/2))
-
-../sysinfo > sysinfo.log
 
 [[ ! -d oldlogs ]] && \
     mkdir -v -p oldlogs
 
 mv -vfbu -t oldlogs *.log || true
 
-for b in 128 1024; do
-    for a in 3; do
-        for (( s=0; s<$SOCKETS; s++)); do
-            pairs=$((($s+1)*$PAIRSPER))
-            echo ''; echo ''
-            echo "# run: b $b a $a s $s pairs $pairs"
-            echo "numactl --cpunodbind=0-${s} \
-                ../preload $a ./shuffle $pairs $b"
-            if [[ $s -eq 0 ]]; then
-                numactl --cpunodebind=0 \
-                    ../preload $a ./shuffle $pairs $b \
-                    2>&1 | tee -a b.${b}_a.${a}.log
-            else
-                numactl --cpunodebind=0-${s} \
-                    ../preload $a ./shuffle $pairs $b \
-                    2>&1 | tee -a b.${b}_a.${a}.log
-            fi
-            sync
-            sleep 10 
-        done
+../../scripts/sysinfo > sysinfo.log
+
+for b in 1024; do
+    for ((s=1; s<=$SOCKETS; s++)); do
+        pairs=$(($s*$PAIRSPER))
+        echo ''; echo ''
+        echo "# run: b $b s $s pairs $pairs"
+        echo "NIBDEBUG=3 ./shuffle $pairs $b"
+        NIBDEBUG=3 ./shuffle $pairs $b \
+            2>&1 | tee -a b.${b}.log
+        sync
+        sleep 10 
     done
 done
