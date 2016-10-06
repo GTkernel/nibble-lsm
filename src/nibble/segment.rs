@@ -30,7 +30,7 @@ pub const BLOCKS_PER_SEG:   usize = SEGMENT_SIZE / BLOCK_SIZE;
 
 /// Number of blocks reserved (per BlockAllocator) for use by
 /// compaction when memory is scarce.
-pub const RESERVE_SEGS:     usize = 2;
+pub const RESERVE_SEGS:     usize = 16;
 pub const RESERVE_BLOCKS:   usize = RESERVE_SEGS * BLOCKS_PER_SEG;
 
 //==----------------------------------------------------==//
