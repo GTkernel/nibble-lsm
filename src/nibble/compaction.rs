@@ -204,19 +204,20 @@ fn __compact(state: &Arc<pl::RwLock<Worker>>) {
         let ratio = remaining/total;
         debug!("node-{:?} rem. {} total {} ratio {:.2} run: {:?}",
                s.manager.socket().unwrap(),
-               remaining, total, ratio, ratio<0.5);
-        ratio < 0.5
+               remaining, total, ratio, ratio<0.3);
+        ratio < 0.3
     };
     if run {
-        debug!("node-{} compaction initiated",
-             s.manager.socket().unwrap());
-        let now = clock::now();
-        s.do_compact();
-        debug!("node-{} compaction: {} ms",
-              s.manager.socket().unwrap(),
-              clock::to_msec(clock::now()-now));
-        //let short = Duration::from_millis(100);
-        //thread::sleep(dur);
+        // do a few times before re-checking the BlockAllocator
+        for _ in 0..8 {
+            debug!("node-{} compaction initiated",
+                   s.manager.socket().unwrap());
+            let now = clock::now();
+            s.do_compact();
+            debug!("node-{} compaction: {} ms",
+                   s.manager.socket().unwrap(),
+                   clock::to_msec(clock::now()-now));
+        }
     } else {
         //let l = s.candidates.lock().unwrap();
         //s.__dump_candidates(&l);
