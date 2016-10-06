@@ -8,7 +8,7 @@ pub mod nib;
 pub mod index;
 pub mod memory;
 pub mod thelog;
-pub mod epoch;
+pub mod meta;
 pub mod numa;
 pub mod sched;
 pub mod clock;

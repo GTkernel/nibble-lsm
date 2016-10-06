@@ -1,7 +1,7 @@
 use common::*;
 use segment;
 use segment::*;
-use epoch::*;
+use meta::*;
 use memory::*;
 use clock;
 use numa::{self,NodeId};
@@ -147,7 +147,6 @@ impl LogHead {
 
         // check if head exists
         if let None = self.segment {
-            trace!("head doesn't exist");
             roll = true;
         }
         // check if the object can fit in remaining space
@@ -155,13 +154,10 @@ impl LogHead {
             roll = self.segment.as_ref().map(|seg|
                 !seg.read().can_hold(buf)
             ).unwrap();
-            if roll {
-                debug!("rolling: head cannot hold new object");
-            }
         }
         if roll {
-            let socket = self.manager.socket();
-            trace!("rolling head, socket {:?}", socket);
+            trace!("rolling head, socket {:?}",
+                   self.manager.socket());
             if let Err(code) = self.roll() {
                 return Err(code);
             }
@@ -266,29 +262,22 @@ impl Log {
         // using processor ID should hopefully avoid conflicts
         // compared to random assignment and hoping for luck
         let (sockID,coreID) = clock::rdtscp_id();
-        let mut i = coreID as usize % self.nheads;
+        let i = coreID as usize % self.nheads;
 
         // TODO keep track of #times we had to iterate for avail head
 
         // 1. pick a log head and append
-        'again: loop {
-            if let Some(mut h) = self.heads[i].try_lock() {
-                match h.append(buf) {
-                    Err(e) => match e {
-                        // try another log head instead
-                        // FIXME if we try all and they return OOM,
-                        // we should probably stop spinning
-                        ErrorCode::OutOfMemory =>  {
-                            i = (i + 1) % self.nheads;
-                            continue 'again;
-                        },
-                        _ => return Err(e),
-                    },
-                    Ok(v) => va = v,
-                }
+        let mut opt;
+        loop {
+            opt = self.heads[i].try_lock();
+            if opt.is_some() {
                 break;
             }
-            i = (i + 1) % self.nheads;
+        }
+        let mut head = opt.unwrap();
+        match head.append(buf) {
+            e @ Err(_) => return e,
+            Ok(v) => va = v,
         }
 
         // 2. update segment info table

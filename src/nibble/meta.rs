@@ -75,20 +75,20 @@ impl SegmentInfoTable {
         }
     }
 
-    pub fn get_live(&self, index: usize) -> usize {
-        self.table[index].live.load(self.ordering)
-    }
-
     pub fn get_epoch(&self, index: usize) -> usize {
         self.table[index].epoch.load(self.ordering)
     }
 
-    pub fn set_live(&self, index: usize, value: usize) {
-        self.table[index].live.store(value, self.ordering)
+    pub fn reset_epoch(&self, index: usize) {
+        self.table[index].epoch.store(next() as usize, self.ordering);
     }
 
-    pub fn set_epoch(&self, index: usize, value: usize) {
-        self.table[index].epoch.store(value, self.ordering)
+    pub fn get_live(&self, index: usize) -> usize {
+        self.table[index].live.load(self.ordering)
+    }
+
+    pub fn set_live(&self, index: usize, value: usize) {
+        self.table[index].live.store(value, self.ordering);
     }
 
     pub fn incr_live(&self, index: usize, amt: usize) {
@@ -99,10 +99,6 @@ impl SegmentInfoTable {
         //debug_assert!(v <= SEGMENT_SIZE);
     }
 
-    pub fn incr_epoch(&self, index: usize, amt: usize) -> usize {
-        self.table[index].epoch.fetch_add(amt, self.ordering)
-    }
-
     pub fn decr_live(&self, index: usize, amt: usize) {
         debug_assert!(self.get_live(index) >= amt);
         unsafe {
@@ -111,25 +107,21 @@ impl SegmentInfoTable {
         }
     }
 
-    pub fn decr_epoch(&self, index: usize, amt: usize) -> usize {
-        self.table[index].epoch.fetch_sub(amt, self.ordering)
-    }
-
-    pub fn swap_live(&self, index: usize, amt: usize) -> usize {
-        self.table[index].live.swap(amt, self.ordering)
-    }
-
-    pub fn swap_epoch(&self, index: usize, amt: usize) -> usize {
-        self.table[index].epoch.swap(amt, self.ordering)
-    }
-
-    pub fn live_bytes(&self) -> usize {
-        let mut count: usize = 0;
-        for e in &self.table {
-            count += e.live.load(self.ordering);
-        }
-        count
-    }
+//    pub fn swap_live(&self, index: usize, amt: usize) -> usize {
+//        self.table[index].live.swap(amt, self.ordering)
+//    }
+//
+//    pub fn swap_epoch(&self, index: usize, amt: usize) -> usize {
+//        self.table[index].epoch.swap(amt, self.ordering)
+//    }
+//
+//    pub fn live_bytes(&self) -> usize {
+//        let mut count: usize = 0;
+//        for e in &self.table {
+//            count += e.live.load(self.ordering);
+//        }
+//        count
+//    }
 
     //
     // --- Internal methods used for testing only ---

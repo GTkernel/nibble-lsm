@@ -25,6 +25,11 @@ x put_object might need to handle decr/incr live_bytes correctly
 * if one socket runs out of memory (even when overall capacity is not
   near 100%) that socket compactor may deadlock
 
+* there seem to be an undeterministic number of segments which are
+  OPEN, waiting in reclamation. i've noticed at most 1 OPEN segment in
+  the set of candidate segments (for compaction). where? why? OPEN
+  segments should ONLY be as head segments, otherwise they are closed
+
 
 ===================== Performance/Other Issues =======================
 

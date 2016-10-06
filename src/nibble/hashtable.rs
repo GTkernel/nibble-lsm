@@ -41,7 +41,7 @@ use clock;
 const TABLE_VLEN: usize = 1usize << 34;
 
 const VERSION_MASK: u64 = 0x1;
-const ENTRIES_PER_BUCKET: usize = 7;
+const ENTRIES_PER_BUCKET: usize = 15;
 
 /// We reserve this value to indicate the bucket slot is empty.
 const INVALID_KEY: u64 = 0u64;
@@ -234,6 +234,34 @@ impl LockedBucket {
         }
     }
 
+//    /// Same as hashtable::put() except the bucket is already locked
+//    pub fn update(&self, key: u64, new: u64) -> (bool,Option<u64>) {
+//        let mut opts: find_ops =
+//            opts = bucket.find_key(key);
+//        let (e,inv) = opts;
+//
+//        let opt =
+//            if e.is_some() { e }
+//            else if inv.is_some() { inv }
+//            else { None };
+//
+//        // do update or insert
+//        if opt.is_some() {
+//            let i = opt.unwrap();
+//            unsafe {
+//                let mut bucket: &Bucket =
+//                    &mut *self.bucket.0;
+//                (true,Some(bucket.set_value(i, new)))
+//            }
+//        }
+//        // XXX invoke resize instead of failing.. this is
+//        // too complicated
+//        // else no space in hash table
+//        else {
+//            (false,None)
+//        }
+//    }
+
 }
 
 impl Drop for LockedBucket {
@@ -352,12 +380,9 @@ impl HashTable {
     }
 
     /// Compute the index of the bucket from the hash of the key.
-    /// I am unconvinced my FNV1a implementation is correct, as
-    /// it results in constant growth of the hash table. We use
-    /// mid-order bits as the index to avoid any collusion.
     #[inline(always)]
     fn index(&self, hash: u64) -> usize {
-        ((hash >> 23) & (self.nbuckets() as u64 - 1)) as usize
+        (hash & (self.nbuckets() as u64 - 1)) as usize
     }
 
     /// does work of both insert and update
@@ -574,6 +599,100 @@ impl HashTable {
             bucket.del_key(e.unwrap(), old);
             bucket.unlock();
             return true;
+        }
+        assert!(false, "Unreachable path");
+    }
+
+    /// Grab the lock on the bucket which would hold the key, and
+    /// execute the given lambda.  Does not modify the bucket. We do
+    /// not need to search for the key; only lock the bucket.
+    /// Return Ok if we were able to perform the update; Err likely
+    /// means we are doing an insert but there is no space left.
+    /// If we are updating a value, we pass Some(old_value) to f, else
+    /// None to indicate an insertion.
+    /// FIXME can we just make this part of put() ? much of the code
+    /// is the same
+    #[inline(always)]
+    pub fn update_map<F>(&self, key: u64, new: u64, f: F) -> bool
+        where F: Fn(Option<u64>) {
+
+        let hash = Self::make_hash(key);
+
+        let mut bidx: usize;
+        let mut buckets: &[Bucket];
+        let mut bucket: &Bucket;
+        let mut bver: u64;
+        let mut opts: find_ops;
+
+        let mut tver = self.version();
+
+        bidx = self.index(hash);
+        buckets = self.as_slice();
+        bucket = &buckets[bidx];
+
+        'retry: loop {
+
+            // if table version changes, recompute bucket index
+            let v = self.version();
+            if unlikely!(v != tver) {
+                bidx = self.index(hash);
+                buckets = self.as_slice();
+                bucket = &buckets[bidx];
+                tver = v;
+            }
+
+            bver = bucket.read_version();
+
+            opts = bucket.find_key(key);
+            let (e,inv) = opts;
+            if unlikely!(e.is_none() && inv.is_none()) {
+                if !self.allow_resize {
+                    return false;
+                }
+                if !self.resize() {
+                    self.wait_resizing();
+                }
+                continue 'retry;
+            }
+
+            bucket.wait_lock();
+
+            if unlikely!(tver != self.version()) {
+                bucket.unlock();
+                continue 'retry;
+            }
+
+            // table has not changed, check if bucket has
+            if bucket.read_version() != bver {
+                opts = bucket.find_key(key);
+            }
+
+            let (e,inv) = opts;
+
+            // if exists, overwrite
+            if let Some(i) = e {
+                f(Some(bucket.set_value(i, new)));
+                bucket.unlock();
+                return true;
+            }
+            // else if there is an empty slot, use that
+            else if let Some(i) = inv {
+                bucket.set_key(i, key);
+                bucket.set_value(i, new);
+                f(None);
+                bucket.unlock();
+                return true;
+            }
+
+            // hm..  again no space. we must resize
+            bucket.unlock();
+            if !self.allow_resize {
+                return false;
+            }
+            if !self.resize() {
+                self.wait_resizing();
+            }
+            // now loop around and retry
         }
         assert!(false, "Unreachable path");
     }
@@ -812,8 +931,17 @@ impl HashTable {
         her.finish()
     }
 
-    fn bucket_idx(&self, hash: u64) {
-        unimplemented!();
+    fn stats(&self) {
+        let buckets: &[Bucket] = self.as_slice();
+        for t in buckets.iter().zip(0..) {
+            let mut n = 0;
+            for i in 0..ENTRIES_PER_BUCKET {
+                if t.0 .key[i] != INVALID_KEY {
+                    n += 1;
+                }
+            }
+            println!("{} {}", t.1, n);
+        }
     }
 }
 
@@ -1204,12 +1332,12 @@ mod tests {
     fn resize_single_thread() {
         logger::enable();
 
-        let entries: usize = 1usize<<20;
+        let entries: usize = 1usize<<12;
         let mut ht = HashTable::new(entries, 0);
         let len = ht.len;
         let nbuckets = ht.nbuckets;
 
-        for k in 0..(1u64<<15) {
+        for k in 0..(1u64<<12) {
             ht.put(k+1, k+1); // 0 not a valid key..
         }
 
@@ -1226,8 +1354,11 @@ mod tests {
         debug!("checking values");
         let mut value: u64 = 0;
         for k in 0..(1u64<<15) {
-            assert_eq!(ht.get(k+1, &mut value), true);
-            assert_eq!(value, k+1);
+            assert!(ht.get(k+1, &mut value),
+                "key {} not found", k+1);
+            assert!(value == k+1,
+                    "value for key {} is bad: {}",
+                    k+1, value);
         }
     }
 
@@ -1314,4 +1445,43 @@ mod tests {
             guard.join();
         }
     }
+
+    #[test]
+    fn fill_then_stats() {
+        logger::enable();
+
+        let entries: usize = 1usize<<12;
+        let mut ht = HashTable::new(entries, 0);
+        ht.forbid_resize();
+        let len = ht.len;
+        let nbuckets = ht.nbuckets;
+
+        let mut keys: Vec<u64> =
+            Vec::with_capacity(entries);
+
+        //for _ in 0..entries {
+        //    let mut v: u64 = unsafe { rdrandq() as u64 };
+        //    if v == 0 {
+        //        v += 1;
+        //    }
+        //    keys.push(v);
+        //}
+
+        for i in 0..entries {
+            let v: u64 = i as u64 + 1u64;
+            keys.push(v);
+        }
+
+        for k in keys {
+            match ht.put(k, k) {
+                (true,None) => continue, // inserted
+                (true,Some(_)) => assert!(false,"updated??"),
+                (false,None) => break, // table full
+                (false,Some(_)) => assert!(false), // not returned
+            }
+        }
+
+        ht.stats();
+    }
+
 }
