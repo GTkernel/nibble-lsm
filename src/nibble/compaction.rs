@@ -71,6 +71,14 @@ use quicksort;
 use parking_lot as pl;
 
 //==----------------------------------------------------==//
+//      Configuration
+//==----------------------------------------------------==//
+
+/// Ratio of available memory to total capacity, below which
+/// compaction threads will aggressively try to compress memory.
+pub const RATIO: f64 = 0.2_f64;
+
+//==----------------------------------------------------==//
 //      Compactor types, macros
 //==----------------------------------------------------==//
 
@@ -204,8 +212,8 @@ fn __compact(state: &Arc<pl::RwLock<Worker>>) {
         let ratio = remaining/total;
         debug!("node-{:?} rem. {} total {} ratio {:.2} run: {:?}",
                s.manager.socket().unwrap(),
-               remaining, total, ratio, ratio<0.3);
-        ratio < 0.3
+               remaining, total, ratio, ratio<RATIO);
+        ratio < RATIO
     };
     if run {
         // do a few times before re-checking the BlockAllocator
