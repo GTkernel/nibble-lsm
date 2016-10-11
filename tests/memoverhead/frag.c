@@ -33,6 +33,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "util.h"
 
@@ -106,7 +107,6 @@ void test(long O1, long O2, long M) {
     struct drand48_data drand_buf;
     srand48_r(((long)rdtscp() << 30) ^ (long)&entries, &drand_buf);
 
-    const long less = n*(long)sizeof(*entries);
     uint64_t key = 0l;
 
     long size1 = O1;
@@ -119,6 +119,9 @@ void test(long O1, long O2, long M) {
     long pushed = 0l;
     const long push = max * 1l;
     long keys_inserted = 0l;
+
+    long bytes;
+    long pushed_since = 0l;
 
     printf("push max: %.2f GiB\n",
             (float)push /(float)(1ul<<30));
@@ -133,7 +136,6 @@ void test(long O1, long O2, long M) {
     for (int iter = 0; iter < 2; iter++) {
         pushed = 0;
 
-        long bytes;
         switch (iter) {
             case 0: bytes = size1; break;
             case 1: bytes = size2; break;
@@ -147,7 +149,6 @@ void test(long O1, long O2, long M) {
         }
 #endif
 
-        long pushed_since = 0l;
         while (pushed < push) {
 #if defined(USE_RANGE)
             // if you want to test ranges of sizes
@@ -220,6 +221,47 @@ void test(long O1, long O2, long M) {
         //print_mem("free phase: ", (size_t)cur);
         fflush(stdout);
 #endif
+    }
+
+    // let compaction catch up
+    puts("main pause for compaction");
+    fflush(stdout);
+    sleep(10);
+
+    // final insertion phase to fill up empty slots
+    // pause, insert, pause insert, etc.
+    for (int i = 0; i < 8; i++) {
+        key = rdrand();
+        while (0 == nibble_put((u64)key,(u64)bytes)) {
+            if (at <= 0) {
+                printf("oops: at=0\n");
+                fflush(stdout);
+                exit(EXIT_FAILURE);
+            }
+
+            entries[at].bytes = bytes;
+            entries[at].key = key;
+            cur += bytes;
+            keys_inserted++;
+
+            if (++at >= n) {
+                puts("need more n");
+                fflush(stdout);
+                exit(EXIT_FAILURE);
+            }
+
+            pushed += bytes;
+            key = rdrand();
+
+            if ((pushed - pushed_since) > (1l<<27)) {
+                printf("    cur %.2f\n", (float)cur/(float)(1<<30));
+                fflush(stdout);
+                pushed_since = pushed;
+            }
+        }
+        puts("pause 5");
+        fflush(stdout);
+        sleep(5);
     }
 
     printf("keys_inserted %ld\n", keys_inserted);
