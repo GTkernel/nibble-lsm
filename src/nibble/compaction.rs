@@ -600,6 +600,8 @@ impl Worker {
                    dirt.slot(), self.seginfo.get_live(dirt.slot()),
                    dirt.len(), dirt.nobjects(), new.slot());
             //dirt.rawdump();
+            debug_assert!(dirt.is_closed(),
+                "Segment {} being compacted is open!", dirt.slot());
 
             let mut n = 0usize;
             for entry in dirt.into_iter() {

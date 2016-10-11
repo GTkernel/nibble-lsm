@@ -674,6 +674,11 @@ impl Segment {
     }
 
     #[inline(always)]
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    #[inline(always)]
     pub fn close(&mut self) {
         atomic::fence(Ordering::SeqCst); // TODO needed?
         self.closed = true;
