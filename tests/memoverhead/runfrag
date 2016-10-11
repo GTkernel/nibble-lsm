@@ -1,0 +1,19 @@
+#! /usr/bin/env python3
+import os
+import subprocess as sp
+
+BIN = './frag'
+
+first  = [ 60, 1000, 1000, 1024, 10240, 500*1024 ]
+second = [ 70, 1024, 1030, 10240, 102400, 600*1024 ]
+
+# capacity of Nibble's logs
+CAP = 2**37
+# how much the frag test should assume is available (making MICA's
+# heaps the bottleneck)
+M = CAP
+
+for i in range(len(first)):
+    cmd = [ BIN, str(first[i]), str(second[i]), str(M), str(CAP) ]
+    print(cmd)
+    sp.call(cmd)
