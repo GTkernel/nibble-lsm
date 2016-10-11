@@ -158,12 +158,19 @@ void test(long O1, long O2, long M) {
             bytes = (iter == 0) ? range(RANGE1)
                                 : range(RANGE2);
 #endif
+            bool paused_once = false;
+again:;
             key = rdrand();
             //assert( (entries[at].addr = malloc((size_t)bytes)) );
             //memset(entries[at].addr, 0xad, (size_t)bytes);
             while (cur >= max ||
                     (0 != nibble_put((u64)key,(u64)bytes))) {
                 if (at <= 0) {
+                    if (!paused_once) {
+                        sleep(5);
+                        paused_once = true;
+                        goto again;
+                    }
                     printf("oops: at=0\n");
                     fflush(stdout);
                     exit(EXIT_FAILURE);
@@ -183,6 +190,7 @@ void test(long O1, long O2, long M) {
                 // change the key before trying again
                 key = rdrand();
             }
+            paused_once = false;
             entries[at].bytes = bytes;
             entries[at].key = key;
             cur += bytes;
@@ -260,7 +268,9 @@ void test(long O1, long O2, long M) {
             key = rdrand();
 
             if ((pushed - pushed_since) > (1l<<27)) {
-                printf("    cur %.2f\n", (float)cur/(float)(1<<30));
+                printf("    cur %.2f GiB pushed %.2f GiB\n",
+                        (float)cur/(float)(1<<30),
+                        (float)pushed/(float)(1<<30));
                 fflush(stdout);
                 pushed_since = pushed;
             }
@@ -270,6 +280,7 @@ void test(long O1, long O2, long M) {
         sleep(5);
     }
 
+    sleep(5);
     printf("keys_inserted %ld\n", keys_inserted);
     printf("cur %.2f MiB\n", (float)cur / (float)(1ul<<20));
 }

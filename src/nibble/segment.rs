@@ -17,6 +17,7 @@ use std::thread;
 use std::time::Duration;
 use std::intrinsics;
 use std::fmt;
+use std::slice;
 
 use crossbeam::sync::SegQueue;
 use parking_lot as pl;
@@ -968,9 +969,7 @@ impl<'a> Iterator for SegmentIter<'a> {
                      mem::size_of::<EntryHeader>());
         }
 
-        debug_assert!(entry.getdatalen() > 0,
-            "seg {}: entry data length is zero: {:?}",
-            self.segslot, entry);
+        debug_assert!(entry.getdatalen() > 0);
         // https://github.com/rust-lang/rust/issues/22644
         debug_assert!( (entry.getdatalen() as usize) < SEGMENT_SIZE);
 
