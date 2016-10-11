@@ -36,6 +36,9 @@
 
 #include "util.h"
 
+// SET THIS APPROPRIATELY
+#define NSOCKETS    16ul
+
 // Enable step 2
 #define FREE_PHASE
 #define FREE_PCT    0.9
@@ -117,7 +120,7 @@ void test(long O1, long O2, long M) {
     long cur = 0l;
 
     long pushed = 0l;
-    const long push = max * 1l;
+    const long push = 2 * max / NSOCKETS;
     long keys_inserted = 0l;
 
     printf("push max: %.2f GiB\n",
@@ -193,7 +196,10 @@ void test(long O1, long O2, long M) {
             pushed += bytes;
 
             if ((pushed - pushed_since) > (1l<<30)) {
-                printf("    cur %.2f\n", (float)cur/(float)(1<<30));
+                printf("    cur %.2f GiB pushed %.2f GiB\n",
+                        (float)cur/(float)(1<<30),
+                        (float)pushed/(float)(1<<30)
+                        );
                 fflush(stdout);
                 pushed_since = pushed;
             }
@@ -235,10 +241,6 @@ int main(int narg, char *args[]) {
     long O2 = strtol(args[2], NULL, 10);
     long M  = strtol(args[3], NULL, 10);
     long cap = strtol(args[4], NULL, 10);
-    if (M > (1l<<37)) {
-        printf("M %ld not too big?\n", M);
-        exit(EXIT_FAILURE);
-    }
     nibble_init(cap, 1ul<<30);
     test(O1,O2,M);
     exit(EXIT_SUCCESS);
