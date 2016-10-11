@@ -599,6 +599,7 @@ impl Worker {
             debug!("compaction {} (live {} total {} entries {}) -> {}",
                    dirt.slot(), self.seginfo.get_live(dirt.slot()),
                    dirt.len(), dirt.nobjects(), new.slot());
+            //dirt.rawdump();
 
             let mut n = 0usize;
             for entry in dirt.into_iter() {

@@ -88,7 +88,7 @@ pub unsafe fn copy_out(blocks: &[BlockRef], offset: usize,
 
 
 /// A contiguous region of virtual memory.
-#[derive(Debug,Clone)]
+#[derive(Clone)]
 pub struct Block {
     /// Base address of this memory region. Immutable after creation.
     addr: usize,
@@ -111,6 +111,13 @@ pub struct Block {
     /// does not belong to any Segment (and thus seg_slot and blk_idx
     /// are also invalid). Only load or store this.
     list: uslice<BlockRef>,
+}
+impl fmt::Debug for Block {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Block {{ addr 0x{:x} len {} slot {} segslot {} blk_idx {} }}",
+               self.addr, self.len, self.slot, self.seg_slot, self.blk_idx
+               )
+    }
 }
 
 impl Block {
@@ -468,9 +475,10 @@ pub struct Segment {
 
 impl fmt::Debug for Segment {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Seg {{ id {} sock {:?} slot {} closed {:?} len {} rem {} }}",
+        write!(f, "Seg {{ id {} sock {:?} slot {} closed {:?} len {} rem {} nobj {} blocks {:?} }}",
                self.id, self.socket, self.slot,
-               self.closed, self.len, self.rem)
+               self.closed, self.len, self.rem, self.nobj,
+               self.blocks)
     }
 }
 
@@ -482,6 +490,33 @@ impl fmt::Debug for Segment {
 /// virtually contiguous blocks. For now, objects cannot be broken
 /// across a block boundary.
 impl Segment {
+
+    /// Print out the contents of the entire segment to STDOUT
+    pub fn rawdump(&self) {
+        println!("RAWDUMP {:?}", self);
+        for barc in &self.blocks {
+            let block = barc.as_ref();
+            println!("RAWDUMP {:?}", block);
+            let sl: &[u8] = unsafe {
+                slice::from_raw_parts(
+                    block.addr as *const usize as *const u8,
+                    block.len)
+            };
+            let lines = block.len >> 6usize;
+            for l in 0..lines {
+                let b: usize = l << 6usize;
+                print!("B [{:05}] ", b);
+                for s in 0usize..(1usize<<4) {
+                    print!("{:02x}{:02x}{:02x}{:02x} ",
+                           sl[ b + s * 4 + 0 ],
+                           sl[ b + s * 4 + 1 ],
+                           sl[ b + s * 4 + 2 ],
+                           sl[ b + s * 4 + 3 ]);
+                }
+                println!("");
+            }
+        }
+    }
 
     // TODO make blocks a ref
     pub fn new(id: usize, sock: NodeId, slot: usize,
