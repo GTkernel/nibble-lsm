@@ -904,8 +904,6 @@ impl<'a> Iterator for SegmentIter<'a> {
                          mem::size_of::<EntryHeader>());
             }
 
-            debug_assert_eq!(entry.getkeylen() as usize,
-                             size_of::<u64>());
             debug_assert!(entry.getdatalen() > 0);
             // https://github.com/rust-lang/rust/issues/22644
             debug_assert!( (entry.getdatalen() as usize) < SEGMENT_SIZE);
@@ -930,15 +928,14 @@ impl<'a> Iterator for SegmentIter<'a> {
                      mem::size_of::<EntryHeader>());
         }
 
-        debug_assert_eq!(entry.getkeylen() as usize,
-                         size_of::<u64>());
-        debug_assert!(entry.getdatalen() > 0);
+        debug_assert!(entry.getdatalen() > 0,
+            "seg {}: entry data length is zero: {:?}",
+            self.segslot, entry);
         // https://github.com/rust-lang/rust/issues/22644
         debug_assert!( (entry.getdatalen() as usize) < SEGMENT_SIZE);
 
         let entry_len = entry.len_with_header();
         trace!("read {:?}", entry);
-        debug_assert_eq!(entry.getkeylen(), 8);
 
 
         // determine which blocks belong
@@ -958,7 +955,6 @@ impl<'a> Iterator for SegmentIter<'a> {
         let entry = EntryReference {
             offset: self.blk_offset,
             len: entry_len,
-            keylen: entry.getkeylen(),
             datalen: entry.getdatalen(),
             blocks: &self.blocks[self.cur_blk..last_blk],
         };

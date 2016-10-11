@@ -44,9 +44,9 @@ macro_rules! wlock {
 ///     | EntryHeader | Key bytes | Data bytes |
 /// This struct MUST NOT contain any pointers.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C,packed)]
 pub struct EntryHeader {
-    keylen: u32, // TODO don't need this; keys are fixed-size at 8B
+    //keylen: u32, // TODO don't need this; keys are fixed-size at 8B
     datalen: u32,
 }
 
@@ -55,19 +55,19 @@ pub struct EntryHeader {
 impl EntryHeader {
 
     pub fn new(desc: &ObjDesc) -> Self {
-        assert!(desc.keylen() <= usize::max_value());
+        debug_assert!(desc.valuelen() > 0usize);
         // NOTE an ObjDesc may have a null value pointer,
         // as it may originate from an alloc instead of a PUT.
         // assert!(!desc.getvalue().0 .is_null());
         EntryHeader {
-            keylen: desc.keylen() as u32,
+            //keylen: desc.keylen() as u32,
             datalen: desc.valuelen() as u32,
         }
     }
 
     pub fn empty() -> Self {
         EntryHeader {
-            keylen: 0 as u32,
+            //keylen: 0 as u32,
             datalen: 0 as u32,
         }
     }
@@ -75,9 +75,9 @@ impl EntryHeader {
     #[inline(always)]
     pub fn getdatalen(&self) -> u32 { self.datalen }
     #[inline(always)]
-    pub fn getkeylen(&self) -> u32 { self.keylen }
-    #[inline(always)]
-    pub fn object_length(&self) -> u32 { self.datalen + self.keylen }
+    pub fn object_length(&self) -> u32 {
+        self.datalen + size_of::<KeyType>() as u32
+    }
     #[inline(always)]
     pub fn len_with_header(&self) -> usize {
         (self.object_length() as usize) + size_of::<EntryHeader>()
@@ -86,8 +86,8 @@ impl EntryHeader {
     /// Size of this (entire) entry in the log.
     pub fn len(&self) -> usize {
         size_of::<EntryHeader>() +
-            self.keylen as usize +
-            self.datalen as usize
+            self.datalen as usize +
+            size_of::<KeyType>()
     }
 
     pub fn as_ptr(&self) -> *const u8 {
@@ -98,8 +98,8 @@ impl EntryHeader {
         self as *mut Self as *mut u8
     }
 
-    #[cfg(test)]
-    pub fn set_key_len(&mut self, l: u32) { self.keylen = l; }
+    //#[cfg(test)]
+    //pub fn set_key_len(&mut self, l: u32) { self.keylen = l; }
 
     #[cfg(test)]
     pub fn set_data_len(&mut self, l: u32) { self.datalen = l; }
@@ -364,7 +364,6 @@ impl Log {
 pub struct EntryReference<'a> {
     pub offset: usize, // into first block
     pub len: usize, /// header + key + data
-    pub keylen: u32,
     pub datalen: u32,
     /// TODO can we avoid cloning the Arcs?
     pub blocks: &'a [BlockRef]
@@ -421,7 +420,6 @@ pub fn get_ref(list: &[BlockRef], idx: usize, va: usize) -> EntryReference {
         href = &header;
     }}
 
-    debug_assert_eq!(href.getkeylen() as usize, size_of::<u64>());
     debug_assert!(href.getdatalen() > 0);
     // https://github.com/rust-lang/rust/issues/22644
     debug_assert!( (href.getdatalen() as usize) < SEGMENT_SIZE);
@@ -437,7 +435,6 @@ pub fn get_ref(list: &[BlockRef], idx: usize, va: usize) -> EntryReference {
     EntryReference {
         offset: offset,
         len: entry_len,
-        keylen: href.getkeylen(),
         datalen: href.getdatalen(),
         blocks: &list[idx..(idx + nblks)],
     }

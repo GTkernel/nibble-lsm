@@ -10,6 +10,10 @@ use std::intrinsics;
 //      General types
 //==----------------------------------------------------==//
 
+/// Keys in Nibble are fixed 8-byte unsigned values.
+/// TODO use this everywhere we have size_of::<u64>() hard-coded
+pub type KeyType = u64;
+
 /// Size of a cache line in bytes.
 pub const CACHE_LINE: usize = 64;
 
