@@ -991,7 +991,7 @@ impl<'a> Iterator for SegmentIter<'a> {
 
         self.next_obj += 1;
 
-        let last_blk = self.cur_blk + nblks;
+        let last_blk = cmp::min(self.cur_blk + nblks + 2, self.blocks.len());
         let entry = EntryReference {
             offset: self.blk_offset,
             len: entry_len,
