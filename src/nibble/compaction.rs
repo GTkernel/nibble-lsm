@@ -352,7 +352,7 @@ impl Worker {
         self.candidates.lock().push(candidate);
     }
 
-    //#[cfg(IGNORE)]
+    #[cfg(IGNORE)]
     pub fn __dump_candidates(&self, guard: &pl::MutexGuard<Vec<Candidate>>) {
         debug!("node-{:?} candidates:", self.manager.socket().unwrap());
         let mut i: usize = 0;
@@ -370,7 +370,7 @@ impl Worker {
             i += 1;
         }
     }
-    #[cfg(IGNORE)]
+    //#[cfg(IGNORE)]
     fn __dump_candidates(&self, guard: &pl::MutexGuard<Vec<Candidate>>) { ; }
 
     #[cfg(IGNORE)]
