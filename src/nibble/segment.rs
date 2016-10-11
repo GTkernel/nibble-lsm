@@ -213,7 +213,12 @@ impl BlockAllocator {
 
         let general_blks = count - RESERVE_BLOCKS;
 
-        debug!("Reserving {} blocks for compaction, {} for logs",
+        info!("new BlockAllocator len {} pool {} free {}",
+              mmap.len(),
+              mem::size_of::<Vec<Arc<Block>>>() * count,
+              mem::size_of::<Vec<Arc<Block>>>() * count);
+
+        info!("reserving {} blocks for compaction, {} for logs",
                RESERVE_BLOCKS, general_blks);
 
         for b in 0..count {
@@ -1025,6 +1030,11 @@ impl SegmentManager {
         let num = 2 * len / segsz;
         let mut segments: Vec<Option<SegmentRef>>
             = Vec::with_capacity(num);
+        info!("SegmentManager {} vector len: {}",
+              sock.unwrap().0,
+              mem::size_of::<Vec<Option<SegmentRef>>>() *
+              mem::size_of::<Option<SegmentRef>>() *
+              num);
         for _ in 0..num {
             segments.push(None);
         }
@@ -1032,6 +1042,10 @@ impl SegmentManager {
         for i in 0..num {
             free_slots.push(i as u32);
         }
+        info!("SegmentManager {} free_slots len {}",
+              sock.unwrap().0,
+              mem::size_of::<SegQueue<u32>>() *
+              mem::size_of::<u32>() * num);
         SegmentManager {
             socket: sock,
             size: len,

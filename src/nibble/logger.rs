@@ -30,7 +30,7 @@ impl log::Log for SimpleLogger {
                 None => loc.file(),
                 Some(idx) => loc.file().split_at(idx+1).1,
             };
-            println!("<{} {}-{}> {}/{}:{} [{}] {}",
+            println!("<{} {}-{}> {}/{}:{:4} [{}] {}",
                      clock::now(), tid, tname, module, file,
                      loc.line(), record.level(), record.args());
         }

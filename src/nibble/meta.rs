@@ -69,6 +69,10 @@ impl SegmentInfoTable {
         for _ in 0..slots {
             v.push(SegmentInfo::new());
         }
+        info!("SegmentInfoTable len {}",
+              mem::size_of::<Vec<SegmentInfo>>() *
+              mem::size_of::<SegmentInfo>() *
+              slots);
         SegmentInfoTable {
             table: v,
             ordering: atomic::Ordering::Relaxed,

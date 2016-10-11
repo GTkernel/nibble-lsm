@@ -235,13 +235,16 @@ impl Log {
 
     pub fn new(manager: SegmentManagerRef) -> Self {
         let nheads: usize = num_log_heads();
-        info!("LOG HEADS {}", nheads);
         let seginfo = manager.seginfo();
         let mut heads: Vec<LogHeadRef>;
         heads = Vec::with_capacity(nheads);
         for _ in 0..nheads {
             heads.push(loghead_ref!(manager.clone()));
         }
+        info!("new, heads {} len {}",
+              nheads,
+              size_of::<Vec<LogHeadRef>>() *
+              size_of::<LogHeadRef>() * nheads);
         Log {
             heads: heads,
             manager: manager.clone(),

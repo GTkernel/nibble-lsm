@@ -291,11 +291,12 @@ impl HashTable {
         let nbuckets =
             (entries / ENTRIES_PER_BUCKET).next_power_of_two();
         let len = nbuckets * mem::size_of::<Bucket>();
-        info!("new table on sock {} nbucket {}", sock, nbuckets);
         let align: usize = 1usize<<21;
         let mmap = MemMap::numa(TABLE_VLEN,
                                 NodeId(sock), align, false);
         let p = Pointer(mmap.addr() as *const Bucket);
+        info!("new, sock {} nbucket {} current len {}",
+              sock, nbuckets, len);
 
         let sl: &mut [Bucket] = unsafe {
             slice::from_raw_parts_mut(p.0 as *mut Bucket,nbuckets)

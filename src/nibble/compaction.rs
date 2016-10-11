@@ -288,6 +288,7 @@ struct Worker {
 
 impl Worker {
 
+    // TODO allocate the candidates vector on a specific socket
     pub fn new(role: &WorkerRole, compactor: &Compactor) -> Self {
         let reclaim = match *role {
             WorkerRole::Reclaim => Some(Vec::new()),
@@ -295,9 +296,15 @@ impl Worker {
         };
         let size = compactor.manager.len();
         let nseg = compactor.manager.get_nseg();
+        let ncand = 1usize << 15;
+        info!("size of candidate {}",
+              mem::size_of::<Candidate>());
+        info!("new, candidates len {}",
+              mem::size_of::<pl::Mutex<Vec<Candidate>>>() *
+              mem::size_of::<Candidate>() * ncand);
         Worker {
             role: *role,
-            candidates: pl::Mutex::new(Vec::with_capacity(512)),
+            candidates: pl::Mutex::new(Vec::with_capacity(ncand)),
             manager: compactor.manager.clone(),
             mgrsize: size,
             index: compactor.index.clone(),

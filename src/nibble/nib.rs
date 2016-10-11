@@ -79,15 +79,11 @@ impl Nibble {
     fn __new(capacity: usize, ht_nitems: usize) -> Self {
         let nnodes = numa::NODE_MAP.sockets();
         let mincap = min_log_size!(nnodes);
+        let persock = capacity/nnodes;
+
         assert!(capacity >= mincap,
                 "nibble requires more memory: {} GiB",
                 mincap / (1usize<<30));
-        info!("sockets:  {}", nnodes);
-        let persock = capacity/nnodes;
-        info!("capacity: {:.2} GiB",
-              (capacity as f64)/(2f64.powi(30)));
-        info!("socket:   {:.2} GiB",
-              (persock as f64)/(2f64.powi(30)));
 
         //let ntables = numa::NODE_MAP.ncpus();
         //let ntables: usize = 64;
@@ -98,14 +94,19 @@ impl Nibble {
 
         assert!(ntables.is_power_of_two());
 
-        info!("     nitems:     {}", nitems);
-        info!("     Tables:     {}", ntables);
-        info!("        per:     {}", n_per);
+        info!("    sockets:     {}", nnodes);
+        info!("   capacity:     {:.2} GiB",
+              (capacity as f64)/(2f64.powi(30)));
+        info!("   cap/sock:     {:.2} GiB",
+              (persock as f64)/(2f64.powi(30)));
 
-        info!("      segsz:     {}", SEGMENT_SIZE);
-        info!("      blksz:     {}", BLOCK_SIZE);
-        info!("   blks/seg:     {}", BLOCKS_PER_SEG);
-        info!("  nblks var:     {}", ALLOC_NBLKS_VAR);
+        info!("    index n:     {}", nitems);
+        info!("    #tables:     {}", ntables);
+
+        info!("   seg size:     {}", SEGMENT_SIZE);
+        info!(" block size:     {}", BLOCK_SIZE);
+        info!("  block/seg:     {}", BLOCKS_PER_SEG);
+        info!("   #blk var:     {}", ALLOC_NBLKS_VAR);
 
         let index = Arc::new(Index::new(ntables, n_per));
 
