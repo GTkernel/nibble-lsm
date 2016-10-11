@@ -463,7 +463,7 @@ impl Worker {
         {
             let t = clock::now();
             quicksort::quicksort_by(candidates.as_mut_slice(), predicate);
-            info!("quicksort {:.2} ms", clock::to_msec(clock::now()-t));
+            trace!("quicksort {:.2} ms", clock::to_msec(clock::now()-t));
         }
         self.__dump_candidates(&candidates);
 
@@ -723,7 +723,7 @@ impl Worker {
             }
             if retries > 0 {
                 let dur = start.elapsed();
-                warn!("waited {} us for seg allocation",
+                debug!("waited {} us for seg allocation",
                       (dur.as_secs() as u32) * 1000000u32 +
                       dur.subsec_nanos() / 1000u32);
             }
