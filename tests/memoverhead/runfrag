@@ -13,6 +13,9 @@ CAP = 2**37
 # heaps the bottleneck)
 M = CAP
 
+# set the verbosity level
+os.environ['NIBDEBUG'] = str(3)
+
 for i in range(len(first)):
     cmd = [ BIN, str(first[i]), str(second[i]), str(M), str(CAP) ]
     print(cmd)
