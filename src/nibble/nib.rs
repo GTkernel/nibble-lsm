@@ -214,15 +214,15 @@ impl Nibble {
             Ok(v) => va = v,
         }
         let ientry = merge(socket as u16, va as u64);
-        //trace!("key {} va 0x{:x} ientry 0x{:x}",
-               //obj.getkey(), va, ientry);
+        trace!("key {} va 0x{:x} ientry 0x{:x}",
+               obj.getkey(), va, ientry);
 
         // 2. add to index; if we are updating it, remove live state from
         // prior segment. running a lambda while we hold the item's
         // lock avoids race conditions with the cleaner
 
         let key = obj.getkey();
-        let ok: bool = self.index.update_map(key, va as u64, |old| {
+        let ok: bool = self.index.update_map(key, ientry as u64, |old| {
             // decrement live size of segment if we overwrite object
             // old=None if this was an insertion
             if let Some(ientry) = old {
