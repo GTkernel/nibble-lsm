@@ -197,7 +197,7 @@ impl Nibble {
             PutPolicy::Interleave =>
                 (unsafe { rdrand() } % self.nnodes) as usize,
         };
-        //trace!("PUT key {} socket {:?}", obj.getkey(),socket);
+        trace!("PUT key {} socket {:?}", obj.getkey(),socket);
 
         if socket >= self.nodes.len() {
             return Err(ErrorCode::InvalidSocket);
@@ -286,8 +286,8 @@ impl Nibble {
         };
         let (socket,va) = extract(ientry);
 
-        //trace!("GET key {:x}: ientry {:x} -> socket 0x{:x} va 0x{:x}",
-               //key, ientry, socket, va);
+        trace!("GET key 0x{:x} ientry 0x{:x} -> socket 0x{:x} va 0x{:x}",
+               key, ientry, socket, va);
 
         // 2. ask Log to give us the object
         let buf = self.nodes[socket as usize]
