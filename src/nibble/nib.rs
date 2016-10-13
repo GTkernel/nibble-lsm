@@ -53,6 +53,7 @@ pub enum PutPolicy {
 
 impl Nibble {
 
+    #[cfg(IGNORE)]
     pub fn dump_segments(&self, node: usize) {
         println!("NIBBLE: DUMPING SEGMENT INFO NODE {}", node);
         self.nodes[node].manager.dump_segments();
@@ -171,11 +172,9 @@ impl Nibble {
     }
 
     pub fn enable_compaction(&self, node: NodeId) {
-        //for _ in 0..4 {
-            let mut comp = self.nodes[node.0].compactor.lock();
-            //comp.spawn(WorkerRole::Reclaim);
-            comp.spawn(WorkerRole::Compact);
-        //}
+        info!("Enabling compaction on node {}", node.0);
+        let mut comp = self.nodes[node.0].compactor.lock();
+        comp.spawn(WorkerRole::Compact);
     }
 
     #[allow(unused_variables)]

@@ -57,6 +57,8 @@ use index::*;
 use thelog::*;
 use clock;
 use meta;
+use sched;
+use numa;
 
 use std::collections::VecDeque;
 use std::mem;
@@ -76,7 +78,10 @@ use parking_lot as pl;
 
 /// Ratio of available memory to total capacity, below which
 /// compaction threads will aggressively try to compress memory.
-pub const RATIO: f64 = 0.2_f64;
+pub const RATIO: f64 = 0.20_f64;
+
+/// Number of worker threads per instance.
+pub const WTHREADS: usize = 6_usize;
 
 //==----------------------------------------------------==//
 //      Compactor types, macros
@@ -144,16 +149,19 @@ impl Compactor {
     // segment then added back to the log.
 
     pub fn spawn(&mut self, role: WorkerRole) {
-        let w = Worker::new(&role, self);
-        let state = Arc::new(pl::RwLock::new(w));
-        let give = state.clone();
-        let name = format!("compaction::worker::{:?}", role);
-        let handle = match thread::Builder::new()
+        info!("Spawning {} compaction threads", WTHREADS);
+        for i in 0..WTHREADS {
+            let w = Worker::new(&role, i, self);
+            let state = Arc::new(pl::RwLock::new(w));
+            let give = state.clone();
+            let name = format!("compaction::worker::{:?}", role);
+            let handle = match thread::Builder::new()
                 .name(name).spawn( move || worker(give) ) {
-            Ok(handle) => handle,
-            Err(e) => panic!("spawning thread: {:?}: {:?}",role,e),
-        };
-        self.workers.push( (state, handle) );
+                    Ok(handle) => handle,
+                    Err(e) => panic!("spawning thread: {:?}: {:?}",role,e),
+                };
+            self.workers.push( (state, handle) );
+        }
     }
 
 }
@@ -236,7 +244,19 @@ fn __compact(state: &Arc<pl::RwLock<Worker>>) {
 
 fn worker(state: Arc<pl::RwLock<Worker>>) {
     info!("thread awake");
-    let role = { state.read().role };
+    let role;
+    {
+        let s = state.read();
+        role = s.role;
+        let id = s.id;
+        let sock = s.manager.socket().unwrap().0;
+        let cpu = sock * numa::NODE_MAP.cpus_in(numa::NodeId(0)) + id;
+        info!("Pinning worker {} to cpu {} on sock {}",
+              id, cpu, sock);
+        unsafe {
+            sched::pin_cpu(cpu);
+        }
+    }
     loop {
         match role {
             WorkerRole::Reclaim => __reclaim(&state),
@@ -274,6 +294,8 @@ type Candidate = (SegCache, SegmentRef);
 struct Worker {
     role: WorkerRole,
 
+    id: usize,
+
     /// Set of (immutable) candidate segments to clean. We cache the
     /// slot for each, as it otherwise requires locking the seg each
     /// time.
@@ -297,7 +319,9 @@ struct Worker {
 impl Worker {
 
     // TODO allocate the candidates vector on a specific socket
-    pub fn new(role: &WorkerRole, compactor: &Compactor) -> Self {
+    pub fn new(role: &WorkerRole, id: usize, compactor: &Compactor)
+        -> Self {
+
         let reclaim = match *role {
             WorkerRole::Reclaim => Some(Vec::new()),
             _ => None,
@@ -305,13 +329,14 @@ impl Worker {
         let size = compactor.manager.len();
         let nseg = compactor.manager.get_nseg();
         let ncand = 1usize << 15;
-        info!("size of candidate {}",
+        info!("size of struct candidate {}",
               mem::size_of::<Candidate>());
         info!("new, candidates len {}",
               mem::size_of::<pl::Mutex<Vec<Candidate>>>() *
               mem::size_of::<Candidate>() * ncand);
         Worker {
             role: *role,
+            id: id,
             candidates: pl::Mutex::new(Vec::with_capacity(ncand)),
             manager: compactor.manager.clone(),
             mgrsize: size,
@@ -830,7 +855,7 @@ impl Worker {
     /// move to our candidates list. Returns number of segments moved.
     pub fn check_new(&mut self) -> usize {
         let mut new: Vec<SegmentRef> = Vec::with_capacity(32);
-        let n = self.manager.grab_closed(&mut new);
+        let n = self.manager.grab_closed(self.id, &mut new);
         for mut s in new {
             self.add_candidate(&mut s);
         }

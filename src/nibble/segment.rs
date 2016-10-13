@@ -6,18 +6,20 @@ use memory::*;
 use meta::*;
 use meta;
 use numa::{NodeId};
+use compaction;
 
 use std::cmp;
 use std::mem;
 use std::mem::size_of;
 use std::ptr;
 use std::sync::{Arc};
-use std::sync::atomic::{self, Ordering};
+use std::sync::atomic::{self, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 use std::intrinsics;
 use std::fmt;
 use std::slice;
+use std::collections::VecDeque;
 
 use crossbeam::sync::SegQueue;
 use parking_lot as pl;
@@ -1006,17 +1008,6 @@ impl<'a> Iterator for SegmentIter<'a> {
 //      Segment manager
 //==----------------------------------------------------==//
 
-/// Any members which require locking to access (they can be mutated).
-#[allow(dead_code)]
-struct SegmentMgrInner {
-    /// The set of Segments. Any entry which is None is available to
-    /// allocate from.
-    segments: Vec<Option<SegmentRef>>,
-    /// Segments the LogHead recently closed. Compaction code will
-    /// drain this periodically.
-    closed: Vec<SegmentRef>,
-}
-
 /// Per-socket manager of segments and blocks.
 #[allow(dead_code)]
 pub struct SegmentManager {
@@ -1031,14 +1022,21 @@ pub struct SegmentManager {
     allocator: BlockAllocator,
     /// Segment slots that are unused.
     free_slots: Arc<SegQueue<u32>>,
-    /// Variables which change over the lifetime of this object and
-    /// are not atomic-capable.
-    inner: pl::RwLock<SegmentMgrInner>,
+    /// The set of Segments. Any entry which is None is available to
+    /// allocate from.
+    segments: pl::RwLock<Vec<Option<SegmentRef>>>,
+    /// Vec to sort newly closed segments by compaction thread. Inner
+    /// VecDeque is the set of segments for the associated thread.
+    closed:   pl::RwLock<Vec<VecDeque<SegmentRef>>>,
+    /// Used to distribute newly closed segments among the closed
+    /// queues.
+    next:     AtomicUsize,
 }
 
 // TODO reclaim segments function and thread
 impl SegmentManager {
 
+    #[cfg(IGNORE)]
     pub fn dump_segments(&self) {
         let inner = self.inner.read();
         println!("SEGMGR: there are {} segments",
@@ -1077,6 +1075,11 @@ impl SegmentManager {
         for i in 0..num {
             free_slots.push(i as u32);
         }
+        let mut closed: Vec<VecDeque<SegmentRef>> =
+            Vec::with_capacity(compaction::WTHREADS);
+        for _ in 0..compaction::WTHREADS {
+            closed.push(VecDeque::with_capacity(32));
+        }
         info!("SegmentManager {} free_slots len {}",
               sock.unwrap().0,
               mem::size_of::<SegQueue<u32>>() *
@@ -1088,10 +1091,9 @@ impl SegmentManager {
             allocator: b,
             seginfo: Arc::new(SegmentInfoTable::new(num)),
             free_slots: Arc::new(free_slots),
-            inner: pl::RwLock::new( SegmentMgrInner {
-                segments: segments,
-                closed: Vec::new()
-            }),
+            segments: pl::RwLock::new(segments),
+            closed: pl::RwLock::new(closed),
+            next: AtomicUsize::new(0),
         }
     }
 
@@ -1106,7 +1108,7 @@ impl SegmentManager {
     }
 
     pub fn get_nseg(&self) -> usize {
-        self.inner.read().segments.len()
+        self.segments.read().len()
     }
 
     /// Make a Copy of the Block containing this VA (not cloning the
@@ -1124,8 +1126,7 @@ impl SegmentManager {
             None => return None,
             Some(s) => slot = s as usize,
         }
-        debug_assert!(self.inner.read()
-                .segments[slot].is_none());
+        debug_assert!(self.segments.read()[slot].is_none());
 
         let list = uslice::make(&blocks);
         for t in (0..).zip(&blocks) {
@@ -1146,10 +1147,10 @@ impl SegmentManager {
         self.seginfo.reset_epoch(slot);
 
         // store it into the global array
-        let mut inner = self.inner.write();
-        inner.segments[slot] = Some(seg);
+        let mut segments = self.segments.write();
+        segments[slot] = Some(seg);
 
-        inner.segments[slot].clone()
+        segments[slot].clone()
     }
 
     /// Allocate a segment with a specific number of blocks. Used by
@@ -1197,7 +1198,7 @@ impl SegmentManager {
         // and extract slot#
         let slot = {
             let seg = segref.read(); // FIXME don't lock
-            self.inner.write().segments[seg.slot] = None;
+            self.segments.write()[seg.slot] = None;
             seg.slot
         };
 
@@ -1254,16 +1255,23 @@ impl SegmentManager {
     /// threads will periodically query this queue for new segments to
     /// add to its candidate list.
     pub fn add_closed(&self, seg: &SegmentRef) {
-        let mut inner = self.inner.write();
-        inner.closed.push(seg.clone());
+        let mut closed = self.closed.write();
+        let n = self.next.load(Ordering::Relaxed);
+        self.next.store((n+1) % compaction::WTHREADS,
+                        Ordering::Relaxed);
+        closed[n].push_back(seg.clone());
     }
 
     // TODO if using SegQueue, perhaps add max to pop off
-    pub fn grab_closed(&self,
-                       to: &mut Vec<SegmentRef>) -> usize {
-        let mut inner = self.inner.write();
-        let n: usize = inner.closed.len();
-        to.append(&mut inner.closed);
+    pub fn grab_closed(&self, i: usize, to: &mut Vec<SegmentRef>)
+        -> usize {
+
+        let mut closed = self.closed.write();
+        let n = closed[i].len();
+        trace!("grabbing {} candidates for {}", n, i);
+        for s in closed[i].drain(..) {
+            to.push(s);
+        }
         n
     }
 
