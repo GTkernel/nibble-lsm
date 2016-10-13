@@ -81,7 +81,7 @@ use parking_lot as pl;
 pub const RATIO: f64 = 0.20_f64;
 
 /// Number of worker threads per instance.
-pub const WTHREADS: usize = 6_usize;
+pub const WTHREADS: usize = 8_usize;
 
 //==----------------------------------------------------==//
 //      Compactor types, macros
