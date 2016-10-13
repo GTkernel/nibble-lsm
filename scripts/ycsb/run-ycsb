@@ -1,4 +1,4 @@
-#! /usr/bin/env bash
+#! /usr/bin/env zsh
 set -e
 set -u
 
@@ -43,12 +43,15 @@ FEATURES=""
 # and we can also do uniform for each of the above
 
 size=1000
-nkeys=$((2**26))
+#nkeys=$((2**26))
 #size=100
 #nkeys=$((2**30))
 
 NSOCKETS=16
 NCPU=15
+
+# How long test core should run for.
+SEC=60
 
 ######################################################################
 
@@ -58,64 +61,103 @@ capacity=$MEMSIZE
 
 ## # these will be modified
 readpct=0
-#for dist in uniform zipfian; do
-for dist in zipfian; do
-    #for T in C B; do
-    for T in B; do
-        [[ $T == "C" ]] && readpct=100
-        [[ $T == "B" ]] && readpct=95
-        echo ''; echo ''
-        echo "# $T $dist"
 
-        # MICA environment vars. keep regardless of which KVS we use.
-        # MICA only supports one object size...
-        export MICA_VAL_LEN=$size
-        # Used for creating the hash table.. make large enough
-        export MICA_ITEMS=$((nkeys*2))
-        export MICA_CAPACITY=$capacity
+read_mostly() {
+    #for dist in uniform zipfian; do
+    for dist in uniform; do
+        for T in C B; do
 
-        cargo run --features "$FEATURES" --release --bin ycsb -- \
-            --dist $dist \
-            --readpct $readpct \
-            --records $nkeys \
-            --capacity $capacity \
-            --ops 0 \
-            --threads 1 \
-            --time 20 \
-            --cpu incr \
-            --size $size \
-            --put local
-        echo ''; echo ''
+            for fill in 1 10 20 30 40 50 60 70 80 90; do
+
+                echo ''; echo ''
+                echo "Fill capacity $fill %"
+
+                # header + key + value
+                objsize=$(( 4 + 8 + $size ))
+                maxkeys=$(( $capacity / $objsize ))
+                nkeys=$(( ($maxkeys * $fill) / 100 ))
+                echo "objsize $objsize maxkeys $maxkeys nkeys $nkeys"
+
+                [[ $T == "C" ]] && readpct=100
+                [[ $T == "B" ]] && readpct=95
+                echo ''; echo ''
+                echo "# $T $dist"
+
+                # MICA environment vars. keep regardless of which KVS we use.
+                # MICA only supports one object size...
+                export MICA_VAL_LEN=$size
+                # Used for creating the hash table.. make large enough
+                export MICA_ITEMS=$((nkeys*2))
+                export MICA_CAPACITY=$capacity
+
+                cargo run --features "$FEATURES" --release --bin ycsb -- \
+                    --dist $dist \
+                    --readpct $readpct \
+                    --records $nkeys \
+                    --capacity $capacity \
+                    --ops 0 \
+                    --threads 1 \
+                    --time $SEC \
+                    --cpu incr \
+                    --size $size \
+                    --put local \
+                    --compaction
+                echo ''; echo ''
+
+            done
+
+        done
     done
-done
+}
 
-exit 0
+write_mostly() {
+    for T in A W; do
+        #for dist in uniform zipfian; do
+        for dist in uniform; do
 
-# XXX do write-heavy workloads last.. in case they crash
-for T in A W; do
-    for dist in uniform zipfian; do
-        [[ $T == "A" ]] && readpct=50
-        [[ $T == "W" ]] && readpct=0
-        echo ''; echo ''
-        echo "# $T $dist"
-        # MICA environment vars. keep regardless of which KVS we use.
-        # MICA only supports one object size...
-        export MICA_VAL_LEN=$size
-        # Used for creating the hash table.. make large enough
-        export MICA_ITEMS=$((nkeys*2))
-        export MICA_CAPACITY=$capacity
+            for fill in 1 10 20 30 40 50 60 70 80 90; do
 
-        cargo run --features "$FEATURES" --release --bin ycsb -- \
-            --dist $dist \
-            --readpct $readpct \
-            --records $nkeys \
-            --capacity $capacity \
-            --ops 0 \
-            --threads 1 \
-            --time 20 \
-            --cpu incr \
-            --size $size \
-            --put local
+                echo ''; echo ''
+                echo "Fill capacity $fill %"
+
+                # header + key + value
+                objsize=$(( 4 + 8 + $size ))
+                maxkeys=$(( $capacity / $objsize ))
+                nkeys=$(( ($maxkeys * $fill) / 100 ))
+                echo "objsize $objsize maxkeys $maxkeys nkeys $nkeys"
+
+
+                [[ $T == "A" ]] && readpct=50
+                [[ $T == "W" ]] && readpct=0
+
+
+                echo ''; echo ''
+                echo "# $T $dist"
+
+                # MICA environment vars. keep regardless of which KVS we use.
+                # MICA only supports one object size...
+                export MICA_VAL_LEN=$size
+                # Used for creating the hash table.. make large enough
+                export MICA_ITEMS=$((nkeys*2))
+                export MICA_CAPACITY=$capacity
+
+                cargo run --features "$FEATURES" --release --bin ycsb -- \
+                    --dist $dist \
+                    --readpct $readpct \
+                    --records $nkeys \
+                    --capacity $capacity \
+                    --ops 0 \
+                    --threads 1 \
+                    --time $SEC \
+                    --cpu incr \
+                    --size $size \
+                    --put local \
+                    --compaction
+            done
+        done
     done
-done
+}
+
+read_mostly
+write_mostly
 

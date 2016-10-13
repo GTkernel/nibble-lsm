@@ -282,9 +282,11 @@ impl Uniform {
 
     pub fn new(n: u32) -> Self {
         let mut v: Vec<u32> = Vec::with_capacity(n as usize);
+        info!("Generating {} keys...", n);
         for x in 0..n {
             v.push(x as u32);
         }
+        info!("Shuffling {} keys...", n);
         //let mut rng = rand::thread_rng();
         //rng.shuffle(&mut v);
         common::shuffle(&mut v);
@@ -431,7 +433,9 @@ impl WorkloadGenerator {
 
         //threadcount = vec![self.config.threads];
         // specific number of threads only
-        //threadcount = vec![6];
+        //threadcount = vec![1];
+        // max number of threads
+        //threadcount = vec![cpus_pernode*sockets];
         // power of 2   1, 2, 4, 8, 16, 32, 64, 128, 256
         //threadcount = (0usize..9).map(|e|1usize<<e).collect();
         // incr of 4    1, 4, 8, 12, 16, ...
@@ -462,6 +466,7 @@ impl WorkloadGenerator {
         // forcing (hoping for) local page allocation
         let idx = Arc::new(AtomicUsize::new(0));
 
+        let now = Instant::now();
         info!("initializing all key generators...");
         crossbeam::scope(|scope| {
 
@@ -504,6 +509,8 @@ impl WorkloadGenerator {
                 g.join();
             }
         }); // whew! done
+        let sec = now.elapsed().as_secs();
+        info!("key gen took {} seconds", sec);
 
         // Run the experiment multiple times using different sets of
         // threads
@@ -567,8 +574,7 @@ impl WorkloadGenerator {
                         let v = Pointer(value as *const u8);
 
                         let sock = numa::NODE_MAP.sock_of(cpu);
-                        info!("thread on cpu {} sock {:?} executing now...",
-                              cpu, sock);
+                        info!("thread on cpu {} sock {:?} INIT", cpu, sock);
 
                         // use your own generator for key accesses
                         let keygen: &mut Box<DistGenerator> = unsafe {
@@ -584,6 +590,7 @@ impl WorkloadGenerator {
                         // wait for all other threads to spawn
                         // after this, accum is zero
                         while accum.load(Ordering::Relaxed) > 0 { ; }
+                        info!("thread on cpu {} sock {:?} START", cpu, sock);
 
                         // socket to apply PUT
                         let mut sockn = 0_usize;
