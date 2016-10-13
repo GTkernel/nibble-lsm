@@ -21,6 +21,7 @@ use log::LogLevel;
 use nibble::clock;
 use nibble::common::{self,Pointer,ErrorCode,rdrand,rdrandq};
 use nibble::meta;
+use nibble::hashtable::{HashTable};
 use nibble::logger;
 use nibble::memory;
 use nibble::nib::{self,Nibble};
@@ -30,6 +31,7 @@ use nibble::segment::{ObjDesc,SEGMENT_SIZE};
 use rand::Rng;
 use std::collections::VecDeque;
 use std::mem;
+use std::hash;
 use std::sync::Arc;
 use std::sync::atomic::*;
 use std::thread::{self,JoinHandle};
@@ -49,6 +51,16 @@ fn arg_as_num<T: num::Integer>(args: &clap::ArgMatches,
 
 fn main() {
     logger::enable();
+
+    let mut n = 304250263527209_u64;
+    for i in 0..(1usize<<20) {
+        n = common::fnv1a(n);
+        //println!("0x{:016x}", b);
+        let h = HashTable::make_hash(i as u64);
+        let b = h & (1024 - 1);
+        println!("{}", b);
+    }
+    return;
 
     let matches = App::new("null test to create a Nibble")
         .arg(Arg::with_name("capacity")
