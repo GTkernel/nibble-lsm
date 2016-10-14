@@ -6,9 +6,10 @@ use memory::*;
 use clock;
 use numa::{self,NodeId};
 
-use std::mem::size_of;
+use std::mem::{self,size_of};
 use std::sync::Arc;
 use std::ptr;
+use std::intrinsics;
 
 use parking_lot as pl;
 
@@ -296,6 +297,36 @@ impl Log {
     /// Pull out the value for an entry within the log (not the entire
     /// object).
     pub fn get_entry(&self, va: usize) -> Buffer {
+        // If object lands squarely within a single block, just memcpy
+        // that shit out. else, figure out the segment and thus the
+        // block list, and do a slowpath extraction
+
+        // let head_len = mem::size_of::<EntryHeader>();
+        // let key_len = mem::size_of::<KeyType>();
+        // let block_addr: usize = va & !BLOCK_OFF_MASK;
+        // let remain: usize = BLOCK_SIZE - (va - block_addr);
+
+        // if likely!(remain > (head_len + key_len)) {
+        //     let entry: &EntryHeader = unsafe {
+        //         &* (va as *const usize as *const EntryHeader)
+        //     };
+        //     let size: usize = entry.len_with_header();
+        //     if likely!(size <= remain) {
+        //         let value_len = entry.datalen as usize;
+        //         let mut buf = Buffer::new(value_len);
+        //         let valuep = (va + head_len + key_len)
+        //             as *const usize as *const u8;
+        //         unsafe {
+        //             ptr::copy_nonoverlapping(valuep,
+        //                 buf.as_mut_ptr(), value_len);
+        //         }
+        //         return buf;
+        //     }
+        // }
+
+        // slow path.. find the segment so we can locate the next
+        // block and pull it out in steps
+
         let block: Block = self.manager.block_of(va);
         debug_assert_eq!(block.list().ptr().is_null(), false);
         let usl = block.list();
