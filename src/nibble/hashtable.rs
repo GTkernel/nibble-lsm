@@ -10,14 +10,14 @@ use std::slice;
 use std::fmt;
 use std::hash;
 use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering, AtomicUsize};
 use std::intrinsics;
 
 use num::Integer;
 
 use memory::*;
 use common::{Pointer, fnv1a, is_even, is_odd, atomic_add, atomic_cas};
-use common::{prefetchw};
+use common::{prefetch,prefetchw};
 use logger::*;
 use numa::{self,NodeId};
 use clock;
@@ -283,6 +283,8 @@ pub struct HashTable {
     nbuckets: usize,
     /// Bytes used by nbuckets (must be <= MemMap.len)
     len: usize,
+    /// Count of times it has resized.
+    resized: AtomicUsize
 }
 
 impl HashTable {
@@ -319,6 +321,7 @@ impl HashTable {
 
             nbuckets: nbuckets,
             len: len,
+            resized: AtomicUsize::new(0)
         }
     }
 
@@ -514,6 +517,7 @@ impl HashTable {
                     if must_retry {
                         continue 'retry;
                     }
+                    //prefetch(*value as *const u64 as *const u8);
                     return true;
                 }
             }
@@ -795,6 +799,12 @@ impl HashTable {
         // and unlock the bucket, the failed threads will resume.
         if !self.lock_for_resize() {
             return false;
+        }
+
+        let prior = self.resized.fetch_add(1, Ordering::Relaxed);
+        if prior >= 4 {
+            warn!("Table {:p} resized for {}th time",
+                  self as *const Self as *const u8, prior + 1);
         }
 
         // grow by this amount

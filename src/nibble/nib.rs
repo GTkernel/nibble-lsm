@@ -282,6 +282,8 @@ impl Nibble {
         };
         let (socket,va) = extract(ientry);
 
+        //prefetch(va as *const usize as *const u8);
+        //prefetchw(buf.as_ptr());
 
         //trace!("GET key 0x{:x} ientry 0x{:x} -> socket 0x{:x} va 0x{:x}",
                //key, ientry, socket, va);
