@@ -2,8 +2,15 @@
 #![allow(unused_variables)]
 #![allow(unused_mut)]
 #![allow(dead_code)]
+#![feature(core_intrinsics)]
 
 /// Code ported from RAMCloud src/ClusterPerf.cc::ZipfianGenerator
+
+// NOTE XXX
+// Due to rounding errors when we insert keys in parallel during the
+// setup phase, some keys may not actually exist. It is best to
+// double check this happens infrequently; if it is infrequent, we can
+// ignore them.
 
 extern crate rand; // import before nibble
 #[macro_use]
@@ -30,6 +37,7 @@ use nibble::segment::{ObjDesc,SEGMENT_SIZE};
 use rand::Rng;
 use std::collections::VecDeque;
 use std::mem;
+use std::intrinsics;
 use std::sync::Arc;
 use std::sync::atomic::*;
 use std::thread::{self,JoinHandle};
@@ -40,6 +48,9 @@ use std::ptr;
 //  Build-based functions
 //  Compile against Nibble, or exported functions.
 //==----------------------------------------------------------------==
+
+/// Used to create the stack-based buffers for holding GET output.
+pub const MAX_KEYSIZE: usize = 1usize << 10;
 
 //
 // Nibble redirection
@@ -72,10 +83,14 @@ fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
     let nibble: &Nibble = unsafe { &*NIBBLE.0 };
     let obj = ObjDesc::new(key, value, len);
     let nibnode = nib::PutPolicy::Specific(sock);
-    while let Err(e) = nibble.put_where(&obj, nibnode) {
-        match e {
-            ErrorCode::OutOfMemory => {},
-            _ => panic!("Error: {:?}", e),
+    let err = nibble.put_where(&obj, nibnode);
+    if unsafe { intrinsics::unlikely(err.is_err()) } {
+        match err {
+            Err(ErrorCode::OutOfMemory) => {},
+            _ => {
+                println!("Error: {:?}", err.unwrap());
+                unsafe { intrinsics::abort(); }
+            },
         }
     }
 }
@@ -83,11 +98,16 @@ fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
 #[cfg(not(feature = "extern_ycsb"))]
 fn get_object(key: u64) {
     let nibble: &Nibble = unsafe { &*NIBBLE.0 };
-    let mut buf: [u8;1024] = 
+    let mut buf: [u8;MAX_KEYSIZE] =
         unsafe { mem::uninitialized() };
-    if let Err(e) = nibble.get_object(key, &mut buf) {
-        warn!("{:?}", e);
-    }
+    let _ = nibble.get_object(key, &mut buf);
+    // if let Err(e) = nibble.get_object(key, &mut buf) {
+    //     warn!("{:?} {:x}", e, key);
+    //     unsafe { intrinsics::abort(); }
+    // }
+    //unsafe {
+        //let v: u64 = ptr::read_volatile(buf.as_ptr() as *const u64);
+    //}
 }
 
 //
@@ -170,9 +190,14 @@ fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
         // mica-kvs.git/src/table.h enum put_reason
         match ret {
             50 => return,
-            111 => panic!("MICA failed to insert in table"),
-            112 => panic!("MICA failed to insert in heap"),
-            _ => panic!("MICA failed with unknown: {}", ret),
+            r => {
+                match r {
+                    111 => println!("MICA failed to insert in table"),
+                    112 => println!("MICA failed to insert in heap"),
+                    _ => prinltn!("MICA failed with unknown: {}", ret),
+                }
+                unsafe { intrinsics::abort(); }
+            },
         }
     }
 }
@@ -184,6 +209,7 @@ fn get_object(key: u64) {
         trace!("GET {:x}", key);
         if !extern_kvs_get(key) {
             println!("GET failed on key 0x{:x}", key);
+            unsafe { intrinsics::abort(); }
         }
         //assert!( extern_kvs_get(key),
             //"GET failed on key 0x{:x}", key);
@@ -333,15 +359,19 @@ struct Uniform {
 
 impl Uniform {
 
+    /// don't pre-compute values; use rdrand
+    pub fn new(n: u32) -> Self {
+        let mut v = vec![];
+        Uniform { n: n, arr: v, next: 0 }
+    }
+
+    /// use pre-computed array of values
+    #[cfg(IGNORE)]
     pub fn new(n: u32) -> Self {
         let mut v: Vec<u32> = Vec::with_capacity(n as usize);
-        //info!("Generating {} keys...", n);
         for x in 0..n {
             v.push(x as u32);
         }
-        //info!("Shuffling {} keys...", n);
-        //let mut rng = rand::thread_rng();
-        //rng.shuffle(&mut v);
         common::shuffle(&mut v);
         Uniform { n: n, arr: v, next: 0 }
     }
@@ -349,6 +379,14 @@ impl Uniform {
 
 impl DistGenerator for Uniform {
 
+    /// don't pre-compute values; use rdrand
+    #[inline(always)]
+    fn next(&mut self) -> u32 {
+        (unsafe { rdrand() } % (self.n+1)) as u32
+    }
+
+    /// use pre-computed array of values
+    #[cfg(IGNORE)]
     #[inline(always)]
     fn next(&mut self) -> u32 {
         self.next = (self.next + 1) % self.n;
@@ -391,15 +429,13 @@ impl WorkloadGenerator {
             info!("Inserting {} objects of size {} with {} threads",
                   self.config.records, self.config.size,
                   threads_per * self.sockets);
-            let pernode = self.config.records /
-                (threads_per * self.sockets);
-            let mut handles: Vec<JoinHandle<()>> =
-                Vec::with_capacity(self.sockets);
+            let pernode = self.config.records / self.sockets;
+            let mut handles = vec![];
             for t in 0..(threads_per * self.sockets) {
                 let sock = t / threads_per;
                 let per_thread = pernode / threads_per;
                 let start_key: u64 =
-                    (sock*pernode + t*per_thread) as u64;
+                    (sock*pernode + (t%threads_per)*per_thread) as u64;
                 let end_key: u64 = start_key + (per_thread as u64);
                 handles.push( thread::spawn( move || {
                     let value = memory::allocate::<u8>(size);
