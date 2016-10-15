@@ -51,7 +51,7 @@ NSOCKETS=16
 NCPU=15
 
 # How long test core should run for.
-SEC=30
+SEC=80
 
 ######################################################################
 

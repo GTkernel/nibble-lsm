@@ -78,33 +78,39 @@ fn kvs_init(config: &Config) {
     }
 }
 
+#[inline(always)]
 #[cfg(not(feature = "extern_ycsb"))]
 fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
     let nibble: &Nibble = unsafe { &*NIBBLE.0 };
     let obj = ObjDesc::new(key, value, len);
     let nibnode = nib::PutPolicy::Specific(sock);
-    let err = nibble.put_where(&obj, nibnode);
-    if unsafe { intrinsics::unlikely(err.is_err()) } {
-        match err {
-            Err(ErrorCode::OutOfMemory) => {},
-            _ => {
-                println!("Error: {:?}", err.unwrap());
-                unsafe { intrinsics::abort(); }
-            },
+    loop {
+        let err = nibble.put_where(&obj, nibnode);
+        if err.is_err() {
+            match err {
+                Err(ErrorCode::OutOfMemory) => continue,
+                _ => {
+                    println!("Error: {:?}", err.unwrap());
+                    unsafe { intrinsics::abort(); }
+                },
+            }
+        } else {
+            break;
         }
     }
 }
 
+#[inline(always)]
 #[cfg(not(feature = "extern_ycsb"))]
 fn get_object(key: u64) {
     let nibble: &Nibble = unsafe { &*NIBBLE.0 };
     let mut buf: [u8;MAX_KEYSIZE] =
         unsafe { mem::uninitialized() };
     let _ = nibble.get_object(key, &mut buf);
-    // if let Err(e) = nibble.get_object(key, &mut buf) {
-    //     warn!("{:?} {:x}", e, key);
-    //     unsafe { intrinsics::abort(); }
-    // }
+    //if let Err(e) = nibble.get_object(key, &mut buf) {
+        //warn!("{:?} {:x}", e, key);
+        //unsafe { intrinsics::abort(); }
+    //}
     //unsafe {
         //let v: u64 = ptr::read_volatile(buf.as_ptr() as *const u64);
     //}
