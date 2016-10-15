@@ -527,7 +527,7 @@ impl WorkloadGenerator {
 
         //threadcount = vec![self.config.threads];
         // specific number of threads only
-        //threadcount = vec![1];
+        threadcount = vec![240];
         // max number of threads
         //threadcount = vec![cpus_pernode*sockets];
         // power of 2   1, 2, 4, 8, 16, 32, 64, 128, 256
@@ -538,9 +538,9 @@ impl WorkloadGenerator {
         //threadcount = (0usize..130).map(|e|if e==0 {1} else {2*e}).collect();
         // incr of 1    1, 2, 3, 4, 5, ...
         //threadcount = (1usize..261).collect();
-        // incr of 18    18,36,...
-        threadcount = (1_usize..(sockets+1))
-            .map(|e|cpus_pernode*e).collect();
+        // incr of x    where x= cpus/socket
+        //threadcount = (1_usize..(sockets+1))
+            //.map(|e|cpus_pernode*e).collect();
         info!("thread counts to use: {:?}", threadcount);
         let max_threads: usize = *threadcount.last().unwrap() as usize;
 
@@ -701,7 +701,7 @@ impl WorkloadGenerator {
 
                             let mut ops = 0usize;
                             let now = Instant::now();
-                            let iters = 1000usize;
+                            let iters = 10000usize;
 
                             while (now.elapsed().as_secs() as usize)
                                     < duration {
