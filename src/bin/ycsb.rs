@@ -58,6 +58,8 @@ fn kvs_init(config: &Config) {
         for node in 0..numa::NODE_MAP.sockets() {
             nibble.enable_compaction(NodeId(node));
         }
+    } else {
+        warn!("Compaction NOT enabled");
     }
     unsafe {
         let p = Box::into_raw(nibble);
