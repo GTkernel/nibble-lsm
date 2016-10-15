@@ -12,6 +12,19 @@ use numa::{self,NodeId};
 use common::{Pointer,errno};
 
 //==----------------------------------------------------==//
+//      Memory copying
+//==----------------------------------------------------==//
+
+#[inline(always)] pub
+unsafe fn copy(dst: *const u8, src: *const u8, len: usize) {
+    asm!("rep movsb"
+         :
+         : "{rcx}" (len), "{rdi}" (dst), "{rsi}" (src)
+         : "rcx", "rsi", "rdi"
+         : "volatile");
+}
+
+//==----------------------------------------------------==//
 //      Alignment
 //==----------------------------------------------------==//
 
