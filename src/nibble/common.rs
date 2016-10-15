@@ -52,6 +52,11 @@ fn prefetchw(cacheline: *const u8) {
     unsafe { asm!("prefetchw $0" : : "m" (cacheline) : ) }
 }
 
+#[inline(always)] pub
+fn prefetch(cacheline: *const u8) {
+    unsafe { asm!("prefetch $0" : : "m" (cacheline) : ) }
+}
+
 #[inline] pub unsafe
 fn atomic_add<T: num::Integer>(loc: *mut T, amt: T) {
     intrinsics::atomic_xadd(loc, amt);
@@ -112,12 +117,26 @@ fn shuffle<T: num::Integer>(vec: &mut Vec<T>) {
 //      Random stuff
 //==----------------------------------------------------==//
 
+// TODO use <T> for rdrand so we don't have two functions.
+
 /// Generate 32-bit random numbers via the CPU's rdrand instruction.
 #[inline(always)]
 #[allow(unused_mut)]
 pub unsafe fn rdrand() -> u32 {
     let mut r: u32;
-    asm!("rdrand $0" : "=r" (r));
+    let mut eflags: u8;
+    loop {
+        asm!("rdrand $0; lahf"
+             : "=r" (r), "={ah}"(eflags)
+             :
+             :
+             : "volatile"
+            );
+        if intrinsics::likely(1 == (eflags & 1)) {
+            break;
+        }
+        warn!("rdrand CF=0");
+    }
     r
 }
 
@@ -126,7 +145,19 @@ pub unsafe fn rdrand() -> u32 {
 #[allow(unused_mut)]
 pub unsafe fn rdrandq() -> u64 {
     let mut r: u64;
-    asm!("rdrand $0" : "=r" (r));
+    let mut eflags: u8;
+    loop {
+        asm!("rdrand $0; lahf"
+             : "=r" (r), "={ah}"(eflags)
+             :
+             :
+             : "volatile"
+            );
+        if intrinsics::likely(1 == (eflags & 1)) {
+            break;
+        }
+        warn!("rdrandq CF=0");
+    }
     r
 }
 
