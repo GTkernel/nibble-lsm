@@ -282,11 +282,11 @@ impl Uniform {
 
     pub fn new(n: u32) -> Self {
         let mut v: Vec<u32> = Vec::with_capacity(n as usize);
-        info!("Generating {} keys...", n);
+        //info!("Generating {} keys...", n);
         for x in 0..n {
             v.push(x as u32);
         }
-        info!("Shuffling {} keys...", n);
+        //info!("Shuffling {} keys...", n);
         //let mut rng = rand::thread_rng();
         //rng.shuffle(&mut v);
         common::shuffle(&mut v);
@@ -574,7 +574,8 @@ impl WorkloadGenerator {
                         let v = Pointer(value as *const u8);
 
                         let sock = numa::NODE_MAP.sock_of(cpu);
-                        info!("thread on cpu {} sock {:?} INIT", cpu, sock);
+                        debug!("thread on cpu {} sock {:?} INIT",
+                               cpu, sock);
 
                         // use your own generator for key accesses
                         let keygen: &mut Box<DistGenerator> = unsafe {
@@ -590,7 +591,8 @@ impl WorkloadGenerator {
                         // wait for all other threads to spawn
                         // after this, accum is zero
                         while accum.load(Ordering::Relaxed) > 0 { ; }
-                        info!("thread on cpu {} sock {:?} START", cpu, sock);
+                        debug!("thread on cpu {} sock {:?} START",
+                               cpu, sock);
 
                         // socket to apply PUT
                         let mut sockn = 0_usize;

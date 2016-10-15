@@ -243,7 +243,7 @@ fn __compact(state: &Arc<pl::RwLock<Worker>>) {
 }
 
 fn worker(state: Arc<pl::RwLock<Worker>>) {
-    info!("thread awake");
+    debug!("thread awake");
     let role;
     {
         let s = state.read();
@@ -251,7 +251,7 @@ fn worker(state: Arc<pl::RwLock<Worker>>) {
         let id = s.id;
         let sock = s.manager.socket().unwrap().0;
         let cpu = sock * numa::NODE_MAP.cpus_in(numa::NodeId(0)) + id;
-        info!("Pinning worker {} to cpu {} on sock {}",
+        debug!("Pinning worker {} to cpu {} on sock {}",
               id, cpu, sock);
         unsafe {
             sched::pin_cpu(cpu);
@@ -329,9 +329,7 @@ impl Worker {
         let size = compactor.manager.len();
         let nseg = compactor.manager.get_nseg();
         let ncand = 1usize << 15;
-        info!("size of struct candidate {}",
-              mem::size_of::<Candidate>());
-        info!("new, candidates len {}",
+        debug!("new, candidates len {}",
               mem::size_of::<pl::Mutex<Vec<Candidate>>>() *
               mem::size_of::<Candidate>() * ncand);
         Worker {

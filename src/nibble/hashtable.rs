@@ -295,7 +295,7 @@ impl HashTable {
         let mmap = MemMap::numa(TABLE_VLEN,
                                 NodeId(sock), align, false);
         let p = Pointer(mmap.addr() as *const Bucket);
-        info!("new, sock {} nbucket {} current len {}",
+        debug!("new, sock {} nbucket {} current len {}",
               sock, nbuckets, len);
 
         let sl: &mut [Bucket] = unsafe {
@@ -806,7 +806,7 @@ impl HashTable {
             "Resizing table cannot grow beyond mmap area");
         debug_assert!(nbuckets.is_power_of_two());
 
-        info!("table 0x{:x} resizing, factor {} nb {} len {}",
+        debug!("table 0x{:x} resizing, factor {} nb {} len {}",
               self.bucket_mmap.addr(), factor,
               nbuckets, len);
 
@@ -900,7 +900,7 @@ impl HashTable {
         debug!("unlocking {} µs", clock::to_usec(end-start));
 
         let end = clock::now();
-        info!("table 0x{:x} resized {} ms",
+        debug!("table 0x{:x} resized {} ms",
               self.bucket_mmap.addr(),
               clock::to_msec(end-begin));
 

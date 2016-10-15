@@ -114,7 +114,7 @@ impl MemMap {
             let p = 0 as *mut libc::c_void;
             libc::mmap(p, len, prot, flags, 0, 0) as usize
         };
-        info!("mmap 0x{:x}-0x{:x} {} MiB",
+        debug!("mmap 0x{:x}-0x{:x} {} MiB",
               addr, (addr+len), len>>20);
         assert!(addr != libc::MAP_FAILED as usize);
         MemMap { addr: addr, len: len }
@@ -142,7 +142,7 @@ impl MemMap {
         if addr == libc::MAP_FAILED as usize {
             panic!("mmap: {}", unsafe{errno()});
         }
-        info!("mmap    0x{:x}-0x{:x} {} MiB",
+        debug!("mmap    0x{:x}-0x{:x} {} MiB",
               addr, (addr+len), len>>20);
 
         // fix the alignment
@@ -150,7 +150,7 @@ impl MemMap {
         if addr & (align - 1)  > 0 {
             addr = (addr + align) & !(align-1);
         }
-        info!("aligned 0x{:x}-0x{:x} to {}",
+        debug!("aligned 0x{:x}-0x{:x} to {}",
               addr, (addr+len), align);
 
         // bind the memory to a socket
@@ -172,7 +172,7 @@ impl MemMap {
             let idx = AtomicUsize::new(0);
             let now = Instant::now();
             let nthreads = 8;
-            info!("Using {} threads to fault in MemMap region",
+            debug!("Using {} threads to fault in MemMap region",
                   nthreads);
             crossbeam::scope(|scope| {
                 for _ in 0..nthreads {
@@ -233,7 +233,7 @@ impl MemMap {
 impl Drop for MemMap {
 
     fn drop (&mut self) {
-        info!("unmapping 0x{:x}", self.addr);
+        debug!("unmapping 0x{:x}", self.addr);
         let p = self.addr as *mut libc::c_void;
         unsafe { libc::munmap(p, self.len); }
     }
