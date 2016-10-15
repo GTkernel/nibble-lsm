@@ -100,9 +100,9 @@ fn get_object(key: u64) {
 #[cfg(feature = "extern_ycsb")]
 extern {
     fn extern_kvs_init();
-    fn extern_kvs_put(key: u64, len: u64, buf: *const u8);
-    fn extern_kvs_del(key: u64);
-    fn extern_kvs_get(key: u64);
+    fn extern_kvs_put(key: u64, len: u64, buf: *const u8) -> i32;
+    fn extern_kvs_del(key: u64) -> bool;
+    fn extern_kvs_get(key: u64) -> bool;
 }
 
 // Link against libramcloudext.so which is built in
@@ -126,6 +126,7 @@ fn kvs_init(config: &Config) {
     }
 }
 
+#[cfg(feature = "rc")]
 #[cfg(feature = "extern_ycsb")]
 fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
     // we ignore 'sock' b/c RAMCloud is NUMA-agnostic
@@ -136,6 +137,7 @@ fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
     }
 }
 
+#[cfg(feature = "rc")]
 #[cfg(feature = "extern_ycsb")]
 fn get_object(key: u64) {
     unsafe {
@@ -144,11 +146,58 @@ fn get_object(key: u64) {
     }
 }
 
+#[cfg(feature = "rc")]
 #[cfg(feature = "extern_ycsb")]
 fn del_object(key: u64) {
     unsafe {
         trace!("DEL {:x}", key);
         extern_kvs_del(key);
+    }
+}
+
+
+#[cfg(feature = "mica")]
+#[cfg(feature = "extern_ycsb")]
+fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
+    // we ignore 'sock' b/c RAMCloud is NUMA-agnostic
+    // (MICA might, though...)
+    unsafe {
+        trace!("PUT {:x} len {}", key, len);
+        let ret: i32 = extern_kvs_put(key, len as u64, value.0);
+        // XXX make sure this matches with
+        // mica-kvs.git/src/table.h enum put_reason
+        match ret {
+            50 => return,
+            111 => panic!("MICA failed to insert in table"),
+            112 => panic!("MICA failed to insert in heap"),
+            _ => panic!("MICA failed with unknown: {}", ret),
+        }
+    }
+}
+
+#[cfg(feature = "mica")]
+#[cfg(feature = "extern_ycsb")]
+fn get_object(key: u64) {
+    unsafe {
+        trace!("GET {:x}", key);
+        if !extern_kvs_get(key) {
+            println!("GET failed on key 0x{:x}", key);
+        }
+        //assert!( extern_kvs_get(key),
+            //"GET failed on key 0x{:x}", key);
+    }
+}
+
+#[cfg(feature = "mica")]
+#[cfg(feature = "extern_ycsb")]
+fn del_object(key: u64) {
+    unsafe {
+        trace!("DEL {:x}", key);
+        if !extern_kvs_del(key) {
+            println!("DEL failed on key 0x{:x}", key);
+        }
+        //assert!( extern_kvs_del(key),
+            //"DEL failed on key 0x{:x}", key);
     }
 }
 
