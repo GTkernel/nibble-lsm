@@ -10,6 +10,7 @@ use meta;
 use std::sync::Arc;
 use std::thread::{self,JoinHandle};
 use parking_lot as pl;
+use std::mem;
 
 //==----------------------------------------------------==//
 //      Constants
@@ -270,30 +271,27 @@ impl Nibble {
         self.index.get(key).is_some()
     }
 
-    /// TODO use Result<Buffer> as return value
-    /// FIXME invoke some method in thelog that copies out data
     #[inline(always)]
-    pub fn get_object(&self, key: u64) -> (Status,Option<Buffer>) {
+    pub fn get_object(&self, key: u64, buf: &mut [u8]) -> Status {
         meta::pin();
 
         // 1. lookup the key and get the entry
         let ientry: IndexEntry = match self.index.get(key) {
-            None => {
-                return (Err(ErrorCode::KeyNotExist),None);
-            },
+            None => return Err(ErrorCode::KeyNotExist),
             Some(entry) => entry,
         };
         let (socket,va) = extract(ientry);
 
-        trace!("GET key 0x{:x} ientry 0x{:x} -> socket 0x{:x} va 0x{:x}",
-               key, ientry, socket, va);
+
+        //trace!("GET key 0x{:x} ientry 0x{:x} -> socket 0x{:x} va 0x{:x}",
+               //key, ientry, socket, va);
 
         // 2. ask Log to give us the object
-        let buf = self.nodes[socket as usize]
-                            .log.get_entry(va as usize);
+        self.nodes[socket as usize]
+            .log.get_entry(va as usize, buf);
 
         meta::quiesce();
-        (Ok(1),Some(buf))
+        Ok(1)
     }
 
     #[inline(always)]

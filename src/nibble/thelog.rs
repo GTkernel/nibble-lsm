@@ -295,49 +295,53 @@ impl Log {
     }
 
     /// Pull out the value for an entry within the log (not the entire
-    /// object).
-    pub fn get_entry(&self, va: usize) -> Buffer {
+    /// object). DO NOT do any buffer allocations on this fast path.
+    #[inline(always)]
+    pub fn get_entry(&self, va: usize, buf: &mut [u8]) {
+        let head_len = mem::size_of::<EntryHeader>();
+        let key_len = mem::size_of::<KeyType>();
+        let block_addr: usize = va & !BLOCK_OFF_MASK;
+        let remain: usize = BLOCK_SIZE - (va - block_addr);
+
         // If object lands squarely within a single block, just memcpy
         // that shit out. else, figure out the segment and thus the
         // block list, and do a slowpath extraction
+        if likely!(remain > (head_len + key_len)) {
+            let entry: &EntryHeader = unsafe {
+                &* (va as *const usize as *const EntryHeader)
+            };
+            let size: usize = entry.len_with_header();
+            if likely!(size <= remain) {
+                let mut value_len = entry.datalen as usize;
+                // if unlikely!(buf.len() < value_len) {
+                //     warn!("Buffer len {} GET is smaller than object {}",
+                //          buf.len(), value_len);
+                //     value_len = buf.len();
+                // }
+                let valuep = (va + head_len + key_len)
+                    as *const usize as *const u8;
+                unsafe {
+                    copy(buf.as_mut_ptr(), valuep, value_len);
+                    //ptr::copy_nonoverlapping(valuep,
+                        //buf.as_mut_ptr(), value_len);
+                }
+            }
+        }
 
-        // let head_len = mem::size_of::<EntryHeader>();
-        // let key_len = mem::size_of::<KeyType>();
-        // let block_addr: usize = va & !BLOCK_OFF_MASK;
-        // let remain: usize = BLOCK_SIZE - (va - block_addr);
-
-        // if likely!(remain > (head_len + key_len)) {
-        //     let entry: &EntryHeader = unsafe {
-        //         &* (va as *const usize as *const EntryHeader)
-        //     };
-        //     let size: usize = entry.len_with_header();
-        //     if likely!(size <= remain) {
-        //         let value_len = entry.datalen as usize;
-        //         let mut buf = Buffer::new(value_len);
-        //         let valuep = (va + head_len + key_len)
-        //             as *const usize as *const u8;
-        //         unsafe {
-        //             ptr::copy_nonoverlapping(valuep,
-        //                 buf.as_mut_ptr(), value_len);
-        //         }
-        //         return buf;
-        //     }
-        // }
-
-        // slow path.. find the segment so we can locate the next
-        // block and pull it out in steps
-
-        let block: Block = self.manager.block_of(va);
-        debug_assert_eq!(block.list().ptr().is_null(), false);
-        let usl = block.list();
-        debug_assert!(block.blk_idx() < usl.len(),
-            "block idx {} out of bounds for uslice {}",
-            block.blk_idx(), usl.len());
-        let list: &[BlockRef] = unsafe { usl.slice() };
-        let entry = get_ref(list, block.blk_idx(), va);
-        let mut buf = Buffer::new(entry.datalen as usize);
-        unsafe { entry.get_data(buf.as_mut_ptr()); }
-        buf
+        // gotta assemble the object (even if it lies fully in a
+        // block, but just not the one the entry header is in, we
+        // still don't know which block that is without the segment
+        else {
+            let block: Block = self.manager.block_of(va);
+            debug_assert_eq!(block.list().ptr().is_null(), false);
+            let usl = block.list();
+            debug_assert!(block.blk_idx() < usl.len(),
+                "block idx {} out of bounds for uslice {}",
+                block.blk_idx(), usl.len());
+            let list: &[BlockRef] = unsafe { usl.slice() };
+            let entry = get_ref(list, block.blk_idx(), va);
+            unsafe { entry.get_buf(buf); }
+        }
     }
 
     /// Only pull out the entry header. Useful to know the object size
@@ -421,12 +425,27 @@ impl<'a> EntryReference<'a> {
     }
 
     /// Copy out the value
+    #[inline(always)]
     pub unsafe fn get_data(&self, out: *mut u8) {
         let offset = self.offset + self.len
                             - self.datalen as usize;
         // TODO optimize if contiguous
         segment::copy_out(&self.blocks, offset,
                           out, self.datalen as usize);
+    }
+
+    /// Copy out the value. Same as get_data but takes a slice, which
+    /// has a len we can verify against.
+    #[inline(always)]
+    pub unsafe fn get_buf(&self, out: &mut [u8]) {
+        let dlen = self.datalen as usize;
+        let offset = self.offset + self.len - dlen;
+        //if unlikely!(out.len() < dlen) {
+            //panic!("ur buf is 2 smal");
+        //}
+        // TODO optimize if contiguous
+        segment::copy_out(&self.blocks, offset,
+                          out.as_mut_ptr(), dlen);
     }
 
 }

@@ -83,8 +83,10 @@ fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
 #[cfg(not(feature = "extern_ycsb"))]
 fn get_object(key: u64) {
     let nibble: &Nibble = unsafe { &*NIBBLE.0 };
-    if let (Err(e),_) = nibble.get_object(key) {
-        warn!("Error: {:?}", e);
+    let mut buf: [u8;1024] = 
+        unsafe { mem::uninitialized() };
+    if let Err(e) = nibble.get_object(key, &mut buf) {
+        warn!("{:?}", e);
     }
 }
 
