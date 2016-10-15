@@ -383,21 +383,26 @@ impl WorkloadGenerator {
     fn __setup(&mut self, parallel: bool) {
         let size = self.config.size;
 
-        info!("Inserting {} objects of size {}",
-              self.config.records, self.config.size);
-
         let now = Instant::now();
         if parallel {
-            let pernode = self.config.records / self.sockets;
+            let threads_per = 8;
+            info!("Inserting {} objects of size {} with {} threads",
+                  self.config.records, self.config.size,
+                  threads_per * self.sockets);
+            let pernode = self.config.records /
+                (threads_per * self.sockets);
             let mut handles: Vec<JoinHandle<()>> =
                 Vec::with_capacity(self.sockets);
-            for sock in 0..self.sockets {
-                let start_key: u64 = (sock*pernode) as u64;
-                let end_key: u64   = start_key + (pernode as u64);
+            for t in 0..(threads_per * self.sockets) {
+                let sock = t / threads_per;
+                let per_thread = pernode / threads_per;
+                let start_key: u64 =
+                    (sock*pernode + t*per_thread) as u64;
+                let end_key: u64 = start_key + (per_thread as u64);
                 handles.push( thread::spawn( move || {
                     let value = memory::allocate::<u8>(size);
                     let v = Pointer(value as *const u8);
-                    info!("range [{},{}) on socket {}",
+                    debug!("range [{},{}) on socket {}",
                         start_key, end_key, sock);
                     for key in start_key..end_key {
                         // Avoid inserting value zero (0)
