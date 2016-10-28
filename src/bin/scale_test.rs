@@ -281,7 +281,6 @@ fn run(config: &Config) {
         }
         println!("# total kops {}",
                  accum.load(Ordering::Relaxed));
-        cuckoo::print_conflicts(0usize);
     }
 }
 

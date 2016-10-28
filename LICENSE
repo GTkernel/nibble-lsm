@@ -22,12 +22,6 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ---------------------------
 
-* libcuckoo (thirdparty/libcuckoo) is Copyright (C) 2013, Carnegie
-Mellon University and Intel Corporation and has its own license, as
-detailed in the source files.
-
-* CityHash (thirdparty/libcuckoo/lib/city.h,
-thirdparty/libcuckoo/lib/city.cc) is Copyright (c) Google, Inc. and
-has its own license, as detailed in the source files.
+TODO add license for crossbeam code I reused
 
 * FNV (thirdparty/fnv) is public domain code.

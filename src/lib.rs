@@ -43,9 +43,5 @@ extern crate syscall;
 extern crate parking_lot;
 extern crate num;
 
-// TODO keep cuckoo private and move the unit test in the integration
-// test code to where it should be
-//pub mod cuckoo;
-
 pub mod nibble;
 pub use nibble::*;
