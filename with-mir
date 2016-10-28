@@ -1,4 +1,0 @@
-#! /usr/bin/env zsh
-export RUSTFLAGS="-Z orbit"
-export RUST_NEW_ERROR_FORMAT=true
-time $@

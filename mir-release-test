@@ -1,3 +1,0 @@
-#! /usr/bin/env zsh
-export RUSTFLAGS="-Z orbit"
-cargo test --release
