@@ -1,5 +1,4 @@
 #! /usr/bin/env zsh
-set -e
 set -u
 
 # not all options passed to ycsb are used (most are inherited from
