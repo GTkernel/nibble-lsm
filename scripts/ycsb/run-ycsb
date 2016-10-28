@@ -42,15 +42,19 @@ FEATURES=""
 # and we can also do uniform for each of the above
 
 size=1000
+size=100
+
 #nkeys=$((2**26))
 #size=100
 #nkeys=$((2**30))
+
+SHIFT=0
 
 NSOCKETS=16
 NCPU=15
 
 # How long test core should run for.
-SEC=80
+SEC=40
 
 ######################################################################
 
@@ -64,98 +68,112 @@ readpct=0
 read_mostly() {
     #for dist in uniform zipfian; do
     for dist in uniform; do
-        for T in C B; do
 
-            for fill in 1 10 20 30 40 50 60 70 80 90; do
+    #for T in C B; do
+    for T in B; do
 
-                echo ''; echo ''
-                echo "Fill capacity $fill %"
+    for fill in 30; do
 
-                # header + key + value
-                objsize=$(( 4 + 8 + $size ))
-                maxkeys=$(( $capacity / $objsize ))
-                nkeys=$(( ($maxkeys * $fill) / 100 ))
-                echo "objsize $objsize maxkeys $maxkeys nkeys $nkeys"
+    for size in 1000; do
 
-                [[ $T == "C" ]] && readpct=100
-                [[ $T == "B" ]] && readpct=95
-                echo ''; echo ''
-                echo "# $T $dist"
+        echo ''; echo ''
+        #echo "Fill capacity $fill %"
 
-                # MICA environment vars. keep regardless of which KVS we use.
-                # MICA only supports one object size...
-                export MICA_VAL_LEN=$size
-                # Used for creating the hash table.. make large enough
-                export MICA_ITEMS=$((nkeys*2))
-                export MICA_CAPACITY=$capacity
+        # header + key + value
+        objsize=$(( 4 + 8 + $size ))
+        maxkeys=$(( $capacity / $objsize ))
+        #nkeys=$(( ($maxkeys * $fill) / 100 ))
+        nkeys=$((1<<26))
+        echo "objsize $objsize maxkeys $maxkeys nkeys $nkeys"
 
-                cargo run --features "$FEATURES" --release --bin ycsb -- \
-                    --dist $dist \
-                    --readpct $readpct \
-                    --records $nkeys \
-                    --capacity $capacity \
-                    --ops 0 \
-                    --threads 1 \
-                    --time $SEC \
-                    --cpu incr \
-                    --size $size \
-                    --put local
-                echo ''; echo ''
+        [[ $T == "C" ]] && readpct=100
+        [[ $T == "B" ]] && readpct=95
+        echo ''; echo ''
+        echo "# $T $dist"
 
-            done
+        # MICA environment vars. keep regardless of which KVS we use.
+        # MICA only supports one object size...
+        export MICA_VAL_LEN=$size
+        # Used for creating the hash table.. make large enough
+        export MICA_ITEMS=$((nkeys*2))
+        export MICA_CAPACITY=$capacity
 
-        done
+        cargo run --features "$FEATURES" --release --bin ycsb -- \
+            --dist $dist \
+            --readpct $readpct \
+            --records $nkeys \
+            --capacity $capacity \
+            --ops 0 \
+            --threads 1 \
+            --time $SEC \
+            --cpu incr \
+            --size $size \
+            --put local
+            #--shift $SHIFT
+        echo ''; echo ''
+
+    done
+    done
+    done
     done
 }
 
 write_mostly() {
-    for T in A W; do
-        #for dist in uniform zipfian; do
-        for dist in uniform; do
+    #for T in A W; do
+    for T in A; do
 
-            for fill in 1 10 20 30 40 50 60 70 80 90; do
+    #for dist in uniform zipfian; do
+    for dist in uniform; do
 
-                echo ''; echo ''
-                echo "Fill capacity $fill %"
+    #for fill in 30 60; do
+    for fill in 60; do
 
-                # header + key + value
-                objsize=$(( 4 + 8 + $size ))
-                maxkeys=$(( $capacity / $objsize ))
-                nkeys=$(( ($maxkeys * $fill) / 100 ))
-                echo "objsize $objsize maxkeys $maxkeys nkeys $nkeys"
+    for size in 1000 100; do
+
+        echo ''; echo ''
+        echo "Fill capacity $fill %"
+
+        # header + key + value
+        objsize=$(( 4 + 8 + $size ))
+        maxkeys=$(( $capacity / $objsize ))
+        nkeys=$(( ($maxkeys * $fill) / 100 ))
+        echo "objsize $objsize maxkeys $maxkeys nkeys $nkeys"
 
 
-                [[ $T == "A" ]] && readpct=50
-                [[ $T == "W" ]] && readpct=0
+        [[ $T == "A" ]] && readpct=50
+        [[ $T == "W" ]] && readpct=0
+        [[ $T == "B" ]] && readpct=95
 
 
-                echo ''; echo ''
-                echo "# $T $dist"
+        echo ''; echo ''
+        echo "# $T $dist"
 
-                # MICA environment vars. keep regardless of which KVS we use.
-                # MICA only supports one object size...
-                export MICA_VAL_LEN=$size
-                # Used for creating the hash table.. make large enough
-                export MICA_ITEMS=$((nkeys*2))
-                export MICA_CAPACITY=$capacity
+        # MICA environment vars. keep regardless of which KVS we use.
+        # MICA only supports one object size...
+        export MICA_VAL_LEN=$size
+        # Used for creating the hash table.. make large enough
+        export MICA_ITEMS=$((nkeys*2))
+        export MICA_CAPACITY=$capacity
 
-                cargo run --features "$FEATURES" --release --bin ycsb -- \
-                    --dist $dist \
-                    --readpct $readpct \
-                    --records $nkeys \
-                    --capacity $capacity \
-                    --ops 0 \
-                    --threads 1 \
-                    --time $SEC \
-                    --cpu incr \
-                    --size $size \
-                    --put local \
-                    --compaction
-            done
-        done
+        cargo run --features "$FEATURES" --release --bin ycsb -- \
+            --dist $dist \
+            --readpct $readpct \
+            --records $nkeys \
+            --capacity $capacity \
+            --ops 0 \
+            --threads 1 \
+            --time $SEC \
+            --cpu incr \
+            --size $size \
+            --put local \
+            --shift $SHIFT \
+            --compaction
+    done
+    done
+    done
     done
 }
 
 read_mostly
-write_mostly
+#write_mostly
 
