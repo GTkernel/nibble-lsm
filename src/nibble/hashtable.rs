@@ -1,8 +1,5 @@
 /*
  * Concurrent hash table.
- *
- * TODO to grow, we'll need a reserve memory
- * Maybe I can use Linear Hashing
  */
 
 use std::ptr;
