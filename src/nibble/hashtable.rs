@@ -218,15 +218,15 @@ impl Bucket {
 /// RAII-based lock used for clients of the API who must do
 /// non-trivial amounts of work during a key update in the table.
 /// Compaction, for example, is one.
-pub struct LockedBucket {
+pub struct BucketGuard {
     bucket: Pointer<Bucket>,
 }
 
-impl LockedBucket {
+impl BucketGuard {
 
     /// Caller should lock bucket before creating
     fn new(bucket: &Bucket) -> Self {
-        LockedBucket {
+        BucketGuard {
             bucket: Pointer(bucket as *const Bucket),
         }
     }
@@ -261,7 +261,7 @@ impl LockedBucket {
 
 }
 
-impl Drop for LockedBucket {
+impl Drop for BucketGuard {
     fn drop(&mut self) {
         let b: &Bucket = unsafe { &*self.bucket.0 };
         b.unlock();
@@ -704,7 +704,7 @@ impl HashTable {
     /// replace existing value with new.
     #[inline(always)]
     pub fn update_lock_ifeq(&self, key: u64, new: u64, old: u64)
-        -> Option<LockedBucket> {
+        -> Option<BucketGuard> {
 
         let hash = Self::make_hash(key);
 
@@ -759,7 +759,7 @@ impl HashTable {
             let i = e.unwrap();
             if old == bucket.read_value(i) {
                 bucket.set_value(i, new);
-                return Some(LockedBucket::new(&bucket));
+                return Some(BucketGuard::new(&bucket));
             } else {
                 bucket.unlock();
                 return None;

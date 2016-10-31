@@ -144,7 +144,7 @@ impl Index {
     }
 
     pub fn update_lock_ifeq(&self, key: u64, new: u64, old: u64)
-        -> Option<LockedBucket> {
+        -> Option<BucketGuard> {
 
         debug_assert!(key > 0);
         let tidx = self.table_idx(key);
