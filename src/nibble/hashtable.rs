@@ -159,14 +159,18 @@ impl Bucket {
     }
 
     #[inline(always)]
-    pub fn wait_lock(&self) {
+    pub fn wait_lock(&self) -> BucketGuard {
         let mut v;
+        let start = clock::now();
         'retry: loop {
             v = self.read_version();
             if is_even(v) {
                 if self.try_bump_version(v) {
-                    return;
+                    return BucketGuard::new(self);
                 } else {
+                    if clock::to_seconds(clock::now() - start) > 1 {
+                        warn!("waited too long on bucket {:?}", self);
+                    }
                     continue 'retry;
                 }
             }
@@ -215,9 +219,10 @@ impl Bucket {
     }
 }
 
-/// RAII-based lock used for clients of the API who must do
+/// RAII-like lock used for clients of the API who must do
 /// non-trivial amounts of work during a key update in the table.
-/// Compaction, for example, is one.
+/// Compaction, for example, is one. Unlike a typical Rust guard type,
+/// this one doesn't prevent aliasing.
 pub struct BucketGuard {
     bucket: Pointer<Bucket>,
 }
@@ -434,12 +439,11 @@ impl HashTable {
 
             // this will block an in-progress resize on this bucket
             // (prevents table version from incrementing)
-            bucket.wait_lock();
+            let mut guard = bucket.wait_lock();
 
             // re-examine if table has changed.. if so, restart
             // (a table resize won't grab the bucket lock from us)
             if unlikely!(tver != self.version()) {
-                bucket.unlock();
                 continue 'retry;
             }
 
@@ -453,22 +457,20 @@ impl HashTable {
             // if exists, overwrite
             if let Some(i) = e {
                 let old = Some(bucket.set_value(i, value));
-                bucket.unlock();
                 return (true, old);
             }
             // else if there is an empty slot, use that
             else if let Some(i) = inv {
                 bucket.set_key(i, key);
                 bucket.set_value(i, value);
-                bucket.unlock();
                 return (true, None);
             }
 
             // hm..  again no space. we must resize
-            bucket.unlock();
             if !self.allow_resize {
                 return (false, None);
             }
+            drop(guard);
             if !self.resize() {
                 self.wait_resizing();
             }
@@ -582,7 +584,6 @@ impl HashTable {
             opts = bucket.find_key(key);
 
             if unlikely!(tver != self.version()) {
-                bucket.unlock();
                 continue 'retry;
             }
 
@@ -592,14 +593,12 @@ impl HashTable {
 
             let (e,inv) = opts;
             if e.is_none() {
-                bucket.unlock();
                 info!("key {} not found after locking bucket!",
                       key);
                 return false;
             }
 
             bucket.del_key(e.unwrap(), old);
-            bucket.unlock();
             return true;
         }
         assert!(false, "Unreachable path");
@@ -657,10 +656,9 @@ impl HashTable {
                 continue 'retry;
             }
 
-            bucket.wait_lock();
+            let mut guard = bucket.wait_lock();
 
             if unlikely!(tver != self.version()) {
-                bucket.unlock();
                 continue 'retry;
             }
 
@@ -674,7 +672,6 @@ impl HashTable {
             // if exists, overwrite
             if let Some(i) = e {
                 f(Some(bucket.set_value(i, new)));
-                bucket.unlock();
                 return true;
             }
             // else if there is an empty slot, use that
@@ -682,15 +679,14 @@ impl HashTable {
                 bucket.set_key(i, key);
                 bucket.set_value(i, new);
                 f(None);
-                bucket.unlock();
                 return true;
             }
 
             // hm..  again no space. we must resize
-            bucket.unlock();
             if !self.allow_resize {
                 return false;
             }
+            drop(guard);
             if !self.resize() {
                 self.wait_resizing();
             }
@@ -737,10 +733,9 @@ impl HashTable {
             //     return None;
             // }
 
-            bucket.wait_lock();
+            let mut guard = bucket.wait_lock();
 
             if unlikely!(tver != self.version()) {
-                bucket.unlock();
                 continue 'retry;
             }
 
@@ -752,16 +747,14 @@ impl HashTable {
 
             let (e,inv) = opts;
             if e.is_none() {
-                bucket.unlock();
                 return None;
             }
 
             let i = e.unwrap();
             if old == bucket.read_value(i) {
                 bucket.set_value(i, new);
-                return Some(BucketGuard::new(&bucket));
+                return Some(guard);
             } else {
-                bucket.unlock();
                 return None;
             }
             assert!(false, "Unreachable path");
@@ -769,11 +762,14 @@ impl HashTable {
         assert!(false, "Unreachable path");
     }
 
-    fn lock_all(&self) {
+    fn lock_all(&self) -> Vec<BucketGuard> {
+        let mut v: Vec<BucketGuard> =
+            Vec::with_capacity(self.nbuckets);
         let buckets: &[Bucket] = self.as_slice();
         for b in buckets {
-            b.wait_lock();
+            v.push(b.wait_lock());
         }
+        v
     }
 
     /// Return true if we acquired the lock.
@@ -843,7 +839,7 @@ impl HashTable {
 
         // lock all buckets. prevents concurrent operations
         let start = clock::now();
-        self.lock_all();
+        let all = self.lock_all();
         let end = clock::now();
         debug!("locking buckets {} µs", clock::to_usec(end-start));
 
@@ -899,9 +895,8 @@ impl HashTable {
         // and threads may put/get into them. unlock the rest
 
         let start = clock::now();
-        for bucket in old_buckets {
-            bucket.unlock();
-        }
+        drop(all);
+        //for bucket in old_buckets { bucket.unlock(); }
         assert_eq!(self.unlock_for_resize(), true);
         let end = clock::now();
         debug!("unlocking {} µs", clock::to_usec(end-start));
