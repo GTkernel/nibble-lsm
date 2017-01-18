@@ -39,12 +39,10 @@ to an individual object.
 ## Dependencies
 Nibble is implemented entirely in the [Rust
 language](https://www.rust-lang.org/en-US/) and requires the
-``nightly'' branch of the compiler. Installation can be done to
-_without root administration_ from https://rustup.rs
-
-Rust is typically installed via non-root user into the user's home
-directory. Please visit [rustup](https://rustup.rs) and execute the
-given shell command. Configure 'nightly' to be the default toolchain.
+"nightly" branch of the compiler. Installation can be done to
+_without root administration_ from https://rustup.rs Please visit that
+website and execute the given shell command. Configure 'nightly' to be
+the default toolchain.
 
 Verify the installation (example below).
 ```
@@ -67,7 +65,7 @@ To build a specific executable (found in src/bin/):
 ```
 
 Omitting '--release' will create a debug binary. All binaries are
-written to either target/release/ or target/debug/.
+written to either ``target/release/`` or ``target/debug/``.
 
 TODO how to add flags for rdrand
 
@@ -75,7 +73,7 @@ TODO how to add flags for rdrand
 Nibble's main API acts like a key-value store (KVS). It currently runs
 as a library within a single process address space, and supports
 concurrent access from many threads. Nibble requires objects to be
-associated with ``keys'' which are fixed at 8 bytes (2^64 values).
+associated with "keys" which are fixed at 8 bytes (2^64 values).
 Objects can be any size up to the size of Nibble's internal segment
 length (default is 32 MiB). Keys exist within a single namespace.
 
@@ -116,9 +114,9 @@ fn get_object(key: u64, buf: &mut [u8]) -> Status
 let key: u64 = 1;
 let mut buf: Vec<u64> = Vec::with_capacity(8);
 assert!(nib.get_object(key, &mut buf).is_ok());
-// Use 'buf' as desired
+// Use buf as desired
 ```
-It will write the object to the provided “buf” input parameter,
+It will write the object to the provided ``buf`` input parameter,
 which is allocated by the caller.
 
 To remove an object from the store, or check if it exists:
@@ -150,7 +148,7 @@ NIBDEBUG=N cargo run --bin <name>
 ```
 
 N is a value from 1-5 for errors (least verbose), warnings, general information,
-debug, and trace messages (most verbose). The recommended is 3.
+debug, and trace messages (most verbose). The recommended value is 3.
 
 ## Notes
 
@@ -164,17 +162,6 @@ as 2MiB mappings with Linux, which it reserves on startup:
 ```
 echo 16384 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
 ```
-
-Debugging messages are supported via environment variables:
-
-```
-# N is a value in the inclusive range [0,5]
-NIB_DEBUG=N cargo run --bin ycsb --release
-```
-
-Binaries are written to ``target/release/`` or ``target/debug/``.
-Omitting ``--release`` on build will generate the latter, and enable
-easy debugging with GDB.
 
 There are many tunable parameters found at the top of many source
 files.
