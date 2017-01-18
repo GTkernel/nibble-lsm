@@ -58,6 +58,11 @@ the rustup script above):
 % cargo build --lib [--release]
 ```
 
+If you run on a recent Intel processor, you may want to specify using
+the ``rdrand`` instruction, instead of the operating system
+``/dev/urandom`` file, which has scalability limitations: pass
+``--features="rdrand"`` to the cargo build or run commands.
+
 To build a specific executable (found in src/bin/):
 
 ```
@@ -66,8 +71,6 @@ To build a specific executable (found in src/bin/):
 
 Omitting '--release' will create a debug binary. All binaries are
 written to either ``target/release/`` or ``target/debug/``.
-
-TODO how to add flags for rdrand
 
 ## Usage 
 Nibble's main API acts like a key-value store (KVS). It currently runs
