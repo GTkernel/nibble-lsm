@@ -1,7 +1,7 @@
-# Nibble: Scalable Memory Allocator for Object Stores
+# Nibble: Scalable Large-Memory Key-Value Store
 ## Description
-**Nibble** is a scalable, capacity efficient memory allocator for
-in-memory data stores. Nibble promotes the use of a concurrent
+**Nibble** is a scalable, capacity efficient key-value store for
+large in-memory data. Nibble promotes the use of a concurrent
 multi-head log-structured approach to attain high performance and
 resistance to memory fragmentation, together with methods for scalable
 low-latency synchronization that benefits data-intensive applications
@@ -20,9 +20,21 @@ With 240 threads on 1TiB of data with random access to 1KiB objects:
 - 40 mil. GET/sec for pure reads (38 GiBps)
 - 90 mil. PUT/sec for pure writes (85 GiBps)
 
+PUT throughput is higher due to NUMA effects; a 16-socket platform
+will have higher random-read latencies, than writing to a socket's
+local memory (the default behavior).
+
 For high-locality workloads (zipfian 0.99):
 - 2500 mil. GET/sec for pure reads
 - 2 mil. PUT/sec for pure writes
+
+GET throughput is extremely high due to the small working set size; it
+is able to fit within each processor's LLC to avoid memory latencies.
+
+PUT throughput is low, as a large number of concurrent writers to a
+small number of objects will result in significant synchronization
+contention. The current design does not allow for concurrent updates
+to an individual object.
 
 ## Dependencies
 Nibble is implemented entirely in the [Rust
@@ -30,12 +42,34 @@ language](https://www.rust-lang.org/en-US/) and requires the
 ``nightly'' branch of the compiler. Installation can be done to
 _without root administration_ from https://rustup.rs
 
+Rust is typically installed via non-root user into the user's home
+directory. Please visit [rustup](https://rustup.rs) and execute the
+given shell command. Configure 'nightly' to be the default toolchain.
+
+Verify the installation (example below).
+```
+% rustc --version
+rustc 1.16.0-nightly (4ce7accaa 2017-01-17)
+```
+
+## Building Nibble
 Building Nibble is done via the Cargo package manager (provided with
 the rustup script above):
 
 ```
-cargo build --lib [--release]
+% cargo build --lib [--release]
 ```
+
+To build a specific executable (found in src/bin/):
+
+```
+% cargo build --bin <name> [--release]
+```
+
+Omitting '--release' will create a debug binary. All binaries are
+written to either target/release/ or target/debug/.
+
+TODO how to add flags for rdrand
 
 ## Usage 
 Nibble's main API acts like a key-value store (KVS). It currently runs
@@ -107,6 +141,16 @@ for node in 0..numa::NODE_MAP.sockets() {
     nibble.enable_compaction(NodeId(node));
 }
 ```
+
+Nibble can provide runtime and diagnostic information via an
+environment variable:
+
+```
+NIBDEBUG=N cargo run --bin <name>
+```
+
+N is a value from 1-5 for errors (least verbose), warnings, general information,
+debug, and trace messages (most verbose). The recommended is 3.
 
 ## Notes
 
