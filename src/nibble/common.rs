@@ -161,6 +161,37 @@ pub unsafe fn rdrandq() -> u64 {
     r
 }
 
+//==----------------------------------------------------==//
+//      CPU Feature Detection (CPUID)
+//==----------------------------------------------------==//
+
+pub struct CPUIDRegs {
+    eax: u32,
+    ebx: u32,
+    ecx: u32,
+    edx: u32
+}
+
+impl CPUIDRegs {
+    pub fn new() -> CPUIDRegs {
+        CPUIDRegs { eax: 0u32,  ebx: 0u32, ecx: 0u32, edx: 0u32 }
+    }
+}
+
+#[allow(unused_mut)]
+pub unsafe fn cpuid(id: u32, subid: u32) -> CPUIDRegs {
+    let mut regs = CPUIDRegs::new();
+    asm!("cpuid"
+         : "={eax}" (regs.eax),
+           "={ebx}" (regs.ebx),
+           "={ecx}" (regs.ecx),
+           "={edx}" (regs.edx)
+         : "{eax}" (id), "{ecx}" (subid)
+         :
+         : "volatile"
+         );
+    regs
+}
 
 //==----------------------------------------------------==//
 //      Error handling
