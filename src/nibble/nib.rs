@@ -7,6 +7,7 @@ use compaction::*;
 use numa::{self,NodeId};
 use meta;
 
+use std::process;
 use std::sync::Arc;
 use std::thread::{self,JoinHandle};
 use parking_lot as pl;
@@ -78,7 +79,26 @@ impl Nibble {
             Self::default_ht_nitems() )
     }
 
+    /// Verify Nibble's current compilation either supports rdrand, or
+    /// was compiled with appropriate fallback implementation.
+    fn __check_rdrand() -> bool {
+        if !nibble_rdrand_compile_flags() {
+            println!(">> Oops: your CPU probably doesn't support 'rdrand'.");
+            println!(">> Please recompile Nibble with --nordrand");
+            println!("");
+            false
+        } else {
+            true
+        }
+    }
+
     fn __new(capacity: usize, ht_nitems: usize) -> Self {
+        if !Nibble::__check_rdrand() {
+            println!("Cannot initialize Nibble.");
+            println!("Please verify above messages.");
+            process::exit(1);
+        }
+
         let nnodes = numa::NODE_MAP.sockets();
         let mincap = min_log_size!(nnodes);
         let persock = capacity/nnodes;

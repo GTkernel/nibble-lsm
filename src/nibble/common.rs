@@ -122,6 +122,7 @@ fn shuffle<T: num::Integer>(vec: &mut Vec<T>) {
 /// Generate 32-bit random numbers via the CPU's rdrand instruction.
 #[inline(always)]
 #[allow(unused_mut)]
+#[cfg(rand="rdrand")]
 pub unsafe fn rdrand() -> u32 {
     let mut r: u32;
     let mut eflags: u8;
@@ -143,6 +144,7 @@ pub unsafe fn rdrand() -> u32 {
 /// Generate 64-bit random numbers via the CPU's rdrand instruction.
 #[inline(always)]
 #[allow(unused_mut)]
+#[cfg(rand="rdrand")]
 pub unsafe fn rdrandq() -> u64 {
     let mut r: u64;
     let mut eflags: u8;
@@ -159,6 +161,22 @@ pub unsafe fn rdrandq() -> u64 {
         warn!("rdrandq CF=0");
     }
     r
+}
+
+/// Slower and potentially less-scalable method for
+/// random number generation using urandom.
+#[cfg(not(rand="rdrand"))]
+pub unsafe fn rdrand() -> u32 {
+    let mut rng = rand::thread_rng();
+    rng.gen::<u32>()
+}
+
+/// Slower and potentially less-scalable method for
+/// random no. generation.
+#[cfg(not(rand="rdrand"))]
+pub unsafe fn rdrandq() -> u64 {
+    let mut rng = rand::thread_rng();
+    rng.gen::<u64>()
 }
 
 //==----------------------------------------------------==//
@@ -191,6 +209,23 @@ pub unsafe fn cpuid(id: u32, subid: u32) -> CPUIDRegs {
          : "volatile"
          );
     regs
+}
+
+/// Determine whether the CPU has the 'rdrand' instruction.
+/// From the manual: CPUID.01H:ECX.RDRAND[bit 30] = 1
+#[cfg(rand="rdrand")]
+pub fn nibble_rdrand_compile_flags() -> bool {
+    let id = 1_u32;
+    let regs = unsafe { cpuid(id, 0u32) };
+    ((regs.ecx >> 30) & 0x1) == 1
+}
+
+/// If compiled with 'rdrand' this will always return true.
+/// The above rdrand methods will fall back to
+/// an implementation without the instruction.
+#[cfg(not(rand="rdrand"))]
+pub const fn nibble_rdrand_compile_flags() -> bool {
+    true
 }
 
 //==----------------------------------------------------==//
