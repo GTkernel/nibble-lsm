@@ -213,8 +213,9 @@ pub unsafe fn cpuid(id: u32, subid: u32) -> CPUIDRegs {
 
 /// Determine whether the CPU has the 'rdrand' instruction.
 /// From the manual: CPUID.01H:ECX.RDRAND[bit 30] = 1
-#[cfg(rand="rdrand")]
+#[cfg(feature="rdrand")]
 pub fn nibble_rdrand_compile_flags() -> bool {
+    info!("rand: using rdrand instruction");
     let id = 1_u32;
     let regs = unsafe { cpuid(id, 0u32) };
     ((regs.ecx >> 30) & 0x1) == 1
@@ -223,8 +224,9 @@ pub fn nibble_rdrand_compile_flags() -> bool {
 /// If compiled with 'rdrand' this will always return true.
 /// The above rdrand methods will fall back to
 /// an implementation without the instruction.
-#[cfg(not(rand="rdrand"))]
-pub const fn nibble_rdrand_compile_flags() -> bool {
+#[cfg(not(feature="rdrand"))]
+pub fn nibble_rdrand_compile_flags() -> bool {
+    info!("rand: using urandom");
     true
 }
 
