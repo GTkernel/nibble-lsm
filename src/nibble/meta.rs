@@ -155,7 +155,6 @@ pub const EPOCH_QUIESCE: u64 = 0;
 
 /// Read the current value of the epoch.
 #[inline(always)]
-#[cfg(feature="epoch-tsc")]
 fn read() -> EpochRaw {
     unsafe { rdtsc() }
 }
