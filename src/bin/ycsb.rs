@@ -640,8 +640,8 @@ impl WorkloadGenerator {
                 CPUPolicy::SocketRR => {
                     for i in 0..cpus_pernode {
                         for sock in 0..sockets {
-                            let r = numa::NODE_MAP.cpus_of(NodeId(sock));
-                            cpus.push_back(r.start + i);
+                            let r = numa::NODE_MAP.cpus_of(NodeId(sock)).get();
+                            cpus.push_back(r[i]);
                         }
                     }
                 },
