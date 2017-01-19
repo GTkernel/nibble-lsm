@@ -29,27 +29,57 @@ lazy_static! {
     pub static ref NODE_MAP: NodeMap = { NodeMap::new() };
 }
 
-#[derive(Copy,Clone)]
-pub struct CpuRange {
-    pub start: usize,
-    pub end: usize,
+/// Used to parse the CPU ID files. Some file formats
+/// have varied syntax: X-Y or X,Y,Z or X-Y,Z
+#[derive(Clone)]
+pub struct CpuSet {
+    /// A sorted set of unique core IDs.
+    set: Vec<usize>,
+}
+
+impl CpuSet {
+
+    /// Create a new CpuSet from a vector of values.
+    /// We sort then remove duplicates.
+    pub fn new(ids: &Vec<usize>) -> CpuSet {
+        let mut v = ids.clone();
+        v.sort();
+        v.dedup();
+        CpuSet { set: v }
+    }
+
+    pub fn len(&self) -> usize {
+        self.set.len()
+    }
+
+    pub fn is_member(&self, id: usize) -> bool {
+        self.set.binary_search(&id).is_ok()
+    }
+
+    pub fn lowest(&self) -> usize {
+        self.set[0]
+    }
+
+    pub fn get(&self) -> Vec<usize> {
+        self.set.clone()
+    }
 }
 
 /// Info about the socket
 #[allow(dead_code)]
 pub struct SocketInfo {
     ncpus: usize,
-    cpus: CpuRange,
+    cpus: CpuSet,
     //max_mem: usize,
 }
 
 impl SocketInfo {
 
     pub fn new(node: usize) -> Self {
-        let range = read_node_cpus(node);
+        let set = read_node_cpus(node);
         SocketInfo {
-            ncpus: range.end - range.start + 1,
-            cpus: range,
+            ncpus: set.len(),
+            cpus: set,
         }
     }
 }
@@ -70,7 +100,7 @@ impl NodeMap {
         map = HashMap::new();
         for node in 0..nnodes {
             let sock = SocketInfo::new(node);
-            for cpu in sock.cpus.start..(sock.cpus.end+1) {
+            for cpu in sock.cpus.get() {
                 map.insert(cpu, node);
             }
             sockets.push(sock);
@@ -81,9 +111,9 @@ impl NodeMap {
         }
     }
 
-    pub fn cpus_of(&self, sock: NodeId) -> CpuRange {
+    pub fn cpus_of(&self, sock: NodeId) -> CpuSet {
         assert!(sock.0<self.sockets.len(),"sock is too big: {}",sock);
-        self.sockets[sock.0].cpus
+        self.sockets[sock.0].cpus.clone()
     }
 
     pub fn cpus_in(&self, sock: NodeId) -> usize {
@@ -107,10 +137,8 @@ impl NodeMap {
     }
 }
 
-/// Read file and interpret as an integer range, e.g.
-/// X-Y returns CpuRange { start: X, end: Y }
-/// FIXME we don't handle all corner cases
-fn file_as_range(fname: &str) -> CpuRange {
+/// Read first line of given file and interpret as CPU IDs.
+fn read_cpu_ids(fname: &str) -> CpuSet {
     debug!("reading {}", fname);
     let mut file = match File::open(fname) {
         Err(e) => panic!("{}: {}", fname, e),
@@ -120,30 +148,35 @@ fn file_as_range(fname: &str) -> CpuRange {
     if let Err(e) = file.read_to_string(&mut line) {
         panic!("file {}: {}", fname, e);
     }
-    // a-b,x-y  hyperthreading? take first range
-    if let Some(idx) = line.find(',') {
-        line = {
-            let (ab,_) = line.split_at(idx);
-            ab.to_owned()
-        };
-    }
-    if let None = line.find('-') {
-        panic!("no range in file");
-    }
-    let values: Vec<&str>;
-    values = line.trim_right().split('-').collect();
-    assert_eq!(values.len(), 2);
-    CpuRange {
-        start: usize::from_str_radix(values[0], 10).unwrap(),
-        end:   usize::from_str_radix(values[1], 10).unwrap(),
-    }
+    // take X-Y,A-B,C,D and split on comma,
+    // then process each as either a range or singular value
+    let mut ids: Vec<usize> = Vec::with_capacity(32);
+    for s in line.split(',') {
+        let s = s.trim();
+        debug!("parsing '{}'", s);
+        if s.contains('-') {
+            let (l,h) = s.split_at(s.find('-').unwrap());
+            let h = h.trim_matches('-');
+            debug!("l {} h {}", l, h);
+            let low = usize::from_str_radix(l,10).unwrap();
+            let high = usize::from_str_radix(h,10).unwrap();
+            debug!("low {} high {}", low, high);
+            for i in low..(high+1) {
+                ids.push(i);
+            }
+        } else {
+            ids.push(usize::from_str_radix(s,10).unwrap());
+        }
+    };
+    assert!(!ids.is_empty());
+    CpuSet::new(&ids)
 }
 
-fn read_node_cpus(node: usize) -> CpuRange {
+fn read_node_cpus(node: usize) -> CpuSet {
     let fname = format!(
         "/sys/devices/system/node/node{}/cpulist",
         node);
-    file_as_range(fname.as_str())
+    read_cpu_ids(fname.as_str())
 }
 
 /// Read from /proc/self/numa_maps and report how many pages are
@@ -190,14 +223,14 @@ pub fn numa_allocated() -> Vec<usize> {
 /// FIXME we assume all nodes are online
 pub fn nodes() -> usize {
     let fname = "/sys/devices/system/node/online";
-    file_as_range(fname).end + 1
+    read_cpu_ids(fname).len()
 }
 
 /// Number of cpus in the system.
 /// FIXME we assume all cpus are online
 pub fn ncpus() -> usize {
     let fname = "/sys/devices/system/cpu/online";
-    file_as_range(fname).end + 1
+    read_cpu_ids(fname).len()
 }
 
 #[cfg(IGNORE)]
@@ -226,14 +259,14 @@ mod tests {
     #[should_panic(expected = "no range in file")]
     fn read_range_empty() {
         logger::enable();
-        super::file_as_range("/dev/null");
+        super::read_cpu_ids("/dev/null");
     }
 
     #[test]
     #[should_panic(expected = "No such file")]
     fn read_range_notexist() {
         logger::enable();
-        super::file_as_range("/not/exist/anywhere");
+        super::read_cpu_ids("/not/exist/anywhere");
     }
 
     #[test]

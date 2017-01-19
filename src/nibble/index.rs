@@ -62,7 +62,7 @@ impl Index {
                     let sock = socket.fetch_add(1, Ordering::Relaxed);
                     info!("Creating tables on socket {}", sock);
                     // pin on appropriate socket to speed up init
-                    let cpu = numa::NODE_MAP.cpus_of(NodeId(sock)).start;
+                    let cpu = numa::NODE_MAP.cpus_of(NodeId(sock)).lowest();
                     unsafe { sched::pin_cpu(cpu); }
                     for _ in 0..tables_per {
                         let t = Box::new(HashTable::new(per,sock));
