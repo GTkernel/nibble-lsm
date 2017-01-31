@@ -147,6 +147,19 @@ extern {
     fn extern_kvs_get(key: u64);
 }
 
+// Link against libleveldb.so which is built from
+// https://github.gatech.edu/kernel/leveldb.git
+#[link(name = "leveldb")]
+#[cfg(feature = "leveldb")]
+#[cfg(feature = "extern_ycsb")]
+extern {
+    // must match signatures in leveldb/db/c.cc
+    fn extern_kvs_init();
+    fn extern_kvs_put(key: u64, len: u64, buf: *const u8);
+    fn extern_kvs_del(key: u64);
+    fn extern_kvs_get(key: u64);
+}
+
 #[cfg(feature = "extern_ycsb")]
 fn kvs_init(config: &Config) {
     unsafe {
@@ -154,7 +167,9 @@ fn kvs_init(config: &Config) {
     }
 }
 
-#[cfg(feature = "rc")]
+// method interface is the same for RAMCloud and LevelDB's hacks
+// so we reuse it.
+#[cfg(any(feature = "rc", feature = "leveldb"))]
 #[cfg(feature = "extern_ycsb")]
 fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
     // we ignore 'sock' b/c RAMCloud is NUMA-agnostic
@@ -165,7 +180,7 @@ fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
     }
 }
 
-#[cfg(feature = "rc")]
+#[cfg(any(feature = "rc", feature = "leveldb"))]
 #[cfg(feature = "extern_ycsb")]
 fn get_object(key: u64) {
     unsafe {
@@ -174,7 +189,7 @@ fn get_object(key: u64) {
     }
 }
 
-#[cfg(feature = "rc")]
+#[cfg(any(feature = "rc", feature = "leveldb"))]
 #[cfg(feature = "extern_ycsb")]
 fn del_object(key: u64) {
     unsafe {
