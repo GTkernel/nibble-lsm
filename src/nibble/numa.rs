@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 use std::fmt;
+use std::error::Error;
 
 // Linux definitions for mbind system call.
 // FIXME put somewhere portable
@@ -137,6 +139,47 @@ impl NodeMap {
     }
 }
 
+// returns (yes/no, cores, siblings)
+fn is_smt_enabled() -> (bool,usize,usize) {
+    let path = Path::new("/proc/cpuinfo");
+    let mut file = match File::open(&path) {
+        Err(why) => panic!("couldn't open /proc/cpuinfo: {}",
+                           why.description()),
+        Ok(file) => file,
+    };
+
+    // Read the file contents into a string, returns `io::Result<usize>`
+    let mut buf = String::new();
+    if let Err(why) = file.read_to_string(&mut buf) {
+        panic!("couldn't read /proc/cpuinfo: {}",
+               why.description());
+    };
+
+    let mut siblings: usize = 0;
+    let mut cores: usize = 0;
+
+    let mut lines = buf.lines();
+    loop {
+        if let Some(s) = lines.next() {
+            if s.contains("siblings") {
+                let mut parts: Vec<&str> = s.split_whitespace().collect();
+                siblings = usize::from_str_radix(
+                    parts.pop().unwrap(),10).unwrap();
+            } else if s.contains("cpu cores") {
+                let mut parts: Vec<&str> = s.split_whitespace().collect();
+                cores = usize::from_str_radix(
+                    parts.pop().unwrap(),10).unwrap();
+            }
+            if siblings > 0 && cores > 0 { break; }
+        } else { break; }
+    }
+    if siblings == 0 || cores == 0 {
+        panic!("Could not parse /proc/cpuinfo");
+    }
+
+    (cores != siblings, cores, siblings)
+}
+
 /// Read first line of given file and interpret as CPU IDs.
 fn read_cpu_ids(fname: &str) -> CpuSet {
     debug!("reading {}", fname);
@@ -169,6 +212,7 @@ fn read_cpu_ids(fname: &str) -> CpuSet {
         }
     };
     assert!(!ids.is_empty());
+
     CpuSet::new(&ids)
 }
 
@@ -176,7 +220,13 @@ fn read_node_cpus(node: usize) -> CpuSet {
     let fname = format!(
         "/sys/devices/system/node/node{}/cpulist",
         node);
-    read_cpu_ids(fname.as_str())
+    let mut cpu = read_cpu_ids(fname.as_str());
+
+    // if SMT is enabled, we only keep half the cores
+    // FIXME called many times, but only at startup
+    let (smt,cores,siblings) = is_smt_enabled();
+    if smt { cpu.set.truncate(cores); }
+    cpu
 }
 
 /// Read from /proc/self/numa_maps and report how many pages are
