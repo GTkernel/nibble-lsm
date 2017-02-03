@@ -11,14 +11,16 @@ set -u
 #
 # For MICA, don't forget to update src/common.h with the NCORES and
 # NNODES parameters and rebuild!
+#
+# LevelDB has some config options used here in db/c.cc in
+# extern_kvs_init
 
-# in MiB
-#MEMSIZE=$((128*1024))
-MEMSIZE=$((1*(1<<40)))
+# in bytes
+MEMSIZE=$((8*(1<<40)))
 # MICA doesn't use log-structured allocators for its "store mode" so
 # we needn't allocate so much space for the given keyspace
 # 64mil keys * 1000b = 64GiB
-#MEMSIZE=$((512*(1<<30)))
+#MEMSIZE=$((128*(1<<30)))
 
 export NIBDEBUG=3
 
@@ -27,13 +29,17 @@ export RAMCLOUD_ARGV="-t $MEMSIZE -h 10%"
 export RAMCLOUD_NARG=5
 
 # used only for RAMCloud
-#FEATURES="extern_ycsb rc"
+#FEATURES="rdrand extern_ycsb rc"
 # used only for MICA
-#FEATURES="extern_ycsb mica"
+#FEATURES="rdrand extern_ycsb mica"
+# for LevelDB
+#FEATURES="rdrand extern_ycsb leveldb"
+# for Masstree
+FEATURES="rdrand extern_ycsb masstree"
 # used only for Nibble
-FEATURES=""
+#FEATURES="rdrand"
 
-# YCSB parameters
+# YCSB parameters R:W
 #  C    size=1kb  1:0  zipfian
 #  B    size=1kb 95:05 zipfian
 #  A    size=1kb 50:50 zipfian
@@ -41,13 +47,7 @@ FEATURES=""
 #
 # and we can also do uniform for each of the above
 
-size=1000
-size=100
-
-#nkeys=$((2**26))
-#size=100
-#nkeys=$((2**30))
-
+# used for changing object sizes (you can ignore)
 SHIFT=0
 
 NSOCKETS=16
@@ -62,28 +62,32 @@ SEC=40
 
 capacity=$MEMSIZE
 
-## # these will be modified
+# these will be modified below
 readpct=0
+size=0
 
 read_mostly() {
     #for dist in uniform zipfian; do
     for dist in uniform; do
 
     #for T in C B; do
-    for T in B; do
+    for T in C; do
 
-    for fill in 30; do
+    for fill in 50; do
 
     for size in 1000; do
 
         echo ''; echo ''
-        #echo "Fill capacity $fill %"
+        echo "Compile features $FEATURES"
+        echo "Memsize $MEMSIZE bytes; Fill capacity $fill %"
 
         # header + key + value
         objsize=$(( 4 + 8 + $size ))
         maxkeys=$(( $capacity / $objsize ))
-        #nkeys=$(( ($maxkeys * $fill) / 100 ))
-        nkeys=$((1<<26))
+
+        nkeys=$(( ($maxkeys * $fill) / 100 ))
+        #nkeys=$((1<<26))
+
         echo "objsize $objsize maxkeys $maxkeys nkeys $nkeys"
 
         [[ $T == "C" ]] && readpct=100
@@ -108,8 +112,8 @@ read_mostly() {
             --time $SEC \
             --cpu incr \
             --size $size \
-            --put local
-            #--shift $SHIFT
+            --put local \
+            --compaction
         echo ''; echo ''
 
     done
@@ -174,6 +178,6 @@ write_mostly() {
     done
 }
 
-read_mostly
+(read_mostly 2>&1) | tee log
 #write_mostly
 
