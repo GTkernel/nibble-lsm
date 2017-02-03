@@ -37,6 +37,23 @@ pub fn rdtscp_id() -> (u32,u32) {
 
 // TODO when RDPID is available, use that instead of RDTSCP
 
+/// Return all data reported by rdtscp as (tsc,sock,core)
+#[inline(always)]
+#[allow(unused_mut)]
+pub unsafe fn rdtscp_all() -> (u64,u32,u32) {
+    let mut low: u32;
+    let mut high: u32;
+    let mut ecx: u32;
+    asm!("rdtscp" : "={eax}" (low),
+                    "={edx}" (high),
+                    "={ecx}" (ecx));
+    (
+        ((high as u64) << 32) | (low as u64),
+        ecx >> 12,
+        ecx & ((1<<12)-1)
+    )
+}
+
 /// Same as calling rdtsc but we internalize the unsafe block
 #[inline(always)]
 pub fn now() -> u64 {
