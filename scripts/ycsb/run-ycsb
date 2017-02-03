@@ -28,16 +28,7 @@ export RAMCLOUD_ARGV="-t $MEMSIZE -h 10%"
 # number of args + 1 (like 'int argc' in C main)
 export RAMCLOUD_NARG=5
 
-# used only for RAMCloud
-#FEATURES="rdrand extern_ycsb rc"
-# used only for MICA
-#FEATURES="rdrand extern_ycsb mica"
-# for LevelDB
-#FEATURES="rdrand extern_ycsb leveldb"
-# for Masstree
-FEATURES="rdrand extern_ycsb masstree"
-# used only for Nibble
-#FEATURES="rdrand"
+# Choose the system (MICA, Nibble, etc.) via FEATURES at bottom.
 
 # YCSB parameters R:W
 #  C    size=1kb  1:0  zipfian
@@ -56,9 +47,10 @@ NCPU=15
 # How long test core should run for.
 SEC=40
 
-######################################################################
+# script to gather system information
+SYSINFO="../sysinfo"
 
-# in MiB
+######################################################################
 
 capacity=$MEMSIZE
 
@@ -66,14 +58,17 @@ capacity=$MEMSIZE
 readpct=0
 size=0
 
-read_mostly() {
+run() {
+    $SYSINFO
+
     #for dist in uniform zipfian; do
-    for dist in uniform; do
+    for dist in zipfian; do
 
     #for T in C B; do
-    for T in C; do
+    for T in C B A W; do
 
-    for fill in 50; do
+    # 12% of 8 TiB is 983 GiB
+    for fill in 12; do
 
     for size in 1000; do
 
@@ -92,63 +87,8 @@ read_mostly() {
 
         [[ $T == "C" ]] && readpct=100
         [[ $T == "B" ]] && readpct=95
-        echo ''; echo ''
-        echo "# $T $dist"
-
-        # MICA environment vars. keep regardless of which KVS we use.
-        # MICA only supports one object size...
-        export MICA_VAL_LEN=$size
-        # Used for creating the hash table.. make large enough
-        export MICA_ITEMS=$((nkeys*2))
-        export MICA_CAPACITY=$capacity
-
-        cargo run --features "$FEATURES" --release --bin ycsb -- \
-            --dist $dist \
-            --readpct $readpct \
-            --records $nkeys \
-            --capacity $capacity \
-            --ops 0 \
-            --threads 1 \
-            --time $SEC \
-            --cpu incr \
-            --size $size \
-            --put local \
-            --compaction
-        echo ''; echo ''
-
-    done
-    done
-    done
-    done
-}
-
-write_mostly() {
-    #for T in A W; do
-    for T in A; do
-
-    #for dist in uniform zipfian; do
-    for dist in uniform; do
-
-    #for fill in 30 60; do
-    for fill in 60; do
-
-    for size in 1000 100; do
-
-        echo ''; echo ''
-        echo "Fill capacity $fill %"
-
-        # header + key + value
-        objsize=$(( 4 + 8 + $size ))
-        maxkeys=$(( $capacity / $objsize ))
-        nkeys=$(( ($maxkeys * $fill) / 100 ))
-        echo "objsize $objsize maxkeys $maxkeys nkeys $nkeys"
-
-
         [[ $T == "A" ]] && readpct=50
         [[ $T == "W" ]] && readpct=0
-        [[ $T == "B" ]] && readpct=95
-
-
         echo ''; echo ''
         echo "# $T $dist"
 
@@ -170,14 +110,32 @@ write_mostly() {
             --cpu incr \
             --size $size \
             --put local \
-            --shift $SHIFT \
             --compaction
+        echo ''; echo ''
+
     done
     done
     done
     done
 }
 
-(read_mostly 2>&1) | tee log
-#write_mostly
+# Other systems don't explicitly use large pages
+echo 'Clearing all 2 MiB page reservations...'
+sudo su -c 'echo 0 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
+
+FEATURES="rdrand extern_ycsb masstree"
+(run 2>&1) | tee log-masstree.out
+
+FEATURES="rdrand extern_ycsb rc"
+(run 2>&1) | tee log-rc.out
+
+# MICA and Nibble need 2MiB pages
+echo 'Creating 2 MiB page reservations...'
+sudo su -c 'echo 5500000 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
+
+FEATURES="rdrand extern_ycsb mica"
+(run 2>&1) | tee log-mica.out
+
+FEATURES="rdrand"
+(run 2>&1) | tee log-nibble.out
 
