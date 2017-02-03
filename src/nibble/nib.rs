@@ -114,7 +114,8 @@ impl Nibble {
         let nitems = ht_nitems; //1usize << 30;
         let n_per  = nitems / ntables;
 
-        assert!(ntables.is_power_of_two());
+        assert!(ntables.is_power_of_two(),
+            "ntables is not power of two: {:?}", ntables);
 
         info!("    sockets:     {}", nnodes);
         info!("   capacity:     {:.2} GiB",
