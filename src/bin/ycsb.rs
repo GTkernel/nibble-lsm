@@ -43,6 +43,7 @@ use std::sync::atomic::*;
 use std::thread::{self,JoinHandle};
 use std::time::{Instant,Duration};
 use std::ptr;
+use std::cmp;
 
 //==----------------------------------------------------------------==
 //  Build-based functions
@@ -308,6 +309,8 @@ impl Zipfian {
 
 impl DistGenerator for Zipfian {
 
+    /// Produce the next number in the sequence. This code generates
+    /// at a rate of 20k numbers per second.
     #[inline(always)]
     fn next(&mut self) -> u32 {
         let u: f64 = unsafe { rdrandq() as f64 } / 
@@ -338,34 +341,22 @@ struct ZipfianArray {
 impl ZipfianArray {
 
     pub fn new(n: u32, s: f64) -> Self {
-        let many = (n*4) as usize;
-        let mut v: Vec<u32> = Vec::with_capacity(many);
+        //let many = (n*4) as usize;
+        // limit how many we use
+        let many = cmp::min( (n*4) as usize, 1usize << 29 ) as u32;
+        info!("zipf: {} items", many);
+        let mut v: Vec<u32> = Vec::with_capacity(many as usize);
         let mut zip = Zipfian::new(n, s);
         for _ in 0..many {
             v.push(zip.next());
         }
-        // Knuth shuffle
+        // 1-pass fisher yates shuffle
         for i in 0..many {
             let r = unsafe { rdrand() };
-            let o = (r as usize % (many-i)) + i;
+            let o = (r % (many-i)) + i;
             v.swap(i as usize, o as usize);
         }
-        ZipfianArray { n: n, upto: None, arr: v, next: 0 }
-    }
-
-    pub fn new_capped(n: u32, s: f64, upto: u32) -> Self {
-        let mut v: Vec<u32> = Vec::with_capacity(upto as usize);
-        let mut zip = Zipfian::new(n, s);
-        for _ in 0..upto {
-            v.push(zip.next());
-        }
-        // Knuth shuffle
-        for i in 0..upto {
-            let r = unsafe { rdrand() };
-            let o = (r % (upto-i)) + i;
-            v.swap(i as usize, o as usize);
-        }
-        ZipfianArray { n: n, upto: Some(upto), arr: v, next: 0 }
+        ZipfianArray { n: many, upto: None, arr: v, next: 0 }
     }
 }
 
@@ -612,9 +603,9 @@ impl WorkloadGenerator {
                     let item: Box<DistGenerator>;
                     item = match self.config.dist {
                         Dist::Zipfian(s) =>
-                            Box::new(ZipfianArray::new_capped(
-                                self.config.records as u32, s,
-                                (self.config.dur as f64*(2f64*4e6)) as u32
+                            Box::new(ZipfianArray::new(
+                                self.config.records as u32, s
+                                //,(self.config.dur as f64*(2f64*4e6)) as u32
                                 )),
                         Dist::Uniform => {
                             let n = self.config.records as u32;
