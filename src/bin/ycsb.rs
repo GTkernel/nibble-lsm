@@ -160,6 +160,19 @@ extern {
     fn extern_kvs_get(key: u64);
 }
 
+// Link against libmasstree.so which is built from
+// https://github.gatech.edu/kernel/masstree.git
+#[link(name = "masstree")]
+#[cfg(feature = "masstree")]
+#[cfg(feature = "extern_ycsb")]
+extern {
+    // must match signatures in libmasstree.cc
+    fn extern_kvs_init();
+    fn extern_kvs_put(key: u64, len: u64, buf: *const u8);
+    fn extern_kvs_del(key: u64);
+    fn extern_kvs_get(key: u64);
+}
+
 #[cfg(feature = "extern_ycsb")]
 fn kvs_init(config: &Config) {
     unsafe {
@@ -169,7 +182,7 @@ fn kvs_init(config: &Config) {
 
 // method interface is the same for RAMCloud and LevelDB's hacks
 // so we reuse it.
-#[cfg(any(feature = "rc", feature = "leveldb"))]
+#[cfg(any(feature = "rc", feature = "leveldb", feature = "masstree"))]
 #[cfg(feature = "extern_ycsb")]
 fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
     // we ignore 'sock' b/c RAMCloud is NUMA-agnostic
@@ -180,7 +193,7 @@ fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
     }
 }
 
-#[cfg(any(feature = "rc", feature = "leveldb"))]
+#[cfg(any(feature = "rc", feature = "leveldb", feature = "masstree"))]
 #[cfg(feature = "extern_ycsb")]
 fn get_object(key: u64) {
     unsafe {
@@ -189,7 +202,7 @@ fn get_object(key: u64) {
     }
 }
 
-#[cfg(any(feature = "rc", feature = "leveldb"))]
+#[cfg(any(feature = "rc", feature = "leveldb", feature = "masstree"))]
 #[cfg(feature = "extern_ycsb")]
 fn del_object(key: u64) {
     unsafe {
@@ -497,14 +510,14 @@ impl WorkloadGenerator {
     }
 
     // sequential insertion (ramcloud)
-    #[cfg(feature = "rc")]
+    #[cfg(any(feature = "rc", feature = "leveldb"))]
     #[cfg(feature = "extern_ycsb")]
     pub fn setup(&mut self) {
         self.__setup(false);
     }
 
-    // parallel insertion (nibble, mica)
-    #[cfg(any(feature = "mica", not(feature = "extern_ycsb")))]
+    // parallel insertion (nibble, mica, others..)
+    #[cfg(any(feature = "mica", feature = "masstree", not(feature = "extern_ycsb")))]
     pub fn setup(&mut self) {
         self.__setup(true);
     }
