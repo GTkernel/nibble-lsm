@@ -228,7 +228,7 @@ fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
                 match r {
                     111 => println!("MICA failed to insert in table"),
                     112 => println!("MICA failed to insert in heap"),
-                    _ => prinltn!("MICA failed with unknown: {}", ret),
+                    _ => println!("MICA failed with unknown: {}", ret),
                 }
                 unsafe { intrinsics::abort(); }
             },
