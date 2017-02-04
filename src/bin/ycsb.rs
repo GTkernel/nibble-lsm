@@ -449,7 +449,7 @@ impl WorkloadGenerator {
                     let item: Box<DistGenerator>;
                     item = match self.config.dist {
                         Dist::Zipfian(s) =>
-                            Box::new(ZipfianArray::new(
+                            Box::new(Zipfian::new(
                                 self.config.records as u32, s
                                 //,(self.config.dur as f64*(2f64*4e6)) as u32
                                 )),
@@ -904,7 +904,22 @@ fn main() {
     // or user-defined if you omit --ycsb
     // --records --size --readpct --dist --capacity --ops
 
+    println!("NOTE -- THIS CODE VERSION IGNORES MANY CMD PARAMS");
+
     let mut gen = WorkloadGenerator::new(config);
     gen.setup();
-    gen.run();
+
+    // filling the db takes a long time (20-60 minutes!)
+    // so we reuse it across runs
+    let dists: Vec<Dist> = vec![Dist::Uniform, Dist::Zipfian(0.99)];
+    let readpct: Vec<usize> = vec![100,95,50,0];
+    for d in &dists {
+        gen.config.dist = *d;
+        info!("Distribution: {:?}", d);
+        for r in &readpct {
+            info!("Read PCT: {:?}", r);
+            gen.config.read_pct = *r;
+            gen.run();
+        }
+    }
 }

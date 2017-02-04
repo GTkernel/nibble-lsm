@@ -64,8 +64,8 @@ run() {
     #for dist in uniform zipfian; do
     for dist in zipfian; do
 
-    #for T in C B; do
-    for T in C B A W; do
+    #for T in C B A W; do
+    for T in C; do
 
     # 12% of 8 TiB is 983 GiB
     for fill in 12; do
@@ -90,7 +90,7 @@ run() {
         [[ $T == "A" ]] && readpct=50
         [[ $T == "W" ]] && readpct=0
         echo ''; echo ''
-        echo "# $T $dist"
+        #echo "# $T $dist"
 
         # MICA environment vars. keep regardless of which KVS we use.
         # MICA only supports one object size...

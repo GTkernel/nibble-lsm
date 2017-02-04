@@ -117,7 +117,6 @@ impl ZipfianArray {
         //let many = (n*4) as usize;
         // limit how many we use
         let many = cmp::min( (n*4) as usize, 1usize << 29 ) as u32;
-        info!("zipf: {} items", many);
         let mut v: Vec<u32> = Vec::with_capacity(many as usize);
         let mut zip = Zipfian::new(n, s);
         for _ in 0..many {
