@@ -15,5 +15,6 @@ pub mod clock;
 pub mod tlock;
 pub mod hashtable;
 pub mod chase_lev;
+pub mod distributions;
 
 pub mod logger;
