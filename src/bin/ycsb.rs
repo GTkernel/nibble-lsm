@@ -231,7 +231,7 @@ fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
                     112 => println!("MICA failed to insert in heap"),
                     _ => println!("MICA failed with unknown: {}", ret),
                 }
-                unsafe { intrinsics::abort(); }
+                //unsafe { intrinsics::abort(); }
             },
         }
     }
@@ -244,7 +244,7 @@ fn get_object(key: u64) {
         trace!("GET {:x}", key);
         if !extern_kvs_get(key) {
             println!("GET failed on key 0x{:x}", key);
-            unsafe { intrinsics::abort(); }
+            //unsafe { intrinsics::abort(); }
         }
         //assert!( extern_kvs_get(key),
             //"GET failed on key 0x{:x}", key);
