@@ -122,7 +122,7 @@ fn shuffle<T: num::Integer>(vec: &mut Vec<T>) {
 /// Generate 32-bit random numbers via the CPU's rdrand instruction.
 #[inline(always)]
 #[allow(unused_mut)]
-#[cfg(rand="rdrand")]
+#[cfg(feature="rdrand")]
 pub unsafe fn rdrand() -> u32 {
     let mut r: u32;
     let mut eflags: u8;
@@ -144,7 +144,7 @@ pub unsafe fn rdrand() -> u32 {
 /// Generate 64-bit random numbers via the CPU's rdrand instruction.
 #[inline(always)]
 #[allow(unused_mut)]
-#[cfg(rand="rdrand")]
+#[cfg(feature="rdrand")]
 pub unsafe fn rdrandq() -> u64 {
     let mut r: u64;
     let mut eflags: u8;
@@ -165,7 +165,7 @@ pub unsafe fn rdrandq() -> u64 {
 
 /// Slower and potentially less-scalable method for
 /// random number generation using urandom.
-#[cfg(not(rand="rdrand"))]
+#[cfg(not(feature="rdrand"))]
 pub unsafe fn rdrand() -> u32 {
     let mut rng = rand::thread_rng();
     rng.gen::<u32>()
@@ -173,7 +173,7 @@ pub unsafe fn rdrand() -> u32 {
 
 /// Slower and potentially less-scalable method for
 /// random no. generation.
-#[cfg(not(rand="rdrand"))]
+#[cfg(not(feature="rdrand"))]
 pub unsafe fn rdrandq() -> u64 {
     let mut rng = rand::thread_rng();
     rng.gen::<u64>()
