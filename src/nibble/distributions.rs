@@ -1,4 +1,9 @@
+/// This code ported from the YCSB tool in the file
+///    core/src/main/java/com/yahoo/ycsb/generator/ZipfianGenerator.java
+/// found at https://github.com/brianfrankcooper/YCSB
+
 use common::{rdrand, rdrandq};
+
 use std::cmp;
 
 pub trait DistGenerator {
@@ -19,6 +24,7 @@ pub struct Zipfian {
 }
 
 impl Zipfian {
+
     pub fn new(n: u32, s: f64) -> Self {
         let mut z = Zipfian {
             items: n as i64,
@@ -29,7 +35,7 @@ impl Zipfian {
             alpha: 1f64/(1f64-s),
             zetan: 0f64,
             countforzeta: n as i64,
-            eta: 0f64,
+            eta: 0f64
         };
         let t = z.theta; // FIXME Rust needs non-lexical lifetimes
         z.zeta2theta = z.zeta1(2, t);
@@ -92,10 +98,12 @@ impl Zipfian {
 }
 
 impl DistGenerator for Zipfian {
+
     fn next(&mut self) -> u32 {
         let i = self.items; // need NLL
         self.nextLong(i) as u32
     }
+
     fn reset(&mut self) { }
 }
 
@@ -108,7 +116,7 @@ pub struct ZipfianArray {
     /// duration of the experiment.
     upto: Option<u32>,
     arr: Vec<u32>,
-    next: u32,
+    next: u32
 }
 
 impl ZipfianArray {
@@ -143,6 +151,7 @@ impl DistGenerator for ZipfianArray {
         }
         self.arr[self.next as usize] as u32
     }
+
     fn reset(&mut self) {
         self.next = 0;
     }
@@ -161,17 +170,6 @@ impl Uniform {
         let mut v = vec![];
         Uniform { n: n, arr: v, next: 0 }
     }
-
-    /// use pre-computed array of values
-    #[cfg(IGNORE)]
-    pub fn new(n: u32) -> Self {
-        let mut v: Vec<u32> = Vec::with_capacity(n as usize);
-        for x in 0..n {
-            v.push(x as u32);
-        }
-        common::shuffle(&mut v);
-        Uniform { n: n, arr: v, next: 0 }
-    }
 }
 
 impl DistGenerator for Uniform {
@@ -180,14 +178,6 @@ impl DistGenerator for Uniform {
     #[inline(always)]
     fn next(&mut self) -> u32 {
         (unsafe { rdrand() } % (self.n+1)) as u32
-    }
-
-    /// use pre-computed array of values
-    #[cfg(IGNORE)]
-    #[inline(always)]
-    fn next(&mut self) -> u32 {
-        self.next = (self.next + 1) % self.n;
-        self.arr[self.next as usize]
     }
 
     fn reset(&mut self) {

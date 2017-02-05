@@ -450,9 +450,7 @@ impl WorkloadGenerator {
                     item = match self.config.dist {
                         Dist::Zipfian(s) =>
                             Box::new(Zipfian::new(
-                                self.config.records as u32, s
-                                //,(self.config.dur as f64*(2f64*4e6)) as u32
-                                )),
+                                self.config.records as u32, s)),
                         Dist::Uniform => {
                             let n = self.config.records as u32;
                             Box::new( Uniform::new(n) )
