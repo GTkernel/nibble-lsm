@@ -6,3 +6,4 @@ src/libcuckoo.so
 core*
 benches/cuckoo.o
 benches/cuckoo
+.DS_Store
