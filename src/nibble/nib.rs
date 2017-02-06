@@ -292,6 +292,7 @@ impl Nibble {
         self.index.get(key).is_some()
     }
 
+    /// FIXME why don't we return the length... ?
     #[inline(always)]
     pub fn get_object(&self, key: u64, buf: &mut [u8]) -> Status {
         meta::pin();
@@ -353,6 +354,7 @@ impl Nibble {
     // NOTE: this is only used for the shuffle benchmark for now.
     // It will block if key already exists, and fail if key wasn't
     // able to insert, or was an update
+    #[cfg(IGNORE)]
     pub fn alloc(&self, key: u64, len: u64, sock: u32) -> Pointer<u8> {
         // meta::pin();
         let va: usize;
@@ -383,6 +385,7 @@ impl Nibble {
     }
 
     // Delete key from index.
+    #[cfg(IGNORE)]
     pub fn free(&self, key: u64) -> bool {
         // we need to pin the epoch, because we use the VA to lookup
         // the containing segment
