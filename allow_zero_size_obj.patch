@@ -1,0 +1,230 @@
+diff --git a/src/nibble/compaction.rs b/src/nibble/compaction.rs
+index 28c194c..d0fe556 100644
+--- a/src/nibble/compaction.rs
++++ b/src/nibble/compaction.rs
+@@ -629,15 +629,16 @@ impl Worker {
+             let mut n = 0usize;
+             for entry in dirt.into_iter() {
+                 let key: u64 = unsafe { entry.get_key() };
++                let flags: u8 = 0; // object size is >0
+ 
+                 let va = new.headref() as u64;
+-                let ientry_new = merge(socket as u16, va as u64);
++                let ientry_new = merge(flags, socket as u8, va as u64);
+ 
+                 // Lock the object while we relocate.  If object
+                 // doesn't exist or it points to another location
+                 // (i.e. it is stale), we skip it.
+                 let old = entry.get_loc() as u64;
+-                let ientry_old = merge(socket as u16, old as u64);
++                let ientry_old = merge(flags, socket as u8, old as u64);
+ 
+                 if let Some(lock) = self.index
+                     .update_lock_ifeq(key,ientry_new,ientry_old) {
+diff --git a/src/nibble/index.rs b/src/nibble/index.rs
+index 480a06f..d9542cb 100644
+--- a/src/nibble/index.rs
++++ b/src/nibble/index.rs
+@@ -15,20 +15,33 @@ use sched;
+ pub type IndexRef = Arc<Index>;
+ 
+ /// Fat pointer as the value in every index entry.
+-/// | Allocator ID | Virtual Address |
+-///     16 bits     48 bits
++/// | Flags | Allocator ID | Virtual Address |
++///   8 bits    8 bits          48 bits
++///
++/// If an object has length of zero bytes, then flags > 0, allocator ID
++/// and the virtual address are zero (0x0).
++///
++/// Zero-length objects do NOT exist in the logs.
++/// We currently assume flags is only used for this.
++/// Compaction logic will assume that if there is an object it sees
++/// in a segment, its size will be non-zero.
++/// TODO cleanup hard-coding of flag values
+ pub type IndexEntry = u64;
+ 
+ /// Decompose an IndexEntry
+ #[inline(always)]
+-pub fn extract(entry: IndexEntry) -> (u16,u64) {
+-    ( (entry >> 48) as u16, entry & ((1u64<<48)-1) )
++pub fn extract(entry: IndexEntry) -> (u8,u8,u64) {
++    ( ((entry >> 56) & 0xff) as u8,
++        ((entry >> 48) & 0xff) as u8,
++        entry & ((1u64<<48)-1) )
+ }
+ 
+ /// Create an index entry from the Socket ID and virtual address
+ #[inline(always)]
+-pub fn merge(socket: u16, va: u64) -> IndexEntry {
+-    ((socket as u64) << 48) | (va & ((1u64<<48)-1))
++pub fn merge(flags: u8, socket: u8, va: u64) -> IndexEntry {
++    ( ((flags as u64) << 56)
++    | (socket as u64) << 48)
++    | (va & ((1u64<<48)-1))
+ }
+ 
+ /// Index structure that allows us to retreive objects from the log.
+diff --git a/src/nibble/nib.rs b/src/nibble/nib.rs
+index 7141148..a06462f 100644
+--- a/src/nibble/nib.rs
++++ b/src/nibble/nib.rs
+@@ -211,7 +211,8 @@ impl Nibble {
+     #[inline(always)]
+     fn __put(&self, obj: &ObjDesc, hint: PutPolicy) -> Status {
+         meta::pin();
+-        let va: usize;
++        let mut va: usize = 0;
++        let flags: u8;
+ 
+         let socket: usize = match hint {
+             PutPolicy::Specific(id) => id,
+@@ -227,33 +228,44 @@ impl Nibble {
+         // 1. add object to log
+         // FIXME if full for this socket, should we attempt to append
+         // elsewhere?
+-        match self.nodes[socket].log.append(obj) {
+-            Err(code) => {
+-                meta::quiesce();
+-                return Err(code);
+-            },
+-            Ok(v) => va = v,
++        if obj.vlen > 0 {
++            match self.nodes[socket].log.append(obj) {
++                Err(code) => {
++                    meta::quiesce();
++                    return Err(code);
++                },
++                Ok(v) => va = v,
++            }
++            flags = 0u8; // non-zero object length
++        } else {
++            // zero-length object doesn't go in the log
++            // and 'socket' is ignored
++            flags = 1u8;
+         }
+-        let ientry = merge(socket as u16, va as u64);
+-        trace!("key {} va 0x{:x} ientry 0x{:x}",
+-               obj.getkey(), va, ientry);
++        let ientry = merge(flags, socket as u8, va as u64);
++        let key = obj.getkey();
++        trace!("key {} flags 0x{:x} sock 0x{:x} va 0x{:x} = ientry 0x{:x}",
++               key, flags, socket, va, ientry);
+ 
+         // 2. add to index; if we are updating it, remove live state from
+         // prior segment. running a lambda while we hold the item's
+         // lock avoids race conditions with the cleaner
+ 
+-        let key = obj.getkey();
+         let ok: bool = self.index.update_map(key, ientry as u64, |old| {
+             // decrement live size of segment if we overwrite object
+             // old=None if this was an insertion
+             if let Some(ientry) = old {
+-                let (socket,va) = extract(ientry);
+-                let node = &self.nodes[socket as usize];
+-                let idx: usize = node.manager.segment_of(va as usize);
+-                let head = node.log.copy_header(va as usize);
+-                // decrement live bytes
+-                self.nodes[socket as usize].seginfo
+-                    .decr_live(idx, head.len_with_header());
++                let (flags_,sock_,va_) = extract(ientry);
++                // check if old entry indicates object had non-zero length
++                // (flags_ = 0 means object was non-zero)
++                if flags_ == 0u8 {
++                    let node = &self.nodes[sock_ as usize];
++                    let idx: usize = node.manager.segment_of(va_ as usize);
++                    let head = node.log.copy_header(va_ as usize);
++                    // decrement live bytes
++                    self.nodes[sock_ as usize].seginfo
++                        .decr_live(idx, head.len_with_header());
++                }
+             }
+         });
+         if !ok {
+@@ -292,6 +304,7 @@ impl Nibble {
+         self.index.get(key).is_some()
+     }
+ 
++    /// FIXME why don't we return the length... ?
+     #[inline(always)]
+     pub fn get_object(&self, key: u64, buf: &mut [u8]) -> Status {
+         meta::pin();
+@@ -301,7 +314,7 @@ impl Nibble {
+             None => return Err(ErrorCode::KeyNotExist),
+             Some(entry) => entry,
+         };
+-        let (socket,va) = extract(ientry);
++        let (flags,socket,va) = extract(ientry);
+ 
+         //prefetch(va as *const usize as *const u8);
+         //prefetchw(buf.as_ptr());
+@@ -309,9 +322,11 @@ impl Nibble {
+         //trace!("GET key 0x{:x} ientry 0x{:x} -> socket 0x{:x} va 0x{:x}",
+                //key, ientry, socket, va);
+ 
+-        // 2. ask Log to give us the object
+-        self.nodes[socket as usize]
+-            .log.get_entry(va as usize, buf);
++        // 2. ask Log to give us the object if it has non-zero length
++        if flags == 0u8 {
++            self.nodes[socket as usize]
++                .log.get_entry(va as usize, buf);
++        }
+ 
+         meta::quiesce();
+         Ok(1)
+@@ -328,16 +343,19 @@ impl Nibble {
+             },
+             Some(entry) => entry,
+         };
+-        let (socket,va) = extract(ientry);
+-
+-        // 2. read the size of the object
+-        let node = &self.nodes[socket as usize];
+-        let head = node.log.copy_header(va as usize);
+-
+-        // 3. decrement live size of segment
+-        let idx: usize = node.manager.segment_of(va as usize);
+-        self.nodes[socket as usize].seginfo
+-            .decr_live(idx, head.len_with_header());
++        let (flags,socket,va) = extract(ientry);
++
++        // if object has non-zero lengths (flags == 0)
++        if flags == 0u8 {
++            // 2. read the size of the object
++            let node = &self.nodes[socket as usize];
++            let head = node.log.copy_header(va as usize);
++
++            // 3. decrement live size of segment
++            let idx: usize = node.manager.segment_of(va as usize);
++            self.nodes[socket as usize].seginfo
++                .decr_live(idx, head.len_with_header());
++        }
+ 
+         meta::quiesce();
+         Ok(1)
+@@ -353,6 +371,7 @@ impl Nibble {
+     // NOTE: this is only used for the shuffle benchmark for now.
+     // It will block if key already exists, and fail if key wasn't
+     // able to insert, or was an update
++    #[cfg(IGNORE)]
+     pub fn alloc(&self, key: u64, len: u64, sock: u32) -> Pointer<u8> {
+         // meta::pin();
+         let va: usize;
+@@ -383,6 +402,7 @@ impl Nibble {
+     }
+ 
+     // Delete key from index.
++    #[cfg(IGNORE)]
+     pub fn free(&self, key: u64) -> bool {
+         // we need to pin the epoch, because we use the VA to lookup
+         // the containing segment
+@@ -557,7 +577,7 @@ mod tests {
+         let opt = nib.index.get(key);
+         assert!(opt.is_some(), "key {:x} not in index", key);
+         let ientry: index::IndexEntry = opt.unwrap();
+-        let (socket,va) = index::extract(ientry);
++        let (_,socket,va) = index::extract(ientry);
+         let socket = socket as usize;
+ 
+         // associate with segment and return
