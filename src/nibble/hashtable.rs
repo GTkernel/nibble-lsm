@@ -593,8 +593,7 @@ impl HashTable {
 
             let (e,inv) = opts;
             if e.is_none() {
-                info!("key {} not found after locking bucket!",
-                      key);
+                trace!("DEL: key {} not found after locking bucket!", key);
                 return false;
             }
 
