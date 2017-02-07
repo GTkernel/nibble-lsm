@@ -94,7 +94,7 @@ impl WorkloadGenerator {
 	fn __setup(&mut self, parallel: bool) -> Result<(),String> {
 		let now = Instant::now();
 
-		let mut items: Vec< (u64,u64) > = Vec::with_capacity(1usize<<30);
+		let mut items: Vec< (u64,u64) > = Vec::with_capacity(1usize<<34);
 		info!("Allocating load trace {} seconds", now.elapsed().as_secs());
 		let now = Instant::now();
 
@@ -124,7 +124,7 @@ impl WorkloadGenerator {
             if size > 0 {
     	        items.push( (key,size) );
                 key += 1;
-                if 0 == (items.len() % 10_000_000_usize) {
+                if 0 == (items.len() % 50_000_000_usize) {
                     info!("Read {} mil. objects...",
                         items.len() / 1_000_000usize);
                 }
@@ -337,9 +337,10 @@ fn main() {
 	let config = Config {
 		load_path:  String::from("fb_etc_load.in" ),
 		trace_path: String::from("fb_etc_trace.in"),
-		total: 1_usize << 35, // 8 TiB total memory to reserve
+		total: 8_usize << 40, // 8 TiB total memory to reserve
 		records: 0, // will be set after reading load_path
 	};
+	info!("Specified (.records will be updated) {:?}", self.config);
 	let mut gen = WorkloadGenerator::new(config);
 	gen.setup();
 	gen.run();

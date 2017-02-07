@@ -35,7 +35,7 @@ pub struct Trace {
 impl Trace {
 
     pub fn new(path: &str) -> Self {
-        let mut t = Trace { n: 0_u32, rec: Vec::with_capacity(1usize<<30) };
+        let mut t = Trace { n: 0_u32, rec: Vec::with_capacity(1usize<<36) };
         if let Err(msg) = t.read_trace(path) {
             panic!("Error reading or parsing trace file {}: {}",
                 path, msg);
@@ -77,11 +77,14 @@ impl Trace {
             let key = match iter.next() {
                 None => return Err( "Line has no key" ),
                 Some(k) => match u64::from_str_radix(k, 10) {
-                    Ok(v) => v,
+                    // +1 to ensure no key is zero
+                    Ok(v) => v + 1,
                     Err(e) => return Err( "Key is non-numeric" ),
                 },
             };
+
             assert!(key > 0, "keys cannot be zero");
+
             let op = match iter.next() {
                 None => return Err( "Line missing 2nd column" ),
                 Some(o) => match o {
