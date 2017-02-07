@@ -13,6 +13,7 @@ extern crate num;
 extern crate crossbeam;
 extern crate parking_lot as pl;
 
+#[macro_use]
 extern crate nibble;
 
 use nibble::distributions::*;
@@ -49,16 +50,27 @@ use std::collections::VecDeque;
 
 use std::str::FromStr;
 
-/// Largest object we'll accept onto the stack. Larger objects must
-/// use a heap-allocated region.
-pub const KEYSIZE_STACK: usize = 1usize << 12;
+//////////////////////////////////////////////////////////////////////
+// User-configurable options
+//
 
 /// XXX Make sure whatever buffer is used for receiving and inserting objects
 /// is consistent across systems, e.g. stack, or heap, etc.
 pub const MAX_KEYSIZE: usize = 1usize << 25;
 
 /// How long to run the experiment before halting.
-pub const RUNTIME: usize = 40;
+pub const RUNTIME: usize = 20;
+
+/// Total memory to pre-allocate for MICA, Nibble, RAMCloud, etc.
+/// Should match what is in the scripts/trace/run-trace script.
+pub const MAX_MEMSIZE: usize = 8usize << 40;
+
+pub const LOAD_FILE:  &'static str = "fb_etc_load.in";
+pub const TRACE_FILE: &'static str = "fb_etc_trace.in";
+
+//
+// END of user-configurable options
+//////////////////////////////////////////////////////////////////////
 
 #[cfg(not(feature = "extern_ycsb"))]
 static mut NIBBLE: Pointer<Nibble> = Pointer(0 as *const Nibble);
@@ -129,6 +141,11 @@ impl WorkloadGenerator {
                         items.len() / 1_000_000usize);
                 }
             }
+            // XXX remove me
+            //if items.len() > 100_000_000 {
+            //    println!("LIMITING OBJ TO 100mil.");
+            //    break;
+            //}
 		}
 		let items = items; // make immutable to share among threads
 		info!("Reading file {} seconds. {} keys",
@@ -145,7 +162,7 @@ impl WorkloadGenerator {
 			let per_thread = items.len() / threads;
 			let ncpus = numa::NODE_MAP.ncpus();
 
-			info!("Setup; inserting objects with {} threads...", threads);
+			info!("Inserting objects with {} threads...", threads);
 
 			// pin threads round-robin across sockets
 			// use the first 'n' threads on each socket
@@ -205,7 +222,7 @@ impl WorkloadGenerator {
 		// single-threaded insertion
 		// meant mainly for ramcloud (which ignores the socket parameter)
 		else {
-            info!("Setup; inserting objects with 1 thread...");
+            info!("Inserting objects with 1 thread...");
 			let value = memory::allocate::<u8>(MAX_KEYSIZE);
 			let v = Pointer(value as *const u8);
 
@@ -215,7 +232,7 @@ impl WorkloadGenerator {
 			unsafe { memory::deallocate(value, MAX_KEYSIZE); }
 		}
 
-		info!("Setup; {} seconds elapsed", now.elapsed().as_secs());
+		info!("Setup took {} seconds", now.elapsed().as_secs());
 
 		Ok( () )
 	}
@@ -238,7 +255,7 @@ impl WorkloadGenerator {
 	pub fn run(&mut self) {
         let t = Instant::now();
 		let trace = Trace::new2(&self.config.trace_path);
-        info!("Run; {} seconds elapsed", t.elapsed().as_secs());
+        info!("Trace loaded in {} seconds", t.elapsed().as_secs());
 
 		let threadcount: Vec<usize>;
 		let sockets = numa::NODE_MAP.sockets();
@@ -264,8 +281,7 @@ impl WorkloadGenerator {
 			debug!("offsets: {:?}", offsets);
 			let offsets = pl::Mutex::new(offsets);
 
-            let op_count = AtomicUsize::new(0);
-            let now = Instant::now();
+            let throughput = AtomicUsize::new(0);
 
 			let mut guards = vec![];
 			crossbeam::scope( |scope| {
@@ -289,28 +305,54 @@ impl WorkloadGenerator {
 							Some(o) => o,
 						};
 
+                        let mut now = Instant::now();
                         let mut nops = 0_usize;
+                        let mut first = true; // iteration
+
 						let from = offset;
 						let to   = offset + per_thread;
 						let s    = &trace.rec[from..to];
-						for entry in s {
-							if entry.size as usize > MAX_KEYSIZE {
-								panic!("key size {} > max keysize {}",
-									entry.size, MAX_KEYSIZE);
-							}
-                            // assert!(entry.key > 0, "zero key found");
-							match entry.op {
-								Op::Get => get_object(entry.key as u64),
-								Op::Del => del_object(entry.key as u64),
-								Op::Set =>
-									put_object(entry.key as u64, v,
-										entry.size as usize, sock.0),
-							}
+                        let mut iter = s.iter();
+                        'outer: loop {
+                            for _ in 0..600_000 {
+                                let entry = match iter.next() {
+                                    None => { // restart
+                                        iter = s.iter();
+                                        continue 'outer;
+                                    },
+                                    Some(e) => e,
+                                };
+                                let too_big = entry.size as usize > MAX_KEYSIZE;
+                                if unlikely!(too_big) {
+                                    panic!("key size {} > max keysize {}",
+                                           entry.size, MAX_KEYSIZE);
+                                }
+                                // assert!(entry.key > 0, "zero key found");
+                                match entry.op {
+                                    Op::Get => get_object(entry.key as u64),
+                                    Op::Del => del_object(entry.key as u64),
+                                    Op::Set =>
+                                        put_object(entry.key as u64, v,
+                                                   entry.size as usize, sock.0),
+                                }
+                                nops += 1;
+                            }
+                            let t = now.elapsed().as_secs() as usize;
+                            if t > RUNTIME {
+                                // skip first RUNTIME seconds of measurements
+                                if first {
+                                    first = false;
+                                    now = Instant::now();
+                                    nops = 0;
+                                    continue 'outer;
+                                }
+                                let th = (nops as f64 / t as f64) as usize;
+                                info!("thread throughput {}", th);
+                                throughput.fetch_add( th as usize, Ordering::SeqCst );
+                                break 'outer;
+                            }
 						}
-                        nops += per_thread;
 						unsafe { memory::deallocate(value, MAX_KEYSIZE); }
-
-                        op_count.fetch_add(nops,Ordering::SeqCst);
 					});
 					guards.push(guard);
 
@@ -320,12 +362,8 @@ impl WorkloadGenerator {
 
 			}); // crossbeam
 
-            let total = op_count.load(Ordering::SeqCst);
-            let sec: f64 = {
-                let el = now.elapsed();
-                el.as_secs() as f64 + el.subsec_nanos() as f64 / 1000_000_000f64
-            };
-            println!("total ops/sec {}", (total as f64 / sec) as usize);
+            let total = throughput.load(Ordering::SeqCst);
+            println!("total ops/sec {}", total);
 
         } // for each set of threads
 	}
@@ -335,12 +373,12 @@ fn main() {
     logger::enable();
 
 	let config = Config {
-		load_path:  String::from("fb_etc_load.in" ),
-		trace_path: String::from("fb_etc_trace.in"),
-		total: 8_usize << 40, // 8 TiB total memory to reserve
+		load_path:  String::from(LOAD_FILE),
+		trace_path: String::from(TRACE_FILE),
+		total: MAX_MEMSIZE,
 		records: 0, // will be set after reading load_path
 	};
-	info!("Specified (.records will be updated) {:?}", self.config);
+	info!("Specified (.records will be updated) {:?}", config);
 	let mut gen = WorkloadGenerator::new(config);
 	gen.setup();
 	gen.run();

@@ -64,6 +64,7 @@ impl Trace {
     ///
     /// Lines starting exactly with '#' will be skipped.
     fn read_trace(&mut self, path: &str) -> Result<(),&str> {
+        info!("Loading trace file...");
         let file = match File::open(path) {
             Ok(f) => f,
             Err(e) => return Err( "Cannot open file" ),
@@ -104,8 +105,20 @@ impl Trace {
                     },
                 },
             };
-            if size > 0 {
-                self.rec.push( Entry::new(key,op,size) );
+            match op {
+                Op::Get | Op:: Del =>
+                    self.rec.push( Entry::new(key,op,size) ),
+                Op::Set => if size > 0 {
+                    self.rec.push( Entry::new(key,op,size) );
+                },
+            }
+            // XXX remove me
+            //if self.rec.len() > 200_000_000 {
+            //    println!("LIMITING TRACE TO 200mil.");
+            //    break;
+            //}
+            if 0 == (self.rec.len() % 100_000_000) {
+                info!("Loaded {} entries", self.rec.len());
             }
         }
         Ok( () )
