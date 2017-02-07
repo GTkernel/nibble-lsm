@@ -3,6 +3,7 @@ use std::io::{self, BufReader};
 use std::io::prelude::*;
 use std::collections::VecDeque;
 use std::intrinsics;
+use std::str::FromStr;
 
 #[derive(Debug)]
 pub enum Op {
@@ -11,14 +12,14 @@ pub enum Op {
 
 #[derive(Debug)]
 pub struct Entry {
-    key: u32,
-    size: u32,
-    op: Op,
+    pub key: u64,
+    pub size: u32,
+    pub op: Op,
 }
 
 impl Entry {
 
-    pub fn new(key: u32, op: Op, size: u32) -> Self {
+    pub fn new(key: u64, op: Op, size: u32) -> Self {
         Entry { key: key, op: op, size: size }
     }
 }
@@ -26,21 +27,25 @@ impl Entry {
 /// Object used to read in a PUT/GET/DEL trace from a file.
 pub struct Trace {
     /// number of entries stored in the trace
-    n: u32,
+    pub n: u32,
     /// if operation is Get or Set, value size is irrelevant
-    rec: VecDeque<Entry>
+    pub rec: Vec<Entry>
 }
 
 impl Trace {
 
     pub fn new(path: &str) -> Self {
-        let mut t = Trace { n: 0u32, rec: VecDeque::with_capacity(1usize<<20) };
-        if t.read_trace(path).is_err() {
-            println!("Error reading or parsing trace file {}", path);
-            unsafe { intrinsics::abort(); }
+        let mut t = Trace { n: 0_u32, rec: Vec::with_capacity(1usize<<30) };
+        if let Err(msg) = t.read_trace(path) {
+            panic!("Error reading or parsing trace file {}: {}",
+                path, msg);
         }
         t.n = t.rec.len() as u32;
         t
+    }
+
+    pub fn new2(path: &String) -> Self {
+        Trace::new(path.as_str())
     }
 
     pub fn print(&self) {
@@ -58,10 +63,10 @@ impl Trace {
     /// val size:    (na|[0-9]+)     'na' or unsigned long
     ///
     /// Lines starting exactly with '#' will be skipped.
-    fn read_trace(&mut self, path: &str) -> Result<(),()> {
+    fn read_trace(&mut self, path: &str) -> Result<(),&str> {
         let file = match File::open(path) {
             Ok(f) => f,
-            Err(e) => return Err( () ),
+            Err(e) => return Err( "Cannot open file" ),
         };
         let file = BufReader::new(file);
         for line in file.lines() {
@@ -70,32 +75,35 @@ impl Trace {
             if line.starts_with("#") { continue; }
             let mut iter = line.split_whitespace();
             let key = match iter.next() {
-                None => return Err( () ),
-                Some(k) => match u32::from_str_radix(k, 10) {
+                None => return Err( "Line has no key" ),
+                Some(k) => match u64::from_str_radix(k, 10) {
                     Ok(v) => v,
-                    Err(e) => return Err( () ),
+                    Err(e) => return Err( "Key is non-numeric" ),
                 },
             };
+            assert!(key > 0, "keys cannot be zero");
             let op = match iter.next() {
-                None => return Err( () ),
+                None => return Err( "Line missing 2nd column" ),
                 Some(o) => match o {
                     "get" => Op::Get,
                     "set" => Op::Set,
                     "del" => Op::Del,
-                    _ => return Err( () ),
+                    _ => return Err( "Unknown operation" ),
                 },
             };
             let size = match iter.next() {
-                None => return Err( () ),
+                None => return Err( "Line missing 3rd column" ),
                 Some(s) => match s {
                     "na" => 0u32,
-                    _ => match u32::from_str_radix(s, 10) {
-                        Ok(v) => v,
-                        Err(e) => return Err( () ),
+                    _ => match f64::from_str(s) {
+                        Ok(v) => v as u32,
+                        Err(e) => return Err( "Size is non-numeric" ),
                     },
                 },
             };
-            self.rec.push_back( Entry::new(key,op,size) );
+            if size > 0 {
+                self.rec.push( Entry::new(key,op,size) );
+            }
         }
         Ok( () )
     }
