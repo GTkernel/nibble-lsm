@@ -2,13 +2,15 @@
 set -u
 
 # in bytes
-MEMSIZE=$((8*(1<<40)))
+MEMSIZE=$((2*(1<<40)))
 
-NKEYS=12000000000
+NKEYS=5000000000
 
 export NIBDEBUG=3
 
-export RAMCLOUD_ARGV="-t $MEMSIZE -h 10%"
+# RAMCloud accepts this value in MiB
+export RCMEM=$((MEMSIZE/1024/1024))
+export RAMCLOUD_ARGV="-t $RCMEM -h 10%"
 # number of args + 1 (like 'int argc' in C main)
 export RAMCLOUD_NARG=5
 
@@ -31,33 +33,41 @@ run() {
     # MICA environment vars. keep regardless of which KVS we use.
     # MICA only supports one object size...
     # FIXME is this used anymore??
-    #export MICA_VAL_LEN=$size
-
-    # Used for creating the hash table.. make large enough
-    export MICA_ITEMS=$((NKEYS*2))
-    export MICA_CAPACITY=$capacity
+    #MICA_VAL_LEN=$size
 
     cargo run --features "$FEATURES" --release --bin trace
     echo ''; echo ''
 }
 
-# Other systems don't explicitly use large pages
+##  # Other systems don't explicitly use large pages
 ##  echo 'Clearing all 2 MiB page reservations...'
 ##  sudo su -c 'echo 0 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
 
 ##  FEATURES="rdrand extern_ycsb masstree"
 ##  (run 2>&1) | tee -a log-masstree.out
 
-##  FEATURES="rdrand extern_ycsb rc"
-##  (run 2>&1) | tee -a log-rc.out
+##  export FEATURES="rdrand extern_ycsb rc"
+##  export RAMCLOUD_NCONTEXTS=1
+##  # OMP threads are only for speeding up the initialization
+##  export OMP_NUM_THREADS=256
+##  (run 2>&1) | tee -a log-rc-1.out
 
-# MICA and Nibble need 2MiB pages
-echo 'Creating 2 MiB page reservations...'
-sudo su -c 'echo 4700000 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
+##  export FEATURES="rdrand extern_ycsb rc"
+##  export RAMCLOUD_NCONTEXTS=240
+##  # limit OMP to 1 thread; library spawns many, so has same effect
+##  export OMP_NUM_THREADS=1
+##  (run 2>&1) | tee -a log-rc-M.out
 
-FEATURES="rdrand"
-(run 2>&1) | tee -a log-nibble.out
+##  # MICA and Nibble need 2MiB pages
+##  echo 'Creating 2 MiB page reservations...'
+##  sudo su -c 'echo 4700000 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
 
-##  FEATURES="rdrand extern_ycsb mica"
+##  export FEATURES="rdrand"
+##  (run 2>&1) | tee -a log-nibble.out
+
+##  # Used for creating the hash table.. make large enough
+##  export MICA_ITEMS=$((NKEYS*2))
+##  export MICA_CAPACITY=$capacity
+##  export FEATURES="rdrand extern_ycsb mica"
 ##  (run 2>&1) | tee -a log-mica.out
  
