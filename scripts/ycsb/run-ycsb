@@ -24,7 +24,9 @@ MEMSIZE=$((8*(1<<40)))
 
 export NIBDEBUG=3
 
-export RAMCLOUD_ARGV="-t $MEMSIZE -h 10%"
+# RAMCloud accepts this value in MiB
+export RCMEM=$((MEMSIZE/1024/1024))
+export RAMCLOUD_ARGV="-t $RCMEM -h 10%"
 # number of args + 1 (like 'int argc' in C main)
 export RAMCLOUD_NARG=5
 
@@ -60,6 +62,11 @@ size=0
 
 run() {
     $SYSINFO
+
+    # NOTE NOTE
+    # Due to the larger data sets used in the evaluation,
+    # I modified bin/ycsb.rs to contain some of these loops,
+    # so they are actually irrelevant here.
 
     #for dist in uniform zipfian; do
     for dist in zipfian; do
@@ -119,23 +126,28 @@ run() {
     done
 }
 
-# Other systems don't explicitly use large pages
-echo 'Clearing all 2 MiB page reservations...'
-sudo su -c 'echo 0 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
+##  # Other systems don't explicitly use large pages
+##  echo 'Clearing all 2 MiB page reservations...'
+##  sudo su -c 'echo 0 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
 
-FEATURES="rdrand extern_ycsb masstree"
-(run 2>&1) | tee log-masstree.out
+##  FEATURES="rdrand extern_ycsb masstree"
+##  (run 2>&1) | tee -a log-masstree.out
 
-FEATURES="rdrand extern_ycsb rc"
-(run 2>&1) | tee log-rc.out
+##  FEATURES="rdrand extern_ycsb rc"
+##  export RAMCLOUD_NCONTEXTS=1
+##  (run 2>&1) | tee -a log-rc-1.out
 
-# MICA and Nibble need 2MiB pages
-echo 'Creating 2 MiB page reservations...'
-sudo su -c 'echo 5500000 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
+##  FEATURES="rdrand extern_ycsb rc"
+##  export RAMCLOUD_NCONTEXTS=240
+##  (run 2>&1) | tee -a log-rc-M.out
 
-FEATURES="rdrand extern_ycsb mica"
-(run 2>&1) | tee log-mica.out
-
-FEATURES="rdrand"
-(run 2>&1) | tee log-nibble.out
+##  # MICA and Nibble need 2MiB pages
+##  echo 'Creating 2 MiB page reservations...'
+##  sudo su -c 'echo 4700000 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
+##  
+##  FEATURES="rdrand extern_ycsb mica"
+##  (run 2>&1) | tee -a log-mica.out
+##   
+##  FEATURES="rdrand"
+##  (run 2>&1) | tee -a log-nibble.out
 
