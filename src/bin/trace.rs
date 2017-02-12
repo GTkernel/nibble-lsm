@@ -59,11 +59,11 @@ use std::str::FromStr;
 pub const MAX_KEYSIZE: usize = 1usize << 25;
 
 /// How long to run the experiment before halting.
-pub const RUNTIME: usize = 20;
+pub const RUNTIME: usize = 30;
 
 /// Total memory to pre-allocate for MICA, Nibble, RAMCloud, etc.
 /// Should match what is in the scripts/trace/run-trace script.
-pub const MAX_MEMSIZE: usize = 8usize << 40;
+pub const MAX_MEMSIZE: usize = 6usize << 40;
 
 pub const LOAD_FILE:  &'static str = "fb_etc_load.in";
 pub const TRACE_FILE: &'static str = "fb_etc_trace.in";
