@@ -113,8 +113,8 @@ impl Trace {
                 },
             }
             // XXX remove me
-            //if self.rec.len() > 200_000_000 {
-            //    println!("LIMITING TRACE TO 200mil.");
+            //if self.rec.len() > 6_000_000_000_usize {
+            //    println!("LIMITING TRACE TO 6bn.");
             //    break;
             //}
             if 0 == (self.rec.len() % 100_000_000) {

@@ -117,6 +117,7 @@ impl WorkloadGenerator {
 		let file = BufReader::new(file);
 
         let mut key = 1u64;
+        let mut total_size = 0usize;
 
 		for line in file.lines() {
 			if line.is_err() { break; }
@@ -136,14 +137,16 @@ impl WorkloadGenerator {
             if size > 0 {
     	        items.push( (key,size) );
                 key += 1;
+                total_size += size as usize;
                 if 0 == (items.len() % 50_000_000_usize) {
                     info!("Read {} mil. objects...",
                         items.len() / 1_000_000usize);
                 }
             }
             // XXX remove me
-            //if items.len() > 100_000_000 {
-            //    println!("LIMITING OBJ TO 100mil.");
+            //if items.len() > 200_000_000_usize {
+            //    println!("LIMITING # OBJECTS to {} total size {}",
+            //            items.len(), total_size);
             //    break;
             //}
 		}
@@ -152,7 +155,7 @@ impl WorkloadGenerator {
 			now.elapsed().as_secs(), items.len());
 		let now = Instant::now();
 
-		self.config.records = items.len() << 3;
+		self.config.records = items.len() * 2;
         info!("Running with {:?}", self.config);
 		kvs_init(&self.config);
 
