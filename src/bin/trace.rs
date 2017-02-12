@@ -509,24 +509,30 @@ fn del_object(key: u64) {
 #[cfg(feature = "mica")]
 #[cfg(feature = "extern_ycsb")]
 fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
-    // we ignore 'sock' b/c RAMCloud is NUMA-agnostic
-    // (MICA might, though...)
     unsafe {
         trace!("PUT {:x} len {}", key, len);
-        let ret: i32 = extern_kvs_put(key, len as u64, value.0);
-        // XXX make sure this matches with
-        // mica-kvs.git/src/table.h enum put_reason
-        match ret {
-            50 => return,
-            r => {
-                match r {
-                    111 => println!("MICA failed to insert in table"),
-                    112 => println!("MICA failed to insert in heap"),
-                    _ => println!("MICA failed with unknown: {}", ret),
-                }
-                //unsafe { intrinsics::abort(); }
-            },
-        }
+        'retry: loop {
+            let ret: i32 = extern_kvs_put(key, len as u64, value.0);
+            // XXX make sure this matches with
+            // mica-kvs.git/src/table.h enum put_reason
+            match ret {
+                50 => return,
+                r => {
+                    match r {
+                        // table insertion failure = table too small
+                        111 => println!("MICA failed to insert in table"),
+                        // retry failed puts (due to fragmentation)
+                        // NOTE this assumes other threads are performing DEL
+                        112 => continue 'retry,
+                        // Use this version to ack the failed put
+                        //112 => println!("MICA failed to insert in heap"),
+                        _ => println!("MICA failed with unknown: {}", ret),
+                    }
+                    //unsafe { intrinsics::abort(); }
+                },
+            }
+            break;
+        } // loop
     }
 }
 
@@ -536,7 +542,7 @@ fn get_object(key: u64) {
     unsafe {
         trace!("GET {:x}", key);
         if !extern_kvs_get(key) {
-            println!("GET failed on key 0x{:x}", key);
+            //println!("GET failed on key 0x{:x}", key);
             //unsafe { intrinsics::abort(); }
         }
         //assert!( extern_kvs_get(key),
