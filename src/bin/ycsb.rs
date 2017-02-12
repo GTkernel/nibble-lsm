@@ -148,13 +148,13 @@ extern {
     fn extern_kvs_get(key: u64);
 }
 
-// Link against libleveldb.so which is built from
-// https://github.gatech.edu/kernel/leveldb.git
-#[link(name = "leveldb")]
-#[cfg(feature = "leveldb")]
+// Link against libhiredis.so which is built from
+// https://github.gatech.edu/kernel/hiredis.git
+#[link(name = "hiredisext")]
+#[cfg(feature = "redis")]
 #[cfg(feature = "extern_ycsb")]
 extern {
-    // must match signatures in leveldb/db/c.cc
+    // must match signatures in hiredis.c
     fn extern_kvs_init();
     fn extern_kvs_put(key: u64, len: u64, buf: *const u8);
     fn extern_kvs_del(key: u64);
@@ -183,7 +183,7 @@ fn kvs_init(config: &Config) {
 
 // method interface is the same for RAMCloud and LevelDB's hacks
 // so we reuse it.
-#[cfg(any(feature = "rc", feature = "leveldb", feature = "masstree"))]
+#[cfg(any(feature = "rc", feature = "redis", feature = "masstree"))]
 #[cfg(feature = "extern_ycsb")]
 fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
     // we ignore 'sock' b/c RAMCloud is NUMA-agnostic
@@ -194,7 +194,7 @@ fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
     }
 }
 
-#[cfg(any(feature = "rc", feature = "leveldb", feature = "masstree"))]
+#[cfg(any(feature = "rc", feature = "redis", feature = "masstree"))]
 #[cfg(feature = "extern_ycsb")]
 fn get_object(key: u64) {
     unsafe {
@@ -203,7 +203,7 @@ fn get_object(key: u64) {
     }
 }
 
-#[cfg(any(feature = "rc", feature = "leveldb", feature = "masstree"))]
+#[cfg(any(feature = "rc", feature = "redis", feature = "masstree"))]
 #[cfg(feature = "extern_ycsb")]
 fn del_object(key: u64) {
     unsafe {
@@ -347,14 +347,14 @@ impl WorkloadGenerator {
     }
 
     // sequential insertion (ramcloud)
-    #[cfg(any(feature = "rc", feature = "leveldb"))]
+    #[cfg(any(feature = "rc"))]
     #[cfg(feature = "extern_ycsb")]
     pub fn setup(&mut self) {
         self.__setup(false);
     }
 
     // parallel insertion (nibble, mica, others..)
-    #[cfg(any(feature = "mica", feature = "masstree", not(feature = "extern_ycsb")))]
+    #[cfg(any(feature = "mica", feature="redis", feature = "masstree", not(feature = "extern_ycsb")))]
     pub fn setup(&mut self) {
         self.__setup(true);
     }

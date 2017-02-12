@@ -22,12 +22,22 @@ parking_lot = "0.2.6"
 
 [features]
 default = []
+# you generally want to enable this
+# --features "rdrand [others]"
+rdrand = []
+
+# Below features are used only for bin/ycsb.rs and bin/trace.rs
 extern_ycsb = []
+# Access RAMCloud library for bin/ycsb.rs
+# --features "extern_ycsb rc [others]"
 rc = []
+# --features "extern_ycsb mica [others]"
 mica = []
 leveldb = []
+# --features "extern_ycsb masstree [others]"
 masstree = []
-rdrand = []
+# --features "extern_ycsb redis [others]"
+redis = []
 
 # http://doc.crates.io/manifest.html#the-%5Bprofile.*%5D-sections
 [profile.release]

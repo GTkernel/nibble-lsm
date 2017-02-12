@@ -248,7 +248,7 @@ impl WorkloadGenerator {
         }
 	}
 
-    #[cfg(any(feature = "mica", feature = "masstree", not(feature = "extern_ycsb")))]
+    #[cfg(any(feature = "mica", feature="redis", feature = "masstree", not(feature = "extern_ycsb")))]
 	pub fn setup(&mut self) {
         if let Err(msg) = self.__setup(true) {
             panic!("Error in setup: {}", msg);
@@ -478,7 +478,7 @@ fn kvs_init(config: &Config) {
     unsafe {extern_kvs_init(); }
 }
 
-#[cfg(any(feature = "rc", feature = "masstree"))]
+#[cfg(any(feature = "rc", feature = "masstree", feature="redis"))]
 #[cfg(feature = "extern_ycsb")]
 fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
     unsafe {
@@ -487,7 +487,7 @@ fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
     }
 }
 
-#[cfg(any(feature = "rc", feature = "masstree"))]
+#[cfg(any(feature = "rc", feature = "masstree", feature="redis"))]
 #[cfg(feature = "extern_ycsb")]
 fn get_object(key: u64) {
     unsafe {
@@ -496,7 +496,7 @@ fn get_object(key: u64) {
     }
 }
 
-#[cfg(any(feature = "rc", feature = "masstree"))]
+#[cfg(any(feature = "rc", feature = "masstree", feature="redis"))]
 #[cfg(feature = "extern_ycsb")]
 fn del_object(key: u64) {
     unsafe {
@@ -569,6 +569,17 @@ fn del_object(key: u64) {
 #[cfg(feature = "extern_ycsb")]
 extern {
     // must match signatures in libmasstree.cc
+    fn extern_kvs_init();
+    fn extern_kvs_put(key: u64, len: u64, buf: *const u8);
+    fn extern_kvs_del(key: u64);
+    fn extern_kvs_get(key: u64);
+}
+
+#[link(name = "hiredisext")]
+#[cfg(feature = "redis")]
+#[cfg(feature = "extern_ycsb")]
+extern {
+    // must match signatures in hiredis.c
     fn extern_kvs_init();
     fn extern_kvs_put(key: u64, len: u64, buf: *const u8);
     fn extern_kvs_del(key: u64);
