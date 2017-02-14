@@ -1,0 +1,8 @@
+#! /usr/bin/env bash
+CWD=$(cd $(dirname $0) && pwd)
+redis_spawn() {
+    $CWD/spawn $1
+}
+redis_stop() {
+    $CWD/stop-all
+}

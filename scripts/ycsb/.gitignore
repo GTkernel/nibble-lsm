@@ -1,0 +1,3 @@
+*.out
+*.out.xz
+hiredis.conf

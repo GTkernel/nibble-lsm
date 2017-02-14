@@ -22,6 +22,8 @@ MEMSIZE=$((8*(1<<40)))
 # 64mil keys * 1000b = 64GiB
 #MEMSIZE=$((128*(1<<30)))
 
+NREDIS_SERVERS=64
+
 export NIBDEBUG=3
 
 # RAMCloud accepts this value in MiB
@@ -53,6 +55,9 @@ SEC=40
 SYSINFO="../sysinfo"
 
 ######################################################################
+
+source ../redis/funcs
+redis_stop
 
 capacity=$MEMSIZE
 
@@ -135,11 +140,28 @@ run() {
 
 ##  FEATURES="rdrand extern_ycsb rc"
 ##  export RAMCLOUD_NCONTEXTS=1
+##  # OMP threads are only for speeding up the initialization
+##  export OMP_NUM_THREADS=256
 ##  (run 2>&1) | tee -a log-rc-1.out
 
 ##  FEATURES="rdrand extern_ycsb rc"
 ##  export RAMCLOUD_NCONTEXTS=240
+##  # limit OMP to 1 thread; library spawns many, so has same effect
+##  export OMP_NUM_THREADS=1
 ##  (run 2>&1) | tee -a log-rc-M.out
+
+FEATURES="rdrand extern_ycsb redis"
+redis_stop
+# this script dumps out some info we need...
+(redis_spawn $NREDIS_SERVERS 2>&1) | tee -a log-redis.out
+sleep 1
+conf=$(tail log-redis.out | grep HIREDISCONF | tail -n 1 | awk '{print $NF}')
+[ -e hiredis.conf ] && rm -fv hiredis.conf
+[ ! -e $conf ] && echo "Error: hiredis.conf not found: $conf" && exit 1
+# link the new conf file for hiredis
+ln -s -v $conf ./hiredis.conf
+(run 2>&1) | tee -a log-redis.out
+redis_stop
 
 ##  # MICA and Nibble need 2MiB pages
 ##  echo 'Creating 2 MiB page reservations...'
