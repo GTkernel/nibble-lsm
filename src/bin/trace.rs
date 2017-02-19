@@ -59,14 +59,14 @@ use std::str::FromStr;
 pub const MAX_KEYSIZE: usize = 1usize << 25;
 
 /// How long to run the experiment before halting.
-pub const RUNTIME: usize = 30;
+pub const RUNTIME: usize = 60;
 
 /// Total memory to pre-allocate for MICA, Nibble, RAMCloud, etc.
 /// Should match what is in the scripts/trace/run-trace script.
-pub const MAX_MEMSIZE: usize = 6usize << 40;
+pub const MAX_MEMSIZE: usize = 2usize << 40;
 
-pub const LOAD_FILE:  &'static str = "fb_etc_load.in";
-pub const TRACE_FILE: &'static str = "fb_etc_trace.in";
+pub const LOAD_FILE:  &'static str = "fb-etc-objects.dat";
+pub const TRACE_FILE: &'static str = "fb-etc-trace.dat";
 
 //
 // END of user-configurable options
@@ -77,244 +77,231 @@ static mut NIBBLE: Pointer<Nibble> = Pointer(0 as *const Nibble);
 
 #[derive(Debug)]
 struct Config {
-	load_path: String,
-	trace_path: String,
-	/// memory size, bytes
-	total: usize,
-	/// max number of objects
-	records: usize,
+    load_path: String,
+    trace_path: String,
+    /// memory size, bytes
+    total: usize,
+    /// max number of objects
+    records: usize,
 }
 
 struct WorkloadGenerator {
-	config: Config,
-	sockets: usize,
+    config: Config,
+    sockets: usize,
 }
 
 impl WorkloadGenerator {
 
-	pub fn new(config: Config) -> Self {
-		WorkloadGenerator {
-			config: config,
-			sockets: numa::NODE_MAP.sockets(),
-		}
-	}
+    pub fn new(config: Config) -> Self {
+        WorkloadGenerator {
+            config: config,
+            sockets: numa::NODE_MAP.sockets(),
+        }
+    }
 
-	/// read in the file with the load trace
-	/// with two space-separated columns: key value_size
-	/// both unsigned long. Then split the array among threads,
-	/// and have them insert the keys
-	fn __setup(&mut self, parallel: bool) -> Result<(),String> {
-		let now = Instant::now();
+    /// read in the file with the load trace
+    /// with two space-separated columns: key value_size
+    /// both unsigned long. Then split the array among threads,
+    /// and have them insert the keys
+    fn __setup(&mut self, parallel: bool) -> Result<(),String> {
+        let now = Instant::now();
 
-		let mut items: Vec< (u64,u64) > = Vec::with_capacity(1usize<<34);
-		info!("Allocating load trace {} seconds", now.elapsed().as_secs());
-		let now = Instant::now();
+        let mut items: Vec< (u64,u64) > = Vec::with_capacity(1usize<<34);
+        let now = Instant::now();
+        info!("Loading object snapshot...");
 
-		let file = match File::open(&self.config.load_path) {
-			Ok(f) => f,
-			Err(_) => return Err( String::from("cannot open load file") ),
-		};
-		let file = BufReader::new(file);
-
-        let mut key = 1u64;
         let mut total_size = 0usize;
 
-		for line in file.lines() {
-			if line.is_err() { break; }
-			let line = line.unwrap();
-			if line.starts_with("#") { continue; }
-			let mut iter = line.split_whitespace();
-	        let size = match iter.next() {
-	            None => return Err( String::from("line is missing size") ),
-	            Some(s) => match s {
-	                "na" => 0u64,
-	                _ => match f64::from_str(s) {
-	                    Ok(v) => v as u64,
-	                    Err(_) => return Err(String::from("cannot parse size")),
-	                },
-	            },
-	        };
-            if size > 0 {
-    	        items.push( (key,size) );
-                key += 1;
-                total_size += size as usize;
-                if 0 == (items.len() % 50_000_000_usize) {
+        // load in database using binary format (just an array of u32)
+        let mut mapped =
+            memory::MemMapFile::new(self.config.load_path.as_str());
+        let nums = unsafe { mapped.as_slice::<u32>() };
+        for tup in (1u64..).zip(nums) {
+            let key: u64 = tup.0;
+            let len: u64 = *tup.1 as u64;
+            // disregard zero-byte objects (Nibble chokes on them still)
+            if len > 0 {
+                items.push( (key,len) );
+                total_size += len as usize;
+                if 0 == (items.len() % 500_000_000_usize) {
                     info!("Read {} mil. objects...",
-                        items.len() / 1_000_000usize);
+                          items.len() / 1_000_000usize);
                 }
             }
             // XXX remove me
-            //if items.len() > 200_000_000_usize {
+            //if items.len() > 5_200_000_000_usize {
             //    println!("LIMITING # OBJECTS to {} total size {}",
             //            items.len(), total_size);
             //    break;
             //}
-		}
-		let items = items; // make immutable to share among threads
-		info!("Reading file {} seconds. {} keys",
-			now.elapsed().as_secs(), items.len());
-		let now = Instant::now();
+        }
 
-		self.config.records = items.len() * 2;
+        let items = items; // make immutable to share among threads
+        info!("Reading file {} seconds. {} keys",
+            now.elapsed().as_secs(), items.len());
+        let now = Instant::now();
+
+        self.config.records = items.len() * 2;
         info!("Running with {:?}", self.config);
-		kvs_init(&self.config);
+        kvs_init(&self.config);
 
-		if parallel {
-			let threads_per_sock = 2;
-			let threads = self.sockets * threads_per_sock;
-			let per_thread = items.len() / threads;
-			let ncpus = numa::NODE_MAP.ncpus();
+        if parallel {
+            let threads_per_sock = 2;
+            let threads = self.sockets * threads_per_sock;
+            let per_thread = items.len() / threads;
+            let ncpus = numa::NODE_MAP.ncpus();
 
-			info!("Inserting objects with {} threads...", threads);
+            info!("Inserting objects with {} threads...", threads);
 
-			// pin threads round-robin across sockets
-			// use the first 'n' threads on each socket
-			let mut cpus: Vec<usize> = Vec::with_capacity(ncpus);
-			for i in 0..self.sockets {
-				let mut ids = numa::NODE_MAP.cpus_of(NodeId(i)).get();
-				ids.truncate(threads_per_sock);
-				cpus.append(&mut ids);
-			}
-			let cpus = pl::Mutex::new(cpus);
+            // pin threads round-robin across sockets
+            // use the first 'n' threads on each socket
+            let mut cpus: Vec<usize> = Vec::with_capacity(ncpus);
+            for i in 0..self.sockets {
+                let mut ids = numa::NODE_MAP.cpus_of(NodeId(i)).get();
+                ids.truncate(threads_per_sock);
+                cpus.append(&mut ids);
+            }
+            let cpus = pl::Mutex::new(cpus);
 
-			let offsets: Vec<usize> =
-				(0usize..threads).map(|e|per_thread*e).collect();
-			let offsets = pl::Mutex::new(offsets);
+            let offsets: Vec<usize> =
+                (0usize..threads).map(|e|per_thread*e).collect();
+            let offsets = pl::Mutex::new(offsets);
 
-			let mut guards = vec![];
-			crossbeam::scope( |scope| {
+            let mut guards = vec![];
+            crossbeam::scope( |scope| {
 
-				for _ in 0..threads {
+                for _ in 0..threads {
 
-					let guard = scope.spawn( || {
-						let cpu = match cpus.lock().pop() {
-							None => panic!("No cpu for this thread?"),
-							Some(c) => c,
-						};
-						unsafe { pin_cpu(cpu); }
-						let sock = numa::NODE_MAP.sock_of(cpu);
+                    let guard = scope.spawn( || {
+                        let cpu = match cpus.lock().pop() {
+                            None => panic!("No cpu for this thread?"),
+                            Some(c) => c,
+                        };
+                        unsafe { pin_cpu(cpu); }
+                        let sock = numa::NODE_MAP.sock_of(cpu);
 
-						let value = memory::allocate::<u8>(MAX_KEYSIZE);
-						let v = Pointer(value as *const u8);
+                        let value = memory::allocate::<u8>(MAX_KEYSIZE);
+                        let v = Pointer(value as *const u8);
 
-						let offset = match offsets.lock().pop() {
-							None => panic!("No offset for this thread?"),
-							Some(o) => o,
-						};
+                        let offset = match offsets.lock().pop() {
+                            None => panic!("No offset for this thread?"),
+                            Some(o) => o,
+                        };
 
-						let from = offset;
-						let to   = offset + threads_per_sock;
-						let s    = &items[from..to];
-						for tup in s {
-							let (key,size) = *tup;
-							if size as usize > MAX_KEYSIZE {
-								panic!("key size {} > max keysize {}",
-									size, MAX_KEYSIZE);
-							}
-							put_object(key as u64, v, size as usize, sock.0);
-						}
-						unsafe { memory::deallocate(value, MAX_KEYSIZE); }
-					});
-					guards.push(guard);
-				}
+                        let from = offset;
+                        let to   = offset + threads_per_sock;
+                        let s    = &items[from..to];
+                        for tup in s {
+                            let (key,size) = *tup;
+                            if size as usize > MAX_KEYSIZE {
+                                panic!("key size {} > max keysize {}",
+                                    size, MAX_KEYSIZE);
+                            }
+                            put_object(key as u64, v, size as usize, sock.0);
+                        }
+                        unsafe { memory::deallocate(value, MAX_KEYSIZE); }
+                    });
+                    guards.push(guard);
+                }
 
-				for g in guards { g.join(); }
-			}); // crossbeam
-		}
+                for g in guards { g.join(); }
+            }); // crossbeam
+        }
 
-		// single-threaded insertion
-		// meant mainly for ramcloud (which ignores the socket parameter)
-		else {
+        // single-threaded insertion
+        // meant mainly for ramcloud (which ignores the socket parameter)
+        else {
             info!("Inserting objects with 1 thread...");
-			let value = memory::allocate::<u8>(MAX_KEYSIZE);
-			let v = Pointer(value as *const u8);
+            let value = memory::allocate::<u8>(MAX_KEYSIZE);
+            let v = Pointer(value as *const u8);
 
-			for (key,size) in items {
-				put_object(key as u64, v, size as usize, 0);
-			}
-			unsafe { memory::deallocate(value, MAX_KEYSIZE); }
-		}
+            for (key,size) in items {
+                put_object(key as u64, v, size as usize, 0);
+            }
+            unsafe { memory::deallocate(value, MAX_KEYSIZE); }
+        }
 
-		info!("Setup took {} seconds", now.elapsed().as_secs());
+        info!("Setup took {} seconds", now.elapsed().as_secs());
 
-		Ok( () )
-	}
+        Ok( () )
+    }
 
     #[cfg(any(feature = "rc"))]
     #[cfg(feature = "extern_ycsb")]
-	pub fn setup(&mut self) {
-        if let Err(msg) = self.__setup(false:with) {
+    pub fn setup(&mut self) {
+        if let Err(msg) = self.__setup(false) {
             panic!("Error in setup: {}", msg);
         }
-	}
+    }
 
     #[cfg(any(feature = "mica", feature="redis", feature = "masstree", not(feature = "extern_ycsb")))]
-	pub fn setup(&mut self) {
+    pub fn setup(&mut self) {
         if let Err(msg) = self.__setup(true) {
             panic!("Error in setup: {}", msg);
         }
-	}
+    }
 
-	pub fn run(&mut self) {
+    pub fn run(&mut self) {
         let t = Instant::now();
-		let trace = Trace::new2(&self.config.trace_path);
+        let trace = Trace::new2(&self.config.trace_path);
         info!("Trace loaded in {} seconds", t.elapsed().as_secs());
 
-		let threadcount: Vec<usize>;
-		let sockets = numa::NODE_MAP.sockets();
+        let threadcount: Vec<usize>;
+        let sockets = numa::NODE_MAP.sockets();
         let cpus_pernode = numa::NODE_MAP.cpus_in(NodeId(0));
-		threadcount = (1usize..(sockets+1))
-			.map(|e|cpus_pernode*e).collect();
+        //threadcount = (13usize..(sockets+1))
+        threadcount = (1usize..(sockets+1))
+            .map(|e|cpus_pernode*e).collect();
 
-		for threads in threadcount {
-			info!("Running with {} threads...", threads);
+        for threads in threadcount {
+            info!("Running with {} threads...", threads);
 
-			let per_thread = trace.rec.len() / threads;
-			info!("trace slice has {} entries", per_thread);
+            let per_thread = trace.rec.len() / threads;
+            info!("trace slice has {} entries", per_thread);
 
-			// pin threads incrementally across sockets
-			let ncpus = numa::NODE_MAP.ncpus();
-			let mut cpus: Vec<usize> = Vec::with_capacity(ncpus);
-			for i in 0..ncpus {	cpus.push(i); }
-			debug!("pinned cpus: {:?}", cpus);
-			let cpus = pl::Mutex::new(cpus);
+            // pin threads incrementally across sockets
+            let ncpus = numa::NODE_MAP.ncpus();
+            let mut cpus: Vec<usize> = Vec::with_capacity(ncpus);
+            for i in 0..ncpus { cpus.push(i); }
+            debug!("pinned cpus: {:?}", cpus);
+            let cpus = pl::Mutex::new(cpus);
 
-			let offsets: Vec<usize> = 
-    			(0usize..threads).map(|e|per_thread*e).collect();
-			debug!("offsets: {:?}", offsets);
-			let offsets = pl::Mutex::new(offsets);
+            let offsets: Vec<usize> = 
+                (0usize..threads).map(|e|per_thread*e).collect();
+            debug!("offsets: {:?}", offsets);
+            let offsets = pl::Mutex::new(offsets);
 
             let throughput = AtomicUsize::new(0);
 
-			let mut guards = vec![];
-			crossbeam::scope( |scope| {
+            let mut guards = vec![];
+            crossbeam::scope( |scope| {
 
-				for _ in 0..threads {
+                for _ in 0..threads {
 
-					let guard = scope.spawn( || {
-						let cpu = match cpus.lock().pop() {
-							None => panic!("No cpu for this thread?"),
-							Some(c) => c,
-						};
-						unsafe { pin_cpu(cpu); }
-						let sock = numa::NODE_MAP.sock_of(cpu);
+                    let guard = scope.spawn( || {
+                        let cpu = match cpus.lock().pop() {
+                            None => panic!("No cpu for this thread?"),
+                            Some(c) => c,
+                        };
+                        unsafe { pin_cpu(cpu); }
+                        let sock = numa::NODE_MAP.sock_of(cpu);
 
-						// buffer used for PUT operations
-						let value = memory::allocate::<u8>(MAX_KEYSIZE);
-						let v = Pointer(value as *const u8);
+                        // buffer used for PUT operations
+                        let value = memory::allocate::<u8>(MAX_KEYSIZE);
+                        let v = Pointer(value as *const u8);
 
-						let offset = match offsets.lock().pop() {
-							None => panic!("No offset for this thread?"),
-							Some(o) => o,
-						};
+                        let offset = match offsets.lock().pop() {
+                            None => panic!("No offset for this thread?"),
+                            Some(o) => o,
+                        };
 
                         let mut now = Instant::now();
                         let mut nops = 0_usize;
                         let mut first = true; // iteration
 
-						let from = offset;
-						let to   = offset + per_thread;
-						let s    = &trace.rec[from..to];
+                        let from = offset;
+                        let to   = offset + per_thread;
+                        let s    = &trace.rec[from..to];
                         let mut iter = s.iter();
                         'outer: loop {
                             for _ in 0..600_000 {
@@ -354,37 +341,37 @@ impl WorkloadGenerator {
                                 throughput.fetch_add( th as usize, Ordering::SeqCst );
                                 break 'outer;
                             }
-						}
-						unsafe { memory::deallocate(value, MAX_KEYSIZE); }
-					});
-					guards.push(guard);
+                        }
+                        unsafe { memory::deallocate(value, MAX_KEYSIZE); }
+                    });
+                    guards.push(guard);
 
-				} // for
+                } // for
 
-				for g in guards { g.join(); }
+                for g in guards { g.join(); }
 
-			}); // crossbeam
+            }); // crossbeam
 
             let total = throughput.load(Ordering::SeqCst);
             println!("total ops/sec {}", total);
 
         } // for each set of threads
-	}
+    }
 }
 
 fn main() {
     logger::enable();
 
-	let config = Config {
-		load_path:  String::from(LOAD_FILE),
-		trace_path: String::from(TRACE_FILE),
-		total: MAX_MEMSIZE,
-		records: 0, // will be set after reading load_path
-	};
-	info!("Specified (.records will be updated) {:?}", config);
-	let mut gen = WorkloadGenerator::new(config);
-	gen.setup();
-	gen.run();
+    let config = Config {
+        load_path:  String::from(LOAD_FILE),
+        trace_path: String::from(TRACE_FILE),
+        total: MAX_MEMSIZE,
+        records: 0, // will be set after reading load_path
+    };
+    info!("Specified (.records will be updated) {:?}", config);
+    let mut gen = WorkloadGenerator::new(config);
+    gen.setup();
+    gen.run();
 }
 
 //
@@ -449,8 +436,8 @@ fn get_object(key: u64) {
 #[inline(always)]
 #[cfg(not(feature = "extern_ycsb"))]
 fn del_object(key: u64) {
-	let nibble: &Nibble = unsafe { &*NIBBLE.0 };
-	let _ = nibble.del_object(key);
+    let nibble: &Nibble = unsafe { &*NIBBLE.0 };
+    let _ = nibble.del_object(key);
 }
 
 #[link(name = "micaext")]
@@ -511,7 +498,21 @@ fn del_object(key: u64) {
 fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
     unsafe {
         trace!("PUT {:x} len {}", key, len);
+        let mut c: usize = 0; // retry count
+        let now = Instant::now();
         'retry: loop {
+            c += 1;
+            if unlikely!(c > (1usize<<22)) {
+                let el = now.elapsed();
+                let ms: f64 = 1e3 * el.as_secs() as f64
+                    + el.subsec_nanos() as f64 / 1e6;
+                warn!("PUT (len {}) retries are looping: {:?} msec",
+                        len, ms);
+                c = 0;
+                if ms > 10_000f64 {
+                    panic!("PUT looping too long; panic");
+                }
+            }
             let ret: i32 = extern_kvs_put(key, len as u64, value.0);
             // XXX make sure this matches with
             // mica-kvs.git/src/table.h enum put_reason
@@ -555,9 +556,8 @@ fn get_object(key: u64) {
 fn del_object(key: u64) {
     unsafe {
         trace!("DEL {:x}", key);
-        if !extern_kvs_del(key) {
-            println!("DEL failed on key 0x{:x}", key);
-        }
+        extern_kvs_del(key);
+        //if !extern_kvs_del(key) { println!("DEL failed on key 0x{:x}", key); }
         //assert!( extern_kvs_del(key),
             //"DEL failed on key 0x{:x}", key);
     }
