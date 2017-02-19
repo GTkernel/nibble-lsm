@@ -7,6 +7,8 @@ use std::ptr;
 use std::time::Instant;
 use std::slice;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::fs::{File};
+use std::os::unix::io::AsRawFd;
 
 use numa::{self,NodeId};
 use common::{Pointer,errno};
@@ -244,6 +246,64 @@ impl MemMap {
 
 /// Prevent dangling regions by unmapping it.
 impl Drop for MemMap {
+
+    fn drop (&mut self) {
+        debug!("unmapping 0x{:x}", self.addr);
+        let p = self.addr as *mut libc::c_void;
+        unsafe { libc::munmap(p, self.len); }
+    }
+}
+
+pub struct MemMapFile {
+    addr: usize,
+    len: usize,
+}
+
+/// Map in a file on disk as a memory region.
+/// Allow access via byte array. For now, only support read-only.
+impl MemMapFile {
+
+    pub fn new(path: &str) -> Self {
+        let file = match File::open(path) {
+            Err(_) => panic!("Cannot open file: {:?}", path),
+            Ok(f) => f,
+        };
+        let fd = file.as_raw_fd();
+        let len: usize = match file.metadata() {
+            Ok(meta) => meta.len() as usize,
+            Err(e) => panic!("Error reading file metadata: {:?}", e),
+        };
+
+        let prot = libc::PROT_READ;
+        let flags = libc::MAP_PRIVATE | libc::MAP_NORESERVE;
+        let addr: usize = unsafe {
+            let p = 0 as *mut libc::c_void;
+            libc::mmap(p, len, prot, flags, fd, 0) as usize
+        };
+        assert!(addr != libc::MAP_FAILED as usize);
+
+        debug!("file {:?} mmap 0x{:x}-0x{:x} {} MiB",
+              path, addr, (addr+len), len>>20);
+
+        let caddr = addr as *const usize
+                    as *mut usize as *mut libc::c_void;
+        unsafe {
+            let ret = libc::madvise(caddr, len,
+                                    libc::MADV_WILLNEED
+                                   | libc::MADV_SEQUENTIAL);
+            assert_eq!(ret, 0, "madvise: {}", ret);
+        }
+        MemMapFile { addr: addr, len: len }
+    }
+
+    pub unsafe fn as_slice<T>(&mut self) -> &mut [T] {
+        let p = self.addr as *mut usize as *mut T;
+        let nelem = self.len / mem::size_of::<T>();
+        slice::from_raw_parts_mut(p, nelem)
+    }
+}
+
+impl Drop for MemMapFile {
 
     fn drop (&mut self) {
         debug!("unmapping 0x{:x}", self.addr);
