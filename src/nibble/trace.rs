@@ -4,6 +4,7 @@ use std::io::prelude::*;
 use std::collections::VecDeque;
 use std::intrinsics;
 use std::str::FromStr;
+use nibble::memory;
 
 #[derive(Debug)]
 pub enum Op {
@@ -22,6 +23,17 @@ impl Entry {
     pub fn new(key: u64, op: Op, size: u32) -> Self {
         Entry { key: key, op: op, size: size }
     }
+}
+
+/// Used for reading in the actual trace file, in binary format.
+/// This must represent the layout from
+/// https://github.gatech.edu/kernel/kvs-mutilate.git
+/// TestGenerator.cc struct Entry
+#[repr(packed)]
+struct TraceFileEntry {
+    key: u64,
+    op: u8, // 0 GET 1 SET 2 DEL
+    size: u32,
 }
 
 /// Object used to read in a PUT/GET/DEL trace from a file.
@@ -54,73 +66,37 @@ impl Trace {
         }
     }
 
-    /// Read trace from given path.
-    /// We assume trace has three space-separated columns:
-    ///         key op value_size
-    /// where
-    ///      key:    [0-9]+          unsigned long
-    ///       op:    (get|del|set)   string
-    /// val size:    (na|[0-9]+)     'na' or unsigned long
-    ///
-    /// Lines starting exactly with '#' will be skipped.
+    /// Trace shold be { u64, u8, u32 } for { key, op, len }
+    /// according to struct TraceFileEntry
     fn read_trace(&mut self, path: &str) -> Result<(),&str> {
         info!("Loading trace file...");
-        let file = match File::open(path) {
-            Ok(f) => f,
-            Err(e) => return Err( "Cannot open file" ),
-        };
-        let file = BufReader::new(file);
-        for line in file.lines() {
-            if line.is_err() { break; }
-            let line = line.unwrap();
-            if line.starts_with("#") { continue; }
-            let mut iter = line.split_whitespace();
-            let key = match iter.next() {
-                None => return Err( "Line has no key" ),
-                Some(k) => match u64::from_str_radix(k, 10) {
-                    // +1 to ensure no key is zero
-                    Ok(v) => v + 1,
-                    Err(e) => return Err( "Key is non-numeric" ),
-                },
-            };
 
-            assert!(key > 0, "keys cannot be zero");
-
-            let op = match iter.next() {
-                None => return Err( "Line missing 2nd column" ),
-                Some(o) => match o {
-                    "get" => Op::Get,
-                    "set" => Op::Set,
-                    "del" => Op::Del,
-                    _ => return Err( "Unknown operation" ),
-                },
+        let mut mapped = memory::MemMapFile::new(path);
+        let entries = unsafe { mapped.as_slice::<TraceFileEntry>() };
+        for entry in entries {
+            // Nibble does not allow key 0
+            if entry.key == 0 { continue; }
+            // FIXME Nibble still cannot handle zero-sized objects
+            let size = if entry.size == 0 { 1 } else { entry.size };
+            // convert TraceFileEntry to Entry
+            let op = match entry.op {
+                0 => Op::Get,
+                1 => Op::Set,
+                2 => Op::Del,
+                e @ _ => panic!("Unexpected op code: {}", e),
             };
-            let size = match iter.next() {
-                None => return Err( "Line missing 3rd column" ),
-                Some(s) => match s {
-                    "na" => 0u32,
-                    _ => match f64::from_str(s) {
-                        Ok(v) => v as u32,
-                        Err(e) => return Err( "Size is non-numeric" ),
-                    },
-                },
-            };
-            match op {
-                Op::Get | Op:: Del =>
-                    self.rec.push( Entry::new(key,op,size) ),
-                Op::Set => if size > 0 {
-                    self.rec.push( Entry::new(key,op,size) );
-                },
+            self.rec.push( Entry::new(entry.key,op,size) );
+            if 0 == (self.rec.len() % 500_000_000) {
+                info!("Loaded {} mil. entries",
+                      self.rec.len() / 1_000_000_usize);
             }
             // XXX remove me
-            //if self.rec.len() > 6_000_000_000_usize {
-            //    println!("LIMITING TRACE TO 6bn.");
-            //    break;
-            //}
-            if 0 == (self.rec.len() % 100_000_000) {
-                info!("Loaded {} entries", self.rec.len());
+            if self.rec.len() > 10_000_000_000_usize {
+                println!("LIMITING TRACE TO {}", self.rec.len());
+                break;
             }
         }
+
         Ok( () )
     }
 }
