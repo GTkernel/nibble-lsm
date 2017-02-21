@@ -42,6 +42,7 @@ use std::time::{Instant,Duration};
 use std::ptr;
 use std::cmp;
 use std::slice;
+use std::env;
 
 use std::fs::File;
 use std::io::{self, BufReader};
@@ -59,14 +60,36 @@ use std::str::FromStr;
 pub const MAX_KEYSIZE: usize = 1usize << 25;
 
 /// How long to run the experiment before halting.
-pub const RUNTIME: usize = 60;
+pub const RUNTIME: usize = 30;
 
 /// Total memory to pre-allocate for MICA, Nibble, RAMCloud, etc.
 /// Should match what is in the scripts/trace/run-trace script.
-pub const MAX_MEMSIZE: usize = 2usize << 40;
+//pub const MAX_MEMSIZE: usize = 6_usize << 40;
+//pub const MAX_MEMSIZE: usize = 2_usize << 40;
+pub const MAX_MEMSIZE: usize = (1_usize << 40)
+                                + 340_usize * (1_usize << 30);
 
 pub const LOAD_FILE:  &'static str = "fb-etc-objects.dat";
 pub const TRACE_FILE: &'static str = "fb-etc-trace.dat";
+
+/// How many threads to use for the insertion/setup phase, per socket.
+/// If not defined, it uses a default.
+pub const ENV_SETUP_THREADS: &'static str = "NIB_SETUP_THREADS";
+pub const SETUP_THREADS_PERSOCK: usize = 12;
+
+/// Set a limit for how many objects we insert from the trace.
+pub const MAX_N_OBJECTS: Option<usize> = None;
+//pub const MAX_N_OBJECTS: Option<usize> = Some(1_000_000_000_usize);
+
+/// How many iterations to run the execution phase.
+pub const EXEC_ITERS: usize = 1;
+
+/// If running an insert-only benchmark (where we only invoke setup()),
+/// run for this many seconds, then report performance.
+/// You'll need to comment the gen.run() lines in main,
+/// and uncomment a block of code in setup that uses this; search for
+/// this variable to find it.
+pub const SETUP_STOP_AFTER: usize = 60;
 
 //
 // END of user-configurable options
@@ -128,12 +151,13 @@ impl WorkloadGenerator {
                           items.len() / 1_000_000usize);
                 }
             }
-            // XXX remove me
-            //if items.len() > 5_200_000_000_usize {
-            //    println!("LIMITING # OBJECTS to {} total size {}",
-            //            items.len(), total_size);
-            //    break;
-            //}
+            if let Some(nn) = MAX_N_OBJECTS {
+                if items.len() > nn {
+                    println!("LIMITING # OBJECTS to {} total size {}",
+                             items.len(), total_size);
+                    break;
+                }
+            }
         }
 
         let items = items; // make immutable to share among threads
@@ -141,12 +165,25 @@ impl WorkloadGenerator {
             now.elapsed().as_secs(), items.len());
         let now = Instant::now();
 
-        self.config.records = items.len() * 2;
+        self.config.records = items.len();
         info!("Running with {:?}", self.config);
         kvs_init(&self.config);
 
+        let throughput = AtomicUsize::new(0);
+
         if parallel {
-            let threads_per_sock = 2;
+            let threads_per_sock =
+                match env::var_os(ENV_SETUP_THREADS) {
+                    None => SETUP_THREADS_PERSOCK,
+                    Some(osstr) => match osstr.to_str() {
+                        None => panic!("{} not valid", ENV_SETUP_THREADS),
+                        Some(s) => match usize::from_str_radix(s,10u32) {
+                            Err(e) => panic!("{} not a number",
+                                             ENV_SETUP_THREADS),
+                            Ok(n) => n,
+                        },
+                    },
+            };
             let threads = self.sockets * threads_per_sock;
             let per_thread = items.len() / threads;
             let ncpus = numa::NODE_MAP.ncpus();
@@ -173,6 +210,8 @@ impl WorkloadGenerator {
                 for _ in 0..threads {
 
                     let guard = scope.spawn( || {
+                        let mut n = 0usize; // count total inserted
+
                         let cpu = match cpus.lock().pop() {
                             None => panic!("No cpu for this thread?"),
                             Some(c) => c,
@@ -189,16 +228,42 @@ impl WorkloadGenerator {
                         };
 
                         let from = offset;
-                        let to   = offset + threads_per_sock;
+                        let to   = offset + per_thread;
                         let s    = &items[from..to];
+                        let start = Instant::now();
+                        let mut i = 0usize; // for throttling timing checks
                         for tup in s {
                             let (key,size) = *tup;
-                            if size as usize > MAX_KEYSIZE {
+                            if unlikely!(size as usize > MAX_KEYSIZE) {
                                 panic!("key size {} > max keysize {}",
                                     size, MAX_KEYSIZE);
                             }
                             put_object(key as u64, v, size as usize, sock.0);
+
+                            //  // Comment these lines out if not doing insertion
+                            //  // workload benchmarks. -->
+                            //  i += 1;
+                            //  n += 1;
+                            //  // every million, check if we should stop
+                            //  if unlikely!((i >> 20) > 0) {
+                            //      i = 0usize;
+                            //      let sec = start.elapsed().as_secs() as usize;
+                            //      if sec > SETUP_STOP_AFTER {
+                            //          let th = n as f64 / sec as f64;
+                            //          throughput.fetch_add(th as usize,Ordering::SeqCst);
+                            //          info!("Setup stopping sec {} total {} ops/sec",
+                            //                SETUP_STOP_AFTER, th);
+                            //          break;
+                            //      }
+                            //  }
+                            //  // --> until here
+
                         }
+                        let el = start.elapsed();
+                        let sec: f64 = el.as_secs() as f64
+                            + el.subsec_nanos() as f64 / 1e9;
+                        info!("Thread insert throughput {} ops/sec. total {} ops {} sec",
+                              n as f64 / sec, n as usize, sec);
                         unsafe { memory::deallocate(value, MAX_KEYSIZE); }
                     });
                     guards.push(guard);
@@ -221,7 +286,9 @@ impl WorkloadGenerator {
             unsafe { memory::deallocate(value, MAX_KEYSIZE); }
         }
 
-        info!("Setup took {} seconds", now.elapsed().as_secs());
+        let th = throughput.load(Ordering::SeqCst);
+        info!("Setup took {} sec, total {} ops/sec",
+              now.elapsed().as_secs(), th);
 
         Ok( () )
     }
@@ -241,19 +308,34 @@ impl WorkloadGenerator {
         }
     }
 
-    pub fn run(&mut self) {
+    pub fn run(&mut self, warmup: bool) {
         let t = Instant::now();
         let trace = Trace::new2(&self.config.trace_path);
         info!("Trace loaded in {} seconds", t.elapsed().as_secs());
 
-        let threadcount: Vec<usize>;
         let sockets = numa::NODE_MAP.sockets();
         let cpus_pernode = numa::NODE_MAP.cpus_in(NodeId(0));
-        //threadcount = (13usize..(sockets+1))
-        threadcount = (1usize..(sockets+1))
-            .map(|e|cpus_pernode*e).collect();
+        let threadcount: Vec<usize>;
+        let RUNTIME_: usize;
+        if warmup {
+            info!("Entering warmup phase...");
+            threadcount = vec![240usize];
+            RUNTIME_ = 2 * 60;
+        } else {
+            info!("Entering test phase...");
+            //threadcount = (14usize..(sockets+1))
+            //threadcount = (1usize..(sockets+1))
+            //.map(|e|cpus_pernode*e).collect();
+            let mut t: Vec<usize> = (1usize..(sockets+1))
+                .map(|e|cpus_pernode*e).collect();
+            t.reverse();
+            threadcount = t;
+            RUNTIME_ = RUNTIME;
+        };
+        info!("Measurement length {} seconds", RUNTIME_);
 
         for threads in threadcount {
+        for _ in 0..EXEC_ITERS {
             info!("Running with {} threads...", threads);
 
             let per_thread = trace.rec.len() / threads;
@@ -317,6 +399,13 @@ impl WorkloadGenerator {
                                     panic!("key size {} > max keysize {}",
                                            entry.size, MAX_KEYSIZE);
                                 }
+                                // XXX
+                                let isget = match entry.op {
+                                    Op::Get => true,
+                                    _ => false,
+                                };
+                                if unlikely!(warmup && isget)
+                                { continue; }
                                 // assert!(entry.key > 0, "zero key found");
                                 match entry.op {
                                     Op::Get => get_object(entry.key as u64),
@@ -328,8 +417,8 @@ impl WorkloadGenerator {
                                 nops += 1;
                             }
                             let t = now.elapsed().as_secs() as usize;
-                            if t > RUNTIME {
-                                // skip first RUNTIME seconds of measurements
+                            if t > RUNTIME_ {
+                                if warmup { break 'outer; }
                                 if first {
                                     first = false;
                                     now = Instant::now();
@@ -356,7 +445,9 @@ impl WorkloadGenerator {
             println!("total ops/sec {}", total);
 
         } // for each set of threads
-    }
+
+    } // for (multiple iterations)
+    } // for (each set of thread counts)
 }
 
 fn main() {
@@ -371,7 +462,8 @@ fn main() {
     info!("Specified (.records will be updated) {:?}", config);
     let mut gen = WorkloadGenerator::new(config);
     gen.setup();
-    gen.run();
+    gen.run(true); // warmup
+    gen.run(false); // actual measurement
 }
 
 //
@@ -509,8 +601,10 @@ fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
                 warn!("PUT (len {}) retries are looping: {:?} msec",
                         len, ms);
                 c = 0;
-                if ms > 10_000f64 {
-                    panic!("PUT looping too long; panic");
+                if ms > 1_000f64 {
+                    warn!("PUT taking too long; skipping");
+                    return;
+                    //panic!("PUT looping too long; panic");
                 }
             }
             let ret: i32 = extern_kvs_put(key, len as u64, value.0);
