@@ -150,18 +150,18 @@ run() {
 ##  export OMP_NUM_THREADS=1
 ##  (run 2>&1) | tee -a log-rc-M.out
 
-FEATURES="rdrand extern_ycsb redis"
-redis_stop
-# this script dumps out some info we need...
-(redis_spawn $NREDIS_SERVERS 2>&1) | tee -a log-redis.out
-sleep 1
-conf=$(tail log-redis.out | grep HIREDISCONF | tail -n 1 | awk '{print $NF}')
-[ -e hiredis.conf ] && rm -fv hiredis.conf
-[ ! -e $conf ] && echo "Error: hiredis.conf not found: $conf" && exit 1
-# link the new conf file for hiredis
-ln -s -v $conf ./hiredis.conf
-(run 2>&1) | tee -a log-redis.out
-redis_stop
+##  FEATURES="rdrand extern_ycsb redis"
+##  redis_stop
+##  # this script dumps out some info we need...
+##  (redis_spawn $NREDIS_SERVERS 2>&1) | tee -a log-redis.out
+##  sleep 1
+##  conf=$(tail log-redis.out | grep HIREDISCONF | tail -n 1 | awk '{print $NF}')
+##  [ -e hiredis.conf ] && rm -fv hiredis.conf
+##  [ ! -e $conf ] && echo "Error: hiredis.conf not found: $conf" && exit 1
+##  # link the new conf file for hiredis
+##  ln -s -v $conf ./hiredis.conf
+##  (run 2>&1) | tee -a log-redis.out
+##  redis_stop
 
 ##  # MICA and Nibble need 2MiB pages
 ##  echo 'Creating 2 MiB page reservations...'
