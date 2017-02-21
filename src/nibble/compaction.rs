@@ -78,10 +78,10 @@ use parking_lot as pl;
 
 /// Ratio of available memory to total capacity, below which
 /// compaction threads will aggressively try to compress memory.
-pub const RATIO: f64 = 0.20_f64;
+pub const RATIO: f64 = 0.2_f64;
 
 /// Number of worker threads per instance.
-pub const WTHREADS: usize = 8_usize;
+pub const WTHREADS: usize = 4_usize;
 
 //==----------------------------------------------------==//
 //      Compactor types, macros
@@ -150,6 +150,7 @@ impl Compactor {
 
     pub fn spawn(&mut self, role: WorkerRole) {
         info!("Spawning {} compaction threads", WTHREADS);
+        info!("Compaction delay ratio {}", RATIO);
         for i in 0..WTHREADS {
             let w = Worker::new(&role, i, self);
             let state = Arc::new(pl::RwLock::new(w));
@@ -218,9 +219,11 @@ fn __compact(state: &Arc<pl::RwLock<Worker>>) {
         let remaining = s.manager.freesz() as f64;
         let total: f64 = s.mgrsize as f64;
         let ratio = remaining/total;
-        debug!("node-{:?} rem. {} total {} ratio {:.2} run: {:?}",
-               s.manager.socket().unwrap(),
-               remaining, total, ratio, ratio<RATIO);
+        if s.id == 0 {
+            debug!("node-{:?} rem. {} total {} ratio {:.2} run: {:?}",
+                  s.manager.socket().unwrap(),
+                  remaining, total, ratio, ratio<RATIO);
+        }
         ratio < RATIO
     };
     if run {
