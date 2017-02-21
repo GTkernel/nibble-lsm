@@ -910,7 +910,11 @@ fn main() {
     // filling the db takes a long time (20-60 minutes!)
     // so we reuse it across runs
     let dists: Vec<Dist> = vec![Dist::Uniform, Dist::Zipfian(0.99)];
+    //let dists: Vec<Dist> = vec![Dist::Uniform];
+
     let readpct: Vec<usize> = vec![100,95,50,0];
+    //let readpct: Vec<usize> = vec![100];
+
     for d in &dists {
         gen.config.dist = *d;
         info!("Distribution: {:?}", d);
