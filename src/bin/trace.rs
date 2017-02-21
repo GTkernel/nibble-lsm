@@ -446,6 +446,8 @@ impl WorkloadGenerator {
 
         } // for each set of threads
 
+        //unsafe { extern_kvs_dump_allocator(); }
+
     } // for (multiple iterations)
     } // for (each set of thread counts)
 }
@@ -540,6 +542,7 @@ extern {
     fn extern_kvs_put(key: u64, len: u64, buf: *const u8) -> i32;
     fn extern_kvs_del(key: u64) -> bool;
     fn extern_kvs_get(key: u64) -> bool;
+    fn extern_kvs_dump_allocator();
 }
 
 #[link(name = "ramcloudext")]
