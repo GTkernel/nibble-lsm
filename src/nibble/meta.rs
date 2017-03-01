@@ -173,18 +173,57 @@ lazy_static! {
     // can add others here
 }
 
-type EpochSlotRef = UnsafeCell<*mut EpochSlot>;
+/// Reference to a slot in the Epoch table.
+type EpochSlotRef =  UnsafeCell<*mut EpochSlot>;
+
+/// An object representing a hold on a slot in the Epoch table.
+struct EpochSlotHold {
+    pub cell: EpochSlotRef,
+}
+
+impl EpochSlotHold {
+
+    pub fn new() -> Self {
+        EpochSlotHold {
+            cell: UnsafeCell::new(register())
+        }
+    }
+
+    pub fn quiesce(&self) {
+        let mut slot = unsafe { &mut **(self.cell.get()) };
+        slot.epoch = EPOCH_QUIESCE;
+    }
+
+    pub fn pin(&self) {
+        let mut slot = unsafe { &mut **(self.cell.get()) };
+        slot.epoch = read();
+    }
+}
+
+impl Drop for EpochSlotHold {
+
+    fn drop(&mut self) {
+        // apparently you cannot invoke thread::current in
+        // the destructor for thread-local objects
+        //info!("Dropping EpochSlotHold");
+
+        let mut slot = unsafe { &mut **(self.cell.get()) };
+        slot.epoch = EPOCH_QUIESCE;
+        EPOCH_TABLE.unregister(slot.slot);
+    }
+}
 
 /// Thread-local epoch state. Just a pointer to a slot's entry.
 /// UnsafeCell gives us fast mutable access when we update (pin).
 thread_local!(
-    static EPOCH_SLOT: EpochSlotRef = UnsafeCell::new(register())
+    static EPOCH_SLOT: EpochSlotHold = EpochSlotHold::new();
 );
 
 /// Register a new thread in the epoch table.
 fn register() -> *mut EpochSlot {
     let p = EPOCH_TABLE.register();
-    debug!("new thread gets slot @ {:?}", p);
+    debug!("new thread gets slot {}  @ {:?}",
+          unsafe { (*p).slot }, p);
     p
 }
 
@@ -197,21 +236,20 @@ pub fn next() -> EpochRaw {
 /// terminating, parking, or sleeping.
 #[inline(always)]
 pub fn quiesce() {
-    EPOCH_SLOT.with( |slotptr| {
-        let mut slot = unsafe { &mut**(slotptr.get()) };
-        slot.epoch = EPOCH_QUIESCE;
+    EPOCH_SLOT.with( |hold| {
+        hold.quiesce();
     });
 }
 
 /// Store the current epoch to the thread slot.
 #[inline(always)]
 pub fn pin() {
-    EPOCH_SLOT.with( |slotptr| {
-        let mut slot = unsafe { &mut**(slotptr.get()) };
-        slot.epoch = read();
+    EPOCH_SLOT.with( |hold| {
+        hold.pin();
     });
 }
 
+#[cfg(IGNORE)]
 #[inline(always)]
 pub fn slot_addr() -> usize {
     EPOCH_SLOT.with( |slotptr| {
@@ -219,6 +257,7 @@ pub fn slot_addr() -> usize {
     })
 }
 
+#[cfg(IGNORE)]
 #[inline(always)]
 pub fn current() -> Option<EpochRaw> {
     EPOCH_SLOT.with( |slotptr| {
@@ -311,6 +350,11 @@ impl EpochTable {
         let freeslots: SegQueue<u16> = SegQueue::new();
         let mut table: Vec<EpochSlot> =
             Vec::with_capacity(EPOCHTBL_MAX_THREADS as usize);
+        let mut i = 0u16;
+        for entry in &mut table {
+            (*entry).slot = i;
+            i += 1;
+        }
         for slot in 0..EPOCHTBL_MAX_THREADS {
             freeslots.push(slot);
             let e = EpochSlot::new(slot);
@@ -334,6 +378,13 @@ impl EpochTable {
         let sl = &self.table[slot];
         debug!("new slot: epoch {} slot {}", sl.epoch, sl.slot);
         sl as *const _ as *mut _
+    }
+
+    /// Release a slot in the epoch table back into the wild.
+    /// Only to be called by EpochSlotHold::drop
+    fn unregister(&self, idx: u16) {
+        self.freeslots.push(idx);
+        //println!("released slot slot {}", idx);
     }
 }
 
