@@ -843,8 +843,16 @@ impl Worker {
         let mut any = 0usize;
         while let Some(epseg) = self.reclaim_glob.try_pop() {
             let (ep,segref) = epseg;
+            let mut now = Instant::now();
             while let Some(current) = meta::min() {
                 if current > ep { break; }
+                let el = now.elapsed();
+                if el.as_secs() > 5 {
+                    warn!("waiting >5 sec to reclaim segments");
+                    warn!("meta::min = {:?}", meta::min());
+                    meta::dump_epochs();
+                    now = Instant::now();
+                }
             }
             self.manager.free(segref);
             any += 1;

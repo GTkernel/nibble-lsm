@@ -227,6 +227,10 @@ fn register() -> *mut EpochSlot {
     p
 }
 
+pub fn dump_epochs() {
+    EPOCH_TABLE.dump();
+}
+
 #[inline(always)]
 pub fn next() -> EpochRaw {
     read()
@@ -385,6 +389,21 @@ impl EpochTable {
     fn unregister(&self, idx: u16) {
         self.freeslots.push(idx);
         //println!("released slot slot {}", idx);
+    }
+
+    fn dump(&self) {
+        let mut i = 0usize;
+        let every = 8;
+        warn!("--- EPOCH TABLE ---");
+        print!("{:6}: ", 0);
+        for s in &self.table {
+            print!("{:16x} ", s.epoch);
+            i += 1;
+            if 0 == (i % every) {
+                print!("\n{:4}: ", i);
+            }
+        }
+        println!("");
     }
 }
 
