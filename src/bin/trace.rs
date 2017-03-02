@@ -323,11 +323,10 @@ impl WorkloadGenerator {
             RUNTIME_ = 2 * 60;
         } else {
             info!("Entering test phase...");
-            //threadcount = (14usize..(sockets+1))
-            //threadcount = (1usize..(sockets+1))
-            //.map(|e|cpus_pernode*e).collect();
             let mut t: Vec<usize> = (1usize..(sockets+1))
                 .map(|e|cpus_pernode*e).collect();
+            //let mut t: Vec<usize> = (1usize..8)
+                //.map(|e|cpus_pernode*e).collect();
             t.reverse();
             threadcount = t;
             RUNTIME_ = RUNTIME;
@@ -381,19 +380,16 @@ impl WorkloadGenerator {
                         let mut nops = 0_usize;
                         let mut first = true; // iteration
 
-                        let from = offset;
-                        let to   = offset + per_thread;
-                        let s    = &trace.rec[from..to];
-                        let mut iter = s.iter();
+                        let mut idx: usize = offset;
+
                         'outer: loop {
                             for _ in 0..600_000 {
-                                let entry = match iter.next() {
-                                    None => { // restart
-                                        iter = s.iter();
-                                        continue 'outer;
-                                    },
-                                    Some(e) => e,
-                                };
+                                if unlikely!(idx >= s.len()) {
+                                    idx = 0;
+                                }
+                                let entry = unsafe { s.get_unchecked(idx) };
+                                idx += 1;
+
                                 let too_big = entry.size as usize > MAX_KEYSIZE;
                                 if unlikely!(too_big) {
                                     panic!("key size {} > max keysize {}",
@@ -464,7 +460,7 @@ fn main() {
     info!("Specified (.records will be updated) {:?}", config);
     let mut gen = WorkloadGenerator::new(config);
     gen.setup();
-    gen.run(true); // warmup
+    //gen.run(true); // warmup
     gen.run(false); // actual measurement
 }
 
