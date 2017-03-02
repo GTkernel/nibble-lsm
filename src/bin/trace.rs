@@ -126,6 +126,8 @@ impl WorkloadGenerator {
     /// with two space-separated columns: key value_size
     /// both unsigned long. Then split the array among threads,
     /// and have them insert the keys
+    #[allow(unused_variables)]
+    #[allow(unused_mut)]
     fn __setup(&mut self, parallel: bool) -> Result<(),String> {
         let now = Instant::now();
 
@@ -178,7 +180,7 @@ impl WorkloadGenerator {
                     Some(osstr) => match osstr.to_str() {
                         None => panic!("{} not valid", ENV_SETUP_THREADS),
                         Some(s) => match usize::from_str_radix(s,10u32) {
-                            Err(e) => panic!("{} not a number",
+                            Err(_) => panic!("{} not a number",
                                              ENV_SETUP_THREADS),
                             Ok(n) => n,
                         },
@@ -239,11 +241,11 @@ impl WorkloadGenerator {
                                     size, MAX_KEYSIZE);
                             }
                             put_object(key as u64, v, size as usize, sock.0);
+                            n += 1;
 
                             //  // Comment these lines out if not doing insertion
                             //  // workload benchmarks. -->
                             //  i += 1;
-                            //  n += 1;
                             //  // every million, check if we should stop
                             //  if unlikely!((i >> 20) > 0) {
                             //      i = 0usize;
@@ -316,11 +318,11 @@ impl WorkloadGenerator {
         let sockets = numa::NODE_MAP.sockets();
         let cpus_pernode = numa::NODE_MAP.cpus_in(NodeId(0));
         let threadcount: Vec<usize>;
-        let RUNTIME_: usize;
+        let runtime_: usize;
         if warmup {
             info!("Entering warmup phase...");
             threadcount = vec![240usize];
-            RUNTIME_ = 2 * 60;
+            runtime_ = 2 * 60;
         } else {
             info!("Entering test phase...");
             let mut t: Vec<usize> = (1usize..(sockets+1))
@@ -329,9 +331,9 @@ impl WorkloadGenerator {
                 //.map(|e|cpus_pernode*e).collect();
             t.reverse();
             threadcount = t;
-            RUNTIME_ = RUNTIME;
+            runtime_ = RUNTIME;
         };
-        info!("Measurement length {} seconds", RUNTIME_);
+        info!("Measurement length {} seconds", runtime_);
 
         for threads in threadcount {
         for _ in 0..EXEC_ITERS {
@@ -381,6 +383,7 @@ impl WorkloadGenerator {
                         let mut first = true; // iteration
 
                         let mut idx: usize = offset;
+                        let s = &trace.rec[..];
 
                         'outer: loop {
                             for _ in 0..600_000 {
@@ -413,7 +416,7 @@ impl WorkloadGenerator {
                                 nops += 1;
                             }
                             let t = now.elapsed().as_secs() as usize;
-                            if t > RUNTIME_ {
+                            if t > runtime_ {
                                 if warmup { break 'outer; }
                                 if first {
                                     first = false;
