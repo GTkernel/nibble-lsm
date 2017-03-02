@@ -153,7 +153,7 @@ impl Bucket {
     pub fn wait_version(&self) -> u64 {
         let mut v = self.read_version();
         loop {
-            if is_even(v) { break; }
+            if likely!(is_even(v)) { break; }
             v = self.read_version();
         }
         v
