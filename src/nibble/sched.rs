@@ -1,6 +1,7 @@
 use libc;
 use std::mem;
 use std::thread;
+use nibble::numa;
 
 // TODO make afunction that runs a closure while pinned. that way we
 // can set and then unset the cpu mask within the function itself...
@@ -12,6 +13,22 @@ pub unsafe fn pin_cpu(cpu: usize) {
     let tid: libc::pid_t = 0;
     libc::CPU_ZERO(&mut mask);
     libc::CPU_SET(cpu, &mut mask);
+    let ret: libc::c_int;
+    let size = mem::size_of::<libc::cpu_set_t>();
+    ret = libc::sched_setaffinity(tid, size, &mut mask);
+    assert_eq!(ret, 0);
+}
+
+/// Pins calling thread to all cores of the given socket.
+#[allow(dead_code)]
+pub unsafe fn pin_socket(sock: usize) {
+    let mut mask:     libc::cpu_set_t = mem::zeroed();
+    let tid: libc::pid_t = 0;
+    let cpus = numa::NODE_MAP.cpus_of(numa::NodeId(sock)).get();
+    libc::CPU_ZERO(&mut mask);
+    for cpu in cpus {
+        libc::CPU_SET(cpu, &mut mask);
+    }
     let ret: libc::c_int;
     let size = mem::size_of::<libc::cpu_set_t>();
     ret = libc::sched_setaffinity(tid, size, &mut mask);

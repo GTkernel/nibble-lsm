@@ -253,11 +253,9 @@ fn worker(state: Arc<pl::RwLock<Worker>>) {
         role = s.role;
         let id = s.id;
         let sock = s.manager.socket().unwrap().0;
-        let cpu = sock * numa::NODE_MAP.cpus_in(numa::NodeId(0)) + id;
-        debug!("Pinning worker {} to cpu {} on sock {}",
-              id, cpu, sock);
+        debug!("Pinning worker {} to sock {}", id, sock);
         unsafe {
-            sched::pin_cpu(cpu);
+            sched::pin_socket(sock);
         }
     }
     loop {
