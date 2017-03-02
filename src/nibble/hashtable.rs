@@ -44,6 +44,7 @@ const ENTRIES_PER_BUCKET: usize = 15;
 const INVALID_KEY: u64 = 0u64;
 
 struct Bucket {
+    _align: [align64;0],
     version: u64,
     key:    [u64; ENTRIES_PER_BUCKET],
     value:  [u64; ENTRIES_PER_BUCKET],
