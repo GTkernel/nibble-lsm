@@ -74,14 +74,17 @@ fn volatile_add<T: num::Integer>(loc: *mut T, amt: T) {
         ptr::read_volatile(loc) + amt);
 }
 
-#[inline] pub
-fn is_even<T: num::Integer>(value: T) -> bool {
-    value.is_even()
+/// Even: the lowest bit is zero.
+/// FIXME how to make this generic? can't seem to use `&` on generic `T`
+#[inline(always)] pub
+fn is_even(value: u64) -> bool {
+    (value & 1u64) == 0u64
 }
 
-#[inline] pub
-fn is_odd<T: num::Integer>(value: T) -> bool {
-    value.is_odd()
+/// Odd: not even
+#[inline(always)] pub
+fn is_odd(value: u64) -> bool {
+    !is_even(value)
 }
 
 pub const FNV_OFFSET_BASIS_64: u64 = 0xcbf29ce484222325_u64;
