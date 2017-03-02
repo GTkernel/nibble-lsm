@@ -209,7 +209,7 @@ fn __reclaim(state: &Arc<pl::RwLock<Worker>>) {
 }
 
 fn __compact(state: &Arc<pl::RwLock<Worker>>) {
-    let dur = Duration::from_millis(500);
+    let dur = Duration::from_millis( unsafe { (rdrandq() % 500) + 300 } );
     let mut s = state.write();
     let new = s.check_new();
     debug!("{} new candidates", new);
