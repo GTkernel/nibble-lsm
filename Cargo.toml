@@ -45,7 +45,7 @@ opt-level = 3
 debug-assertions = false
 # lto=true debug=true -> LLVM bugs, so do not mix
 # https://github.com/rust-lang/rust/issues/34122
-debug = false
+debug = true
 lto = false
 
 [profile.bench]
