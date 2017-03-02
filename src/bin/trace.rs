@@ -74,7 +74,7 @@ pub const TRACE_FILE: &'static str = "fb-etc-trace.dat";
 
 /// How many threads to use for the insertion/setup phase, per socket.
 /// If not defined, it uses a default.
-pub const ENV_SETUP_THREADS: &'static str = "NIB_SETUP_THREADS";
+pub const ENV_SETUP_THREADS: &'static str = "TRACE_SETUP_THREADS_PER_SOCK";
 pub const SETUP_THREADS_PERSOCK: usize = 12;
 
 /// Set a limit for how many objects we insert from the trace.
@@ -453,6 +453,7 @@ impl WorkloadGenerator {
 
 fn main() {
     logger::enable();
+    info!("Running with MAX_MEMSIZE = {}", MAX_MEMSIZE);
 
     let config = Config {
         load_path:  String::from(LOAD_FILE),

@@ -41,7 +41,7 @@ run() {
 
     # Use this for measuring performance of inserts (setup phase).
     #for ((s=1;s<=15;s++)); do
-        #export NIB_SETUP_THREADS=$s
+        #export TRACE_SETUP_THREADS_PER_SOCK=$s
         #cargo run --features "$FEATURES" --release --bin trace
     #done
 
