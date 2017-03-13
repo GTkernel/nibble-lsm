@@ -13,6 +13,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::mem;
 use std::u64;
+use std::thread;
 
 use crossbeam::sync::SegQueue;
 
@@ -179,13 +180,19 @@ type EpochSlotRef =  UnsafeCell<*mut EpochSlot>;
 /// An object representing a hold on a slot in the Epoch table.
 struct EpochSlotHold {
     pub cell: EpochSlotRef,
+    pub is_main: bool,
 }
 
 impl EpochSlotHold {
 
     pub fn new() -> Self {
         EpochSlotHold {
-            cell: UnsafeCell::new(register())
+            cell: UnsafeCell::new(register()),
+            // we assume the main thread has "main" in its name
+            is_main: match thread::current().name() {
+                None => false,
+                Some(s) => s.contains("main"),
+            }
         }
     }
 
@@ -202,14 +209,16 @@ impl EpochSlotHold {
 
 impl Drop for EpochSlotHold {
 
+    /// Only release epoch if we are not the main thread. Accessing
+    /// TLS from a program exit may touch other TLS state that may
+    /// already be released, resulting in unexpected termination.
+    /// We assume all other threads exit prior to main.
     fn drop(&mut self) {
-        // apparently you cannot invoke thread::current in
-        // the destructor for thread-local objects
-        //info!("Dropping EpochSlotHold");
-
-        let mut slot = unsafe { &mut **(self.cell.get()) };
-        slot.epoch = EPOCH_QUIESCE;
-        EPOCH_TABLE.unregister(slot.slot);
+        if !self.is_main {
+            let mut slot = unsafe { &mut **(self.cell.get()) };
+            slot.epoch = EPOCH_QUIESCE;
+            EPOCH_TABLE.unregister(slot.slot);
+        }
     }
 }
 
