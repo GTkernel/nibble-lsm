@@ -37,14 +37,14 @@ struct PinnedEpoch { }
 impl PinnedEpoch {
     pub fn new() -> Self {
         meta::pin();
-        info!("Pinning epoch");
+        // info!("Pinning epoch");
         PinnedEpoch { }
     }
 }
 impl Drop for PinnedEpoch {
     fn drop(&mut self) {
         meta::quiesce();
-        info!("Unpinning epoch");
+        // info!("Unpinning epoch");
     }
 }
 
