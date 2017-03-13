@@ -31,6 +31,23 @@ macro_rules! min_log_size {
 //      Nibble interface
 //==----------------------------------------------------==//
 
+/// Threads use this to automatically pin their epoch values,
+/// and release them when exiting each method.
+struct PinnedEpoch { }
+impl PinnedEpoch {
+    pub fn new() -> Self {
+        meta::pin();
+        info!("Pinning epoch");
+        PinnedEpoch { }
+    }
+}
+impl Drop for PinnedEpoch {
+    fn drop(&mut self) {
+        meta::quiesce();
+        info!("Unpinning epoch");
+    }
+}
+
 pub struct NibblePerNode {
     socket: usize,
     manager: SegmentManagerRef,
@@ -210,7 +227,7 @@ impl Nibble {
 
     #[inline(always)]
     fn __put(&self, obj: &ObjDesc, hint: PutPolicy) -> Status {
-        meta::pin();
+        let ep = PinnedEpoch::new();
         let va: usize;
 
         let socket: usize = match hint {
@@ -229,7 +246,6 @@ impl Nibble {
         // elsewhere?
         match self.nodes[socket].log.append(obj) {
             Err(code) => {
-                meta::quiesce();
                 return Err(code);
             },
             Ok(v) => va = v,
@@ -260,11 +276,9 @@ impl Nibble {
             // no need to undo the log append;
             // entries are stale until we update the index
             warn!("index update returned false");
-            meta::quiesce();
             return Err(ErrorCode::TableFull);
         }
 
-        meta::quiesce();
         Ok(1)
     }
 
@@ -295,7 +309,7 @@ impl Nibble {
     /// FIXME why don't we return the length... ?
     #[inline(always)]
     pub fn get_object(&self, key: u64, buf: &mut [u8]) -> Status {
-        meta::pin();
+        let ep = PinnedEpoch::new();
 
         // 1. lookup the key and get the entry
         let ientry: IndexEntry = match self.index.get(key) {
@@ -314,13 +328,12 @@ impl Nibble {
         self.nodes[socket as usize]
             .log.get_entry(va as usize, buf);
 
-        meta::quiesce();
         Ok(1)
     }
 
     #[inline(always)]
     pub fn del_object(&self, key: u64) -> Status {
-        meta::pin();
+        let ep = PinnedEpoch::new();
 
         // 1. remove key and acquire old
         let ientry: IndexEntry = match self.index.remove(key) {
@@ -340,7 +353,6 @@ impl Nibble {
         self.nodes[socket as usize].seginfo
             .decr_live(idx, head.len_with_header());
 
-        meta::quiesce();
         Ok(1)
     }
 
