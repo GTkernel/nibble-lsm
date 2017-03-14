@@ -1,3 +1,8 @@
+// this file converts a file that has object sizes
+// into a binary trace that holds tuples of { key, size }
+// each which is 32-bit unsigned integer
+// Used for loading the initial data set for the Facebook
+// trace from the SIGMETRICS paper
 #include <vector>
 
 #include <stdio.h>
