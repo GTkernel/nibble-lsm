@@ -1,0 +1,5 @@
+#! /usr/bin/env bash
+for cc in *.cc; do
+    echo clang++ -std=c++14 $cc -o $(basename $cc .cc)
+    clang++ -O2 -std=c++14 $cc -o $(basename $cc .cc)
+done

@@ -1,3 +1,7 @@
+// Simulate the key-value store trace provided by convert.cc
+// We do this to have an initial analysis of the hit rates, and key
+// access distribution before doing a full emulation with a real
+// key-value store system.
 #include <cstdio>
 #include <cassert>
 #include <cstdint>
@@ -110,29 +114,37 @@ void hist(size_t nBuckets, size_t nKeys) {
         ofile << i << std::endl;
 }
 
-void run() {
+void run(bool loop = true) {
     std::cout << "Running..." << std::endl;
     long i = 0;
-    size_t printEvery = 1ul<<21;
+    size_t printEvery = 1ul<<15;
     std::cout << "    printing status every " << printEvery
         << " ops" << std::endl;
-    std::cout << "totalSize activeObjects delHit getHit setHit hitRate" << std::endl;
+    std::cout << "{GET,PUT,DEL}\% is count of op type / overall ops in a window" << std::endl;
+    std::cout << "{ins,del}Rate is, of the PUT/DEL individually, which resulted in new or deleting an object" << std::endl;
+    std::cout << "totalSize activeObjects GET\% PUT\% DEL\% insRate delRate" << std::endl;
+    size_t dels = 0ul, gets = 0ul, sets = 0ul;
     size_t delHit = 0ul, getHit = 0ul, setHit = 0ul;
     size_t hits = 0ul, total = 0ul;
     while (true) {
         entry_t &e = trace[i++];
-        if (i >= traceN) i = 0ul;
+        if (i >= traceN) {
+            if (loop) i = 0ul;
+            else break;
+        }
 
         ++total;
         bool isHit = (*exists)[e.key];
         if (isHit)
             ++hits;
 
-        if (e.op == Op::GET) {
+        if (e.op == static_cast<OpType>(Op::GET)) {
+            ++gets;
             if (isHit)
                 ++getHit;
         }
-        else if (e.op == Op::SET) {
+        else if (e.op == static_cast<OpType>(Op::SET)) {
+             ++sets;
             long oldSize = 0;
             if (isHit) {
                 ++setHit; // becomes an update
@@ -145,7 +157,8 @@ void run() {
             totalSize += ((long)e.size - oldSize);
              (*sizes)[e.key] = e.size;
         }
-        else if (e.op == Op::DEL) {
+        else if (e.op == static_cast<OpType>(Op::DEL)) {
+            ++dels;
             if (isHit) {
                 ++delHit;
                 totalSize -= (*sizes)[e.key];
@@ -157,21 +170,34 @@ void run() {
 
         if (0 == (i & (printEvery-1))) {
             std::cout << totalSize << " " << totalExist
-                << " " << delHit
-                << " " << getHit
-                << " " << setHit
-                << " " << (float)hits / (float)total
+                << " " << 100.f * (float)gets / (float)total
+                << " " << 100.f * (float)sets / (float)total
+                << " " << 100.f * (float)dels / (float)total
+                // SET/PUT that miss will do an insertion
+                << " " << 100.f * (float)(sets - setHit) / (float)sets
+                // DEL that hit will actually remove
+                << " " << 100.f * (float)delHit / (float)dels
+                << " " << 100.f * (float)hits / (float)total
                 << std::endl;
             delHit = setHit = getHit = hits = total = 0ul;
+            dels = sets = gets = 0ul;
         }
     }
+    std::cout << totalSize << " " << totalExist
+        << " " << 100.f * (float)gets / (float)total
+        << " " << 100.f * (float)sets / (float)total
+        << " " << 100.f * (float)dels / (float)total
+        // SET/PUT that miss will do an insertion
+        << " " << 100.f * (float)(sets - setHit) / (float)sets
+        // DEL that hit will actually remove
+        << " " << 100.f * (float)delHit / (float)dels
+        << " " << 100.f * (float)hits / (float)total
+        << std::endl;
+    delHit = setHit = getHit = hits = total = 0ul;
+    dels = sets = gets = 0ul;
 }
 
-int main(int narg, char *args[]) {
-    if (narg != 3) {
-        fprintf(stderr, "Usage: %s tracefile objfile\n", *args);
-        exit(EXIT_FAILURE);
-    }
+void run_with_objfile(int narg, char *args[]) {
     size_t bytes;
 
     std::cout << "Mapping input files..." << std::endl;
@@ -192,4 +218,40 @@ int main(int narg, char *args[]) {
     load();
     run();
     //hist(512, objectsN);
+}
+
+void run_without_objfile(int narg, char *args[]) {
+    size_t bytes;
+
+    std::cout << "Mapping input files..." << std::endl;
+    readInput(args[1], (void**)&trace, bytes);
+    traceN = bytes / sizeof(*trace);
+    std::cout << "    " << traceN << " trace entries" << std::endl;
+
+    objectsN = 1ul<<30;
+    std::cout << "    " << objectsN << " objects (static assumption)" << std::endl;
+
+    std::cout << "    considering all objects (as not inserted)" << std::endl;
+    size_t loadN = objectsN;
+    std::cout << "Initializing bit maps... (" << loadN << " objects)" << std::endl;
+    exists = new std::vector<bool>(objectsN, false);
+    sizes = new std::vector<uint32_t>(objectsN, 0u);
+
+    // load() is skipped because the trace assumes starting from
+    // an empty state
+    // Pass false to have it stop when the trace concludes
+    run(false);
+    //hist(512, objectsN);
+}
+
+int main(int narg, char *args[]) {
+    if (narg < 2) {
+        fprintf(stderr, "Usage: %s tracefile [objfile]\n", *args);
+        exit(EXIT_FAILURE);
+    }
+
+    if (narg == 3)
+        run_with_objfile(narg, args);
+    if (narg == 2)
+        run_without_objfile(narg, args);
 }
