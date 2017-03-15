@@ -217,7 +217,10 @@ impl Drop for EpochSlotHold {
         if !self.is_main {
             let mut slot = unsafe { &mut **(self.cell.get()) };
             slot.epoch = EPOCH_QUIESCE;
-            EPOCH_TABLE.unregister(slot.slot);
+            // This causes TLS aborts when threads exit...
+            // XXX need to fix, to enable slots to be reused. For now,
+            // still create large number of slots in the table.
+            //EPOCH_TABLE.unregister(slot.slot);
         }
     }
 }
