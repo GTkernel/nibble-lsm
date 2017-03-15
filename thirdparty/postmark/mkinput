@@ -1,0 +1,25 @@
+#! /usr/bin/env bash
+set -e
+
+MIN_SIZE=200
+MAX_SIZE=8192
+
+N_FILES=1000000
+N_SUBDIR=1000
+N_XACT=1000
+
+# this does not handle paths with spaces
+LOC=$(pwd)
+
+[ -e postmark.in ] && \
+    mv -v postmark.in postmark.in.old
+(
+    echo set size $MIN_SIZE $MAX_SIZE
+    echo set number $N_FILES
+    echo set transactions $N_XACT
+    echo set location $LOC
+    echo set subdirectories $N_SUBDIR
+    echo show
+    echo run
+2>&1) > postmark.in
+
