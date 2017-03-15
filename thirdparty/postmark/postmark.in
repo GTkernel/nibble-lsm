@@ -1,0 +1,7 @@
+set size 200 8192
+set number 1000000
+set transactions 1000
+set location /tmp
+set subdirectories 1000
+show
+run
