@@ -39,12 +39,12 @@ int main(int narg, char *args[]) {
     size_t n = 0ul, max = 0ul;
     char *pos = (char*)source;
     while ((uintptr_t)pos < ((uintptr_t)source + len)) {
-        struct entry *e = (struct entry*)pos;
+        entry *e = (entry*)pos;
         //if (e->key == 0) n++; // count zero keys
-        //printf("%lu %u %u\n", e->key, e->op, e->size);
+        printf("%lu %u %u\n", e->key, e->op, e->size);
         pos += sizeof(*e);
     }
-    printf("n %lu\n", n);
+    //printf("n %lu\n", n);
 
     munmap(source, len);
     close(fd);

@@ -25,10 +25,8 @@ void pexit(const char *msg) {
     exit(EXIT_FAILURE);
 }
 
-typedef struct entry entry_t;
-
 // points to mmap'd file containing the trace
-entry_t *trace;
+entry *trace;
 size_t traceN;
 
 // the set of initial objects to load in
@@ -95,7 +93,7 @@ void hist(size_t nBuckets, size_t nKeys) {
     size_t printEvery = 1ul<<27;
     size_t perBucket = nKeys / nBuckets;
     while (true) {
-        entry_t &e = trace[i++];
+        entry &e = trace[i++];
         if (i >= traceN) break;
         ++buckets[ e.key / perBucket ];
         if (e.key > maxKey)
@@ -126,14 +124,16 @@ void run(bool loop = true) {
     size_t dels = 0ul, gets = 0ul, sets = 0ul;
     size_t delHit = 0ul, getHit = 0ul, setHit = 0ul;
     size_t hits = 0ul, total = 0ul;
+    size_t overall_total = 0ul;
     while (true) {
-        entry_t &e = trace[i++];
+        entry &e = trace[i++];
         if (i >= traceN) {
             if (loop) i = 0ul;
             else break;
         }
 
         ++total;
+        ++overall_total;
         bool isHit = (*exists)[e.key];
         if (isHit)
             ++hits;
@@ -195,6 +195,9 @@ void run(bool loop = true) {
         << std::endl;
     delHit = setHit = getHit = hits = total = 0ul;
     dels = sets = gets = 0ul;
+    std::cout << "Overall total ops: " << overall_total << std::endl;
+    size_t live = std::count(exists->begin(), exists->end(), true);
+    std::cout << "Remaining live objects: " << live << std::endl;
 }
 
 void run_with_objfile(int narg, char *args[]) {
