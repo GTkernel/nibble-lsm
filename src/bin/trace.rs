@@ -91,6 +91,10 @@ pub const EXEC_ITERS: usize = 1;
 /// this variable to find it.
 pub const SETUP_STOP_AFTER: usize = 60;
 
+/// If the trace is short and we run out of operations: true to loop
+/// over it until RUNTIME is reached, or false to stop at that point.
+pub const CYCLE_TRACE: bool = false;
+
 //
 // END of user-configurable options
 //////////////////////////////////////////////////////////////////////
@@ -120,6 +124,13 @@ impl WorkloadGenerator {
             config: config,
             sockets: numa::NODE_MAP.sockets(),
         }
+    }
+
+    /// don't load any initialization file. just start the KVS
+    fn quick_setup(&mut self) {
+        self.config.records = 1usize << 28;
+        info!("Running with {:?}", self.config);
+        kvs_init(&self.config);
     }
 
     /// read in the file with the load trace
@@ -355,6 +366,7 @@ impl WorkloadGenerator {
             let offsets = pl::Mutex::new(offsets);
 
             let throughput = AtomicUsize::new(0);
+            let mut time_overall = Instant::now();
 
             let mut guards = vec![];
             crossbeam::scope( |scope| {
@@ -380,14 +392,20 @@ impl WorkloadGenerator {
 
                         let mut now = Instant::now();
                         let mut nops = 0_usize;
-                        let mut first = true; // iteration
+                        let mut first = false; // iteration
 
                         let mut idx: usize = offset;
                         let s = &trace.rec[..];
 
+                        let mut exit_now: bool = false;
                         'outer: loop {
                             for _ in 0..600_000 {
                                 if unlikely!(idx >= s.len()) {
+                                    info!("Restarted trace!");
+                                    if !CYCLE_TRACE {
+                                        exit_now = true;
+                                        break;
+                                    }
                                     idx = 0;
                                 }
                                 let entry = unsafe { s.get_unchecked(idx) };
@@ -416,7 +434,7 @@ impl WorkloadGenerator {
                                 nops += 1;
                             }
                             let t = now.elapsed().as_secs() as usize;
-                            if t > runtime_ {
+                            if t > runtime_ || exit_now == true {
                                 if warmup { break 'outer; }
                                 if first {
                                     first = false;
@@ -425,7 +443,7 @@ impl WorkloadGenerator {
                                     continue 'outer;
                                 }
                                 let th = (nops as f64 / t as f64) as usize;
-                                info!("thread throughput {}", th);
+                                info!("thread throughput {} ops/sec", th);
                                 throughput.fetch_add( th as usize, Ordering::SeqCst );
                                 break 'outer;
                             }
@@ -440,8 +458,9 @@ impl WorkloadGenerator {
 
             }); // crossbeam
 
+            let s = time_overall.elapsed().as_secs();
             let total = throughput.load(Ordering::SeqCst);
-            println!("total ops/sec {}", total);
+            println!("total ops/sec {} time {} sec", total, s);
 
         } // for each set of threads
 
@@ -463,7 +482,8 @@ fn main() {
     };
     info!("Specified (.records will be updated) {:?}", config);
     let mut gen = WorkloadGenerator::new(config);
-    gen.setup();
+    //gen.setup();
+    gen.quick_setup();
     //gen.run(true); // warmup
     gen.run(false); // actual measurement
 }
