@@ -33,7 +33,7 @@ std::vector<entry> trace;
 std::map<std::string,uint64_t> key_map;
 
 void dump(int fd) {
-    size_t expected = trace.size() * sizeof(uint32_t);
+    size_t expected = trace.size() * sizeof(std::vector<entry>::value_type);
     if (expected != write(fd, trace.data(), expected))
         pexit("write");
     trace.clear();
@@ -43,6 +43,7 @@ enum Delim: char {
     Newline = '\n',
     Space = ' ',
     Nul = '\0',
+    Hash = '#',
 };
 
 // return true if it found 'to' else, it reached the NUL byte
@@ -125,9 +126,14 @@ void convert(char const *input, int fd) {
         exit(EXIT_FAILURE);
     }
 
+    size_t total = 0ul;
+
     // Layout:
     // 1767722821910036 6667 get 0 0x01000000000000009b5acf3f2c538253\n
     while (true) {
+        if (*p == Delim::Hash)
+            if (!skip_line(p)) break;
+
         // Skip first two columns in each row.
         for (int i = 0; i < 2; i++, ++p)
             if (!skip_to(p, Delim::Space))
@@ -196,9 +202,11 @@ void convert(char const *input, int fd) {
         if (!skip_line(p))
             break;
 
+        ++total;
         if (trace.size() >= (1ul << 27)) dump(fd);
     }
     dump(fd);
+    std::cout << "total " << total << std::endl;
 }
 
 int main(int narg, char *args[]) {
