@@ -121,7 +121,7 @@ cmd command_list[]={ /* table of CLI commands */
    {"set report",cli_set_report,"Choose verbose or terse report format"},
    {"run",cli_run,"Runs one iteration of benchmark"},
    {"show",cli_show,"Displays current configuration"},
-   {"help",cli_help,"Prlongs out available commands"},
+   {"help",cli_help,"Prints out available commands"},
    {"quit",cli_quit,"Exit program"},
    NULL
 };
@@ -538,7 +538,7 @@ time_t t0;
    return((t1-=t0)?t1:1);
 }
 
-/* prlongs out results from running transactions */
+/* prints out results from running transactions */
 void verbose_report(fp,end_time,start_time,t_end_time,t_start_time,deleted)
 FILE *fp;
 time_t end_time,start_time,t_end_time,t_start_time; /* timers from run */
@@ -887,7 +887,7 @@ long buffered; /* 1=buffered I/O (default), 0=unbuffered I/O */
 
       if ((i % percent)==0) /* if another tenth of the work is done...*/
          {
-         putchar('.'); /* prlong progress indicator */
+         putchar('.'); /* print progress indicator */
          fflush(stdout);
          }
       }
@@ -1035,7 +1035,7 @@ char *param; /* unused */
       delete_file(i);
    printf("Done\n");
 
-   /* prlong end time and difference, transaction numbers */
+   /* print end time and difference, transaction numbers */
    time(&end_time);
 
    /* delete previously created subdirectories */
@@ -1075,7 +1075,7 @@ char *param; /* unused */
    return(1); /* return 1 unless exit requested, then return 0 */
 }
 
-/* CLI callback for 'show' - prlong values of configuration variables */
+/* CLI callback for 'show' - print values of configuration variables */
 long cli_show(param) 
 char *param; /* optional: name of output file */
 {
@@ -1134,7 +1134,7 @@ char *param; /* unused */
    return(0); /* return 1 unless exit requested, then return 0 */
 }
 
-/* CLI callback for 'help' - prlongs help strings from command_list */
+/* CLI callback for 'help' - prints help strings from command_list */
 long cli_help(param) 
 char *param; /* optional: specific command to get help for */
 {
@@ -1164,8 +1164,8 @@ long size;
 {
    char *result;
 
-   printf("%s",PROMPT);                 /* prlong prompt */
-   fflush(stdout);                      /* force prompt to prlong */
+   printf("%s",PROMPT);                 /* print prompt */
+   fflush(stdout);                      /* force prompt to print */
    if ((result=fgets(buffer,size,stdin))) /* read line safely */
       {
       buffer[strlen(buffer)-1]='\0';    /* delete final CR */
