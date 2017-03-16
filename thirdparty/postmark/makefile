@@ -1,7 +1,7 @@
-CC := clang
-CFLAGS := -std=c11 -O2 -g -Wno-unused-result
+CC := gcc
+CFLAGS := -std=gnu11 -O2 -g -Wno-unused-result
 LDFLAGS :=
-LIBS :=
+LIBS := -lrt
 
 postmark:	postmark-1_5.o makefile
 	$(CC) $< -o $@ $(LDFLAGS) $(LIBS)

@@ -56,6 +56,7 @@ Versions:
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #ifdef _WIN32
 #include <io.h>
@@ -178,6 +179,17 @@ char *read_buffer; /* temporary space for reading file data longo */
 #define RND(x) ((x>0)?(genrand() % (x)):0)
 extern unsigned long genrand();
 extern void sgenrand();
+
+long tdiff(struct timespec s, struct timespec e)
+{
+  return (e.tv_sec * 1e9 + e.tv_nsec)
+    - (s.tv_sec * 1e9 + s.tv_nsec);
+}
+
+long elapsed(struct timespec since, struct timespec *now) {
+    clock_gettime(CLOCK_MONOTONIC, now);
+    return tdiff(since, *now);
+}
 
 /* converts longeger values to byte/kilobyte/megabyte strings */
 char *scale(i)
@@ -858,7 +870,10 @@ long buffered; /* 1=buffered I/O (default), 0=unbuffered I/O */
    long percent; /* one tenth of the specified transactions */
    long i;
 
-   percent=transactions/10;
+   struct timespec last;
+   clock_gettime(CLOCK_MONOTONIC, &last);
+   puts("");
+   percent=transactions/100;
    for (i=0; i<transactions; i++)
       {
       if (files_created==files_deleted)
@@ -887,7 +902,13 @@ long buffered; /* 1=buffered I/O (default), 0=unbuffered I/O */
 
       if ((i % percent)==0) /* if another tenth of the work is done...*/
          {
-         putchar('.'); /* print progress indicator */
+         struct timespec now;
+         long ns = elapsed(last, &now) * ((float)(transactions - i) / percent);
+         last = now;
+         for (int ii = 0; ii < 16; ii++) printf(" ");
+         for (int ii = 0; ii < 64; ii++) printf("\b");
+         printf("%3.1f%% ETA %ld sec",
+           (100.f * i)/transactions, (long)((float)ns/1e9));
          fflush(stdout);
          }
       }
@@ -1012,11 +1033,27 @@ char *param; /* unused */
 
    time(&start_time); /* store start time */
 
+   struct timespec last;
+   clock_gettime(CLOCK_MONOTONIC, &last);
+
    /* create files in specified directory until simultaneous number */
    printf("Creating files...");
    fflush(stdout);
-   for (i=0; i<simultaneous; i++)
+   long pct = simultaneous/1000;
+   puts("");
+   for (i=0; i<simultaneous; i++) {
       create_file(buffered_io);
+      if ((i % pct) == 0) {
+        struct timespec now;
+        long ns = elapsed(last, &now) * ((float)(simultaneous - i) / pct);
+        last = now;
+        for (int ii = 0; ii < 16; ii++) printf(" ");
+        for (int ii = 0; ii < 64; ii++) printf("\b");
+        printf("%3.1f%% ETA %ld sec",
+          (100.f * i)/simultaneous, (long)((float)ns/1e9));
+        fflush(stdout);
+      }
+   }
    printf("Done\n");
   
    printf("Performing transactions");
@@ -1031,8 +1068,16 @@ char *param; /* unused */
    printf("Deleting files...");
    fflush(stdout);
    delete_base=files_deleted;
-   for (i=0; i<simultaneous<<1; i++)
+   pct = (simultaneous<<1)/100;
+   printf("   ");
+   for (i=0; i<simultaneous<<1; i++) {
       delete_file(i);
+      if ((i % pct) == 0) {
+          printf("\b\b\b\b\b\b");
+          printf("%3ld%%  ", (i*100)/(simultaneous<<1));
+          fflush(stdout);
+      }
+   }
    printf("Done\n");
 
    /* print end time and difference, transaction numbers */

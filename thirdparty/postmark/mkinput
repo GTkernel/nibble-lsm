@@ -1,15 +1,23 @@
 #! /usr/bin/env bash
 set -e
+set -u
 
+# 400 MiB
+#MIN_SIZE=200
+#MAX_SIZE=4096
+#N_FILES=1000000
+
+# ? MiB
 MIN_SIZE=200
-MAX_SIZE=8192
+MAX_SIZE=4096
+N_FILES=10000000
 
-N_FILES=1000000
 N_SUBDIR=1000
-N_XACT=1000
+N_XACT=100000000
 
 # this does not handle paths with spaces
-LOC=$(pwd)
+#LOC=/mnt/tablefs
+LOC=/opt/data/alex/pmdata
 
 [ -e postmark.in ] && \
     mv -v postmark.in postmark.in.old
