@@ -49,6 +49,7 @@ Versions:
 */
 
 #include <stdio.h>
+#include <assert.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
@@ -57,6 +58,8 @@ Versions:
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
+
+#include "queue.hh"
 
 #ifdef _WIN32
 #include <io.h>
@@ -162,7 +165,7 @@ typedef struct {
 } file_entry;
 
 file_entry *file_table; /* table of files in use */
-long file_allocated;     /* polonger to last allocated slot in file_table */
+long file_allocated;     /* pointer to last allocated slot in file_table */
 
 typedef struct file_system_struct {
    file_entry system;
@@ -179,6 +182,9 @@ char *read_buffer; /* temporary space for reading file data longo */
 #define RND(x) ((x>0)?(genrand() % (x)):0)
 extern unsigned long genrand();
 extern void sgenrand();
+
+/* this is a C++ STL queue linked from queue.cc */
+void *file_idx_queue;
 
 long tdiff(struct timespec s, struct timespec e)
 {
@@ -624,6 +630,7 @@ long deleted; /* files deleted back-to-back */
 /* returns file_table entry of unallocated file
    - if not at end of table, then return next entry
    - else search table for gaps */
+#if 0
 long find_free_file()
 {
    long i;
@@ -639,6 +646,13 @@ long find_free_file()
             }
 
    return(-1); /* return -1 only if no free files found */
+}
+#endif
+long find_free_file() {
+    if (1 == queue_empty(file_idx_queue))
+        return -1;
+    /* file_allocated not used in this impl. */
+    return queue_pop(file_idx_queue);
 }
 
 /* write 'size' bytes to file 'fd' using unbuffered I/O */
@@ -751,6 +765,7 @@ long number;
          { /* reset entry in file_table and update counter */
          file_table[number].size=0;
          files_deleted++;
+         queue_push(file_idx_queue, number);
          }
       }
 }
@@ -873,7 +888,7 @@ long buffered; /* 1=buffered I/O (default), 0=unbuffered I/O */
    struct timespec last;
    clock_gettime(CLOCK_MONOTONIC, &last);
    puts("");
-   percent=transactions/100;
+   percent=transactions/10000;
    for (i=0; i<transactions; i++)
       {
       if (files_created==files_deleted)
@@ -902,12 +917,14 @@ long buffered; /* 1=buffered I/O (default), 0=unbuffered I/O */
 
       if ((i % percent)==0) /* if another tenth of the work is done...*/
          {
+         if ((i % (transactions/100))==0)
+             puts("");
          struct timespec now;
          long ns = elapsed(last, &now) * ((float)(transactions - i) / percent);
          last = now;
          for (int ii = 0; ii < 16; ii++) printf(" ");
          for (int ii = 0; ii < 64; ii++) printf("\b");
-         printf("%3.1f%% ETA %ld sec",
+         printf("%3.2f%% ETA %ld sec",
            (100.f * i)/transactions, (long)((float)ns/1e9));
          fflush(stdout);
          }
@@ -1018,6 +1035,12 @@ char *param; /* unused */
       NULL)
       fprintf(stderr,"Error: Failed to allocate table for %ld files\n",
          simultaneous<<1);
+
+   // set up queue of free file indices. indicate all are available
+   file_idx_queue = queue_new();
+   assert(file_idx_queue);
+   for (long i = 0; i < simultaneous<<1; i++)
+       queue_push(file_idx_queue, i);
 
    if (file_system_count>0)
       location_index=build_location_index(file_systems,file_system_weight);
