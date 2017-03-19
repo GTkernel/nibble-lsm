@@ -7,17 +7,22 @@ set -u
 #MAX_SIZE=4096
 #N_FILES=1000000
 
-# ? MiB
+# 10 GiB
 MIN_SIZE=200
 MAX_SIZE=4096
-N_FILES=10000000
+N_FILES=2000000
 
-N_SUBDIR=1000
-N_XACT=100000000
+# 39 GiB
+#MIN_SIZE=200
+#MAX_SIZE=4096
+#N_FILES=10000000
+
+N_SUBDIR=10000
+N_XACT=32000000
 
 # this does not handle paths with spaces
 #LOC=/mnt/tablefs
-LOC=/opt/data/alex/pmdata
+LOC=/dev/shm/merrital/tablefs-mnt
 
 [ -e postmark.in ] && \
     mv -v postmark.in postmark.in.old
