@@ -478,7 +478,7 @@ pub fn get_ref(list: &[BlockRef], idx: usize, va: usize) -> EntryReference {
     let mut nblks = 1;
     let entry_len = href.len_with_header();
     if entry_len > blk_tail {
-        nblks += ((entry_len - blk_tail) / BLOCK_SIZE) + 1;
+        nblks += ((entry_len - blk_tail - 1) / BLOCK_SIZE) + 1;
     }
     debug_assert!( (idx + nblks - 1) < list.len() );
 
