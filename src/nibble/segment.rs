@@ -1255,10 +1255,16 @@ impl SegmentManager {
     /// threads will periodically query this queue for new segments to
     /// add to its candidate list.
     pub fn add_closed(&self, seg: &SegmentRef) {
+        let order = Ordering::Relaxed;
         let mut closed = self.closed.write();
-        let n = self.next.load(Ordering::Relaxed);
-        self.next.store((n+1) % compaction::WTHREADS,
-                        Ordering::Relaxed);
+        let mut n;
+        loop {
+            n = self.next.load(Ordering::Relaxed);
+            let m = (n + 1) % compaction::WTHREADS;
+            if n == self.next.compare_and_swap(n, m, order) {
+                break;
+            }
+        }
         closed[n].push_back(seg.clone());
     }
 
