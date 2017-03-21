@@ -770,6 +770,7 @@ impl Worker {
             // monitor the new segment, too
             debug!("adding slot {} to candidates",
                 newseg.read().slot());
+            newseg.write().close();
             self.add_candidate(&newseg);
         }
 
