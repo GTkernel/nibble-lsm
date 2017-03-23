@@ -336,24 +336,23 @@ impl Nibble {
         let ep = PinnedEpoch::new();
 
         // 1. remove key and acquire old
-        let ientry: IndexEntry = match self.index.remove(key) {
-            None => {
-                return Err(ErrorCode::KeyNotExist);
-            },
-            Some(entry) => entry,
-        };
-        let (socket,va) = extract(ientry);
+        let r = self.index.remove_map(key, |entry| {
+            if let Some(ientry) = entry {
+                let (socket,va) = extract(ientry);
 
-        // 2. read the size of the object
-        let node = &self.nodes[socket as usize];
-        let head = node.log.copy_header(va as usize);
+                // 2. read the size of the object
+                let node = &self.nodes[socket as usize];
+                let head = node.log.copy_header(va as usize);
 
-        // 3. decrement live size of segment
-        let idx: usize = node.manager.segment_of(va as usize);
-        self.nodes[socket as usize].seginfo
-            .decr_live(idx, head.len_with_header());
+                // 3. decrement live size of segment
+                let idx: usize = node.manager.segment_of(va as usize);
+                self.nodes[socket as usize].seginfo
+                    .decr_live(idx, head.len_with_header());
+            }
+        });
 
-        Ok(1)
+        if r { Ok(1) }
+        else { Err(ErrorCode::KeyNotExist) }
     }
 
     //

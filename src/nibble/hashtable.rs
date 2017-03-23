@@ -604,6 +604,58 @@ impl HashTable {
         assert!(false, "Unreachable path");
     }
 
+    /// copy-pasta from del()
+    #[inline(always)]
+    pub fn del_map<F>(&self, key: u64, f: F) -> bool
+        where F: Fn(Option<u64>) {
+        let hash = Self::make_hash(key);
+
+        let mut bidx: usize;
+        let mut buckets: &[Bucket];
+        let mut bucket: &Bucket;
+        let mut bver: u64;
+        let mut opts: find_ops;
+
+        // before reading bucket, you must save table version
+        let mut tver = self.version();
+
+        bidx = self.index(hash);
+        buckets = self.as_slice();
+        bucket = &buckets[bidx];
+
+        'retry: loop {
+
+            let v = self.version();
+            if unlikely!(v != tver) {
+                bidx = self.index(hash);
+                buckets = self.as_slice();
+                bucket = &buckets[bidx];
+                tver = v;
+            }
+
+            let guard = bucket.wait_lock();
+            opts = bucket.find_key(key);
+
+            if unlikely!(tver != self.version()) {
+                continue 'retry;
+            }
+
+            let (e,inv) = opts;
+            if e.is_none() {
+                trace!("DEL: key {} not found after locking bucket!", key);
+                f(None);
+                return false;
+            }
+
+            let mut value: u64 = 0;
+            bucket.del_key(e.unwrap(), &mut value);
+            f(Some(value));
+            return true;
+        }
+        assert!(false, "Unreachable path");
+    }
+
+
     /// Grab the lock on the bucket which would hold the key, and
     /// execute the given lambda.  Does not modify the bucket. We do
     /// not need to search for the key; only lock the bucket.

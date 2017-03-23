@@ -143,6 +143,20 @@ impl Index {
         }
     }
 
+    /// Attempt to delete the key. Invoke f while bucket lock is held, passing
+    /// None if the key does not exist, else Some() with the entry.
+    #[inline(always)]
+    pub fn remove_map<F>(&self, key: u64, f: F) -> bool
+        where F: Fn(Option<u64>) {
+
+        let tidx = self.table_idx(key);
+        let ref p = self.tables[tidx];
+        unsafe {
+            let ht: &HashTable = &* p.0;
+            ht.del_map(key, f)
+        }
+    }
+
     pub fn update_lock_ifeq(&self, key: u64, new: u64, old: u64)
         -> Option<BucketGuard> {
 
