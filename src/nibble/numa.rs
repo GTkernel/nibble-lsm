@@ -283,6 +283,20 @@ pub fn ncpus() -> usize {
     read_cpu_ids(fname).len()
 }
 
+/// Return set of CPU IDS ordered round-robin by socket.
+pub fn cpus_by_socket() -> Vec<usize> {
+    let mut cpus: Vec<usize> = vec![];
+    let cpus_pernode = NODE_MAP.cpus_in(NodeId(0));
+    // not efficient, but is assumed to be called infrequently
+    for i in 0..cpus_pernode {
+        for sock in 0..NODE_MAP.sockets() {
+            let r = NODE_MAP.cpus_of(NodeId(sock)).get();
+            cpus.push(r[i]);
+        }
+    }
+    cpus
+}
+
 #[cfg(IGNORE)]
 mod tests {
     use super::*;
