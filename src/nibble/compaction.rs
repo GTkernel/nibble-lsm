@@ -646,10 +646,12 @@ impl Worker {
                         if let None = new.append_entry(&entry) {
                             debug!("node-{:?} extending segment; entry {}",
                                    self.manager.socket().unwrap(), n);
-                            match self.manager.alloc_blocks(1) {
-                                Some(mut blocks) =>
-                                    new.extend(&mut blocks),
-                                    None => panic!("OOM"), // FIXME spin?
+                            loop {
+                                let op = self.manager.alloc_blocks(1);
+                                if let Some(mut blocks) = op {
+                                    new.extend(&mut blocks);
+                                    break;
+                                }
                             }
                             debug!("retrying append");
                             if let None = new.append_entry(&entry) {
