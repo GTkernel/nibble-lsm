@@ -581,7 +581,7 @@ impl HashTable {
             //     return false;
             // }
 
-            bucket.wait_lock();
+            let guard = bucket.wait_lock();
             opts = bucket.find_key(key);
 
             if unlikely!(tver != self.version()) {
