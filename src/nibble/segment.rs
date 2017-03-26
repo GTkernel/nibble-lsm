@@ -66,7 +66,7 @@ pub unsafe fn copy_out(blocks: &[BlockRef], offset: usize,
     let mut amt = cmp::min(BLOCK_SIZE as isize - offset, remaining);
     let from = base.offset(offset);
     let to   = out.offset(poffset);
-    ptr::copy_nonoverlapping(from, to, amt as usize);
+    copy(to, from, amt as usize);
 
     remaining -= amt;
     poffset += amt;
@@ -75,8 +75,7 @@ pub unsafe fn copy_out(blocks: &[BlockRef], offset: usize,
     while remaining > 0 {
         base = blocks[idx].addr as *const u8;
         amt = cmp::min(BLOCK_SIZE as isize, remaining);
-        ptr::copy_nonoverlapping(base, out.offset(poffset),
-                                 amt as usize);
+        copy(out.offset(poffset), base, amt as usize);
         remaining -= amt;
         poffset += amt;
         idx += 1;
@@ -751,8 +750,7 @@ impl Segment {
         loop {
             let in_blk = BLOCK_SIZE - (loc as usize & (BLOCK_SIZE-1));
             amt = cmp::min(in_blk, len - copied);
-            ptr::copy_nonoverlapping(loc,
-                dst.offset(copied as isize), amt);
+            copy(dst.offset(copied as isize), loc, amt);
             copied += amt;
             if copied >= len {
                 break;
@@ -796,7 +794,7 @@ impl Segment {
         // 1. If buffer fits in remainder of block, just copy it
         if len <= remblk {
             unsafe {
-                ptr::copy_nonoverlapping(from,self.headref(),len);
+                copy(self.headref(),from,len);
             }
             self.head += len;
             if len == remblk {
@@ -813,7 +811,7 @@ impl Segment {
                 remblk = self.rem_in_block();
                 let amt = cmp::min(remblk,rem);
                 unsafe {
-                    ptr::copy_nonoverlapping(loc,self.headref(), amt);
+                    copy(self.headref(),loc, amt);
                 }
                 self.head += amt;
                 rem -= amt;
