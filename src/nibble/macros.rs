@@ -1,20 +1,6 @@
 // Macros go in separate module to satisfy circular dependencies
 
 //==----------------------------------------------------==//
-//      Common macros
-//==----------------------------------------------------==//
-
-/// Update T in an Option<T> where T is an int type
-#[macro_export]
-macro_rules! incr {
-    ( $obj:expr, $by:expr ) => {
-        if let Some(val) = $obj {
-            $obj = Some(val + $by);
-        }
-    }
-}
-
-//==----------------------------------------------------==//
 //      Compiler hints
 //==----------------------------------------------------==//
 

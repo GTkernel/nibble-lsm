@@ -461,18 +461,18 @@ pub struct Segment {
     /// index into segment table TODO add unit test?
     slot: usize,
     closed: bool,
-    /// Virtual address of head TODO atomic
-    head: Option<usize>,
+    /// Virtual address of head TODO atomic?
+    head: usize,
     /// Total capacity TODO atomic
     len: usize,
     /// Remaining capacity TODO atomic
     rem: usize,
     /// Objects (live or not) appended
     nobj: usize,
-    curblk: Option<usize>,
+    curblk: usize,
     /// A *mut SegmentHeader, but kept as usize because the Rust
     /// compiler does not allow sharing of raw pointers.
-    front: Option<usize>,
+    front: usize,
     blocks: BlockRefPool,
 }
 
@@ -540,10 +540,10 @@ impl Segment {
         unsafe { ptr::write(start as *mut SegmentHeader, header); }
         Segment {
             id: id, socket: sock, slot: slot, closed: false,
-            head: Some(start + SegmentHeader::len()),
+            head: start + SegmentHeader::len(),
             len: len, rem: len - SegmentHeader::len(),
-            nobj: 0, curblk: Some(blk),
-            front: Some(blocks[blk].addr),
+            nobj: 0, curblk: blk,
+            front: blocks[blk].addr,
             blocks: blocks,
         }
     }
@@ -553,30 +553,21 @@ impl Segment {
     /// TODO need unit test
     pub fn extend(&mut self, blocks: &mut BlockRefPool) {
         assert!(self.blocks.len() > 0);
-        if let None = self.head {
-            self.curblk = Some(0);
-            self.head = Some(blocks[0].addr);
-            self.front = Some(blocks[0].addr);
-        }
 
-        let list = uslice::make(&self.blocks);
-
-        let mut len = 0 as usize;
-        for t in blocks.iter().zip(0..) {
-            len += t.0 .len;
-            let idx = self.blocks.len() + t.1;
-            unsafe {
-                t.0 .set_segment(self.slot, idx, list.clone());
-            }
-        }
-        self.len += len;
-        self.rem += len;
+        // NOTE always push blocks first. All existing blocks must
+        // next have their backpointer to the block list updated,
+        // because the slice as originally set to N blocks; now
+        // we have >N blocks in the segment.
         self.blocks.append(blocks);
 
-        // Check we are not resizing, to avoid updating the
-        // Block::list pointer when we add new elements
-        assert_eq!(list.ptr(), self.blocks.as_ptr(),
-            "segment {} block list resized!", self.slot);
+        let addlen = blocks.iter().fold(0, |acc, ref b| acc + b.len);
+        self.len += addlen;
+        self.rem += addlen;
+
+        let list = uslice::make(&self.blocks);
+        for t in self.blocks.iter().zip(0..) { unsafe {
+            t.0 .set_segment(self.slot, t.1, list.clone());
+        } }
     }
 
     /// Append an object with header to the log. Let append_safe
@@ -618,14 +609,14 @@ impl Segment {
     fn bump_head(&mut self, len: usize) {
         let remblk = self.rem_in_block();
         if len < remblk {
-            incr!(self.head, len);
-            debug_assert!((self.head.unwrap() -
-                self.blocks[self.curblk.unwrap()].addr) < BLOCK_SIZE);
+            self.head += len;
+            debug_assert!((self.head -
+                self.blocks[self.curblk].addr) < BLOCK_SIZE);
         } else {
             let nblks: usize = 1 + (len - remblk) / BLOCK_SIZE;
             self.next_block(nblks);
             let offset = (len - remblk) % BLOCK_SIZE;
-            incr!(self.head, offset);
+            self.head += offset;
         }
         self.rem -= len;
     }
@@ -641,7 +632,6 @@ impl Segment {
     /// nearly verbatim overlap with EntryReference::copy_out
     pub fn append_entry(&mut self, entry: &EntryReference)
         -> Option<usize> {
-        assert_eq!(self.head.is_some(), true);
 
         if !self.can_hold_amt(entry.len) {
             debug!("cannot append: need {} have {}",
@@ -710,9 +700,8 @@ impl Segment {
     /// Increment values in header by specified amount
     #[inline(always)]
     fn update_header(&self, n: u32) {
-        debug_assert_eq!(self.front.is_some(), true);
         let mut header: &mut SegmentHeader = unsafe {
-            &mut *(self.front.unwrap() as *mut SegmentHeader)
+            &mut *(self.front as *mut SegmentHeader)
         };
         header.num_objects += n;
     }
@@ -722,15 +711,13 @@ impl Segment {
     /// final block. 'n' specifies how many blocks to increment by.
     #[inline]
     fn next_block(&mut self, n: usize) -> bool {
-        debug_assert_eq!(self.head.is_some(), true);
-        debug_assert_eq!(self.curblk.is_some(), true);
-        let mut curblk = self.curblk.unwrap();
+        let mut curblk = self.curblk;
         let numblks: usize = self.blocks.len();
         debug_assert!(numblks > 0);
         if (curblk + n) < numblks {
             curblk += n;
-            self.curblk = Some(curblk);
-            self.head = Some(self.blocks[curblk].addr);
+            self.curblk = curblk;
+            self.head = self.blocks[curblk].addr;
             true
         } else {
             // this can happen if the object fits _exactly_ into the
@@ -740,11 +727,9 @@ impl Segment {
         }
     }
 
+    #[inline]
     pub fn headref(&mut self) -> *mut u8 {
-        match self.head {
-            Some(va) => va as *mut u8,
-            None => panic!("taking head ref but head not set"),
-        }
+        self.head as *mut u8
     }
 
     //
@@ -806,15 +791,14 @@ impl Segment {
     /// capacity.
     #[inline]
     fn append_safe(&mut self, from: *const u8, len: usize) {
-        debug_assert!(len <= self.rem);
-        debug_assert_eq!(self.head.is_some(), true);
+        assert!(len <= self.rem);
         let mut remblk = self.rem_in_block();
         // 1. If buffer fits in remainder of block, just copy it
         if len <= remblk {
             unsafe {
                 ptr::copy_nonoverlapping(from,self.headref(),len);
             }
-            incr!(self.head, len);
+            self.head += len;
             if len == remblk {
                 self.next_block(1);
             }
@@ -831,7 +815,7 @@ impl Segment {
                 unsafe {
                     ptr::copy_nonoverlapping(loc,self.headref(), amt);
                 }
-                incr!(self.head, amt);
+                self.head += amt;
                 rem -= amt;
                 loc = (from as usize + amt) as *const u8;
                 // If we exceeded the block, get the next one
@@ -844,11 +828,9 @@ impl Segment {
     }
 
     fn rem_in_block(&self) -> usize {
-        assert_eq!(self.head.is_some(), true);
-        assert!(self.blocks.len() > 0);
-        let curblk = self.curblk.unwrap();
-        let blk = &self.blocks[curblk];
-        blk.len - (self.head.unwrap() - blk.addr)
+        debug_assert!(self.blocks.len() > 0);
+        let blk = &self.blocks[self.curblk];
+        blk.len - (self.head - blk.addr)
     }
 
     //
@@ -862,10 +844,10 @@ impl Segment {
     pub fn used(&self) -> usize { self.len - self.rem }
 
     #[cfg(test)]
-    pub fn head(&self) -> Option<usize> { self.head }
+    pub fn head(&self) -> usize { self.head }
 
     #[cfg(test)]
-    pub fn curblk(&self) -> Option<usize> { self.curblk }
+    pub fn curblk(&self) -> usize { self.curblk }
 
     #[cfg(test)]
     pub fn nblks(&self) -> usize { self.blocks.len() }
@@ -874,9 +856,9 @@ impl Segment {
     pub fn reset(&mut self) {
         let blk = 0;
         self.closed = false;
-        self.head = Some(self.blocks[blk].addr);
+        self.head = self.blocks[blk].addr;
         self.rem = self.len - SegmentHeader::len();
-        self.curblk = Some(blk);
+        self.curblk = blk;
         self.nobj = 0;
     }
 }
@@ -1419,7 +1401,6 @@ mod tests {
         let slot = 0;
         let seg = Segment::new(id, slot, set);
         assert_eq!(seg.closed, false);
-        assert_eq!(seg.head.is_some(), true);
         assert_eq!(seg.len, bytes);
         // TODO verify blocks?
     }
