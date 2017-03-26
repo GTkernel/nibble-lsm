@@ -575,29 +575,30 @@ impl Segment {
     /// TODO Segment shouldn't know about log-specific organization,
     /// e.g. entry headers
     pub fn append(&mut self, buf: &ObjDesc) -> Status {
-        assert_eq!(self.head.is_some(), true);
-        if !self.closed {
-            if self.can_hold(buf) {
-                if 0 == buf.vlen {
-                    return Err(ErrorCode::EmptyObject);
-                }
-                let va = self.headref() as usize;
-                let header = EntryHeader::new(buf);
-                let hlen = size_of::<EntryHeader>();
-                self.append_safe(header.as_ptr(), hlen);
-                let v = &buf.key as *const _ as *const u8;
-                self.append_safe(v, mem::size_of::<u64>());
-                if buf.copy {
-                    self.append_safe(buf.value.0 as *const u8,
-                        buf.vlen as usize);
-                } else {
-                    self.bump_head(buf.vlen as usize);
-                }
-                self.nobj += 1;
-                self.update_header(1);
-                Ok(va)
-            } else { Err(ErrorCode::SegmentFull) }
-        } else { Err(ErrorCode::SegmentClosed) }
+        if unlikely!(self.closed) {
+            Err(ErrorCode::SegmentClosed)
+        } else if unlikely!(!self.can_hold(buf)) {
+            Err(ErrorCode::SegmentFull)
+        } else {
+            if unlikely!(0 == buf.vlen) {
+                return Err(ErrorCode::EmptyObject);
+            }
+            let va = self.headref() as usize;
+            let header = EntryHeader::new(buf);
+            let hlen = size_of::<EntryHeader>();
+            self.append_safe(header.as_ptr(), hlen);
+            let v = &buf.key as *const _ as *const u8;
+            self.append_safe(v, mem::size_of::<u64>());
+            if likely!(buf.copy) {
+                self.append_safe(buf.value.0 as *const u8,
+                                 buf.vlen as usize);
+            } else {
+                self.bump_head(buf.vlen as usize);
+            }
+            self.nobj += 1;
+            self.update_header(1);
+            Ok(va)
+        }
     }
 
     /// Bump the head offset for this segment as if we appended
