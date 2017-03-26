@@ -66,6 +66,7 @@ use std::sync::Arc;
 use std::sync::atomic::{self,AtomicBool};
 use std::thread;
 use std::time::{Duration,Instant};
+use std::intrinsics;
 
 use crossbeam::sync::SegQueue;
 use itertools;
@@ -642,34 +643,28 @@ impl Worker {
 
                 if let Some(lock) = self.index
                     .update_lock_ifeq(key,ientry_new,ientry_old) {
-                        // try append; if fail, extend, try again
-                        if let None = new.append_entry(&entry) {
-                            debug!("node-{:?} extending segment; entry {}",
-                                   self.manager.socket().unwrap(), n);
+                    loop {
+                        let r = new.append_entry(&entry);
+                        if likely!(r.is_some()) {
+                            break;
+                        } else {
+                            // extend segment to fit entry
+                            let amt = entry.len - new.rem;
+                            let blks = (amt - 1) / BLOCK_SIZE + 1;
                             loop {
-                                let op = self.manager.alloc_blocks(1);
+                                let op = self.manager.alloc_blocks(blks);
                                 if let Some(mut blocks) = op {
                                     new.extend(&mut blocks);
                                     break;
                                 }
                             }
-                            debug!("retrying append");
-                            if let None = new.append_entry(&entry) {
-                                // can only happen if obj > block
-                                panic!("OOM?");
-                            }
                         }
-
-                        // three atomics follow...
-                        //atomic::fence(atomic::Ordering::SeqCst);
-                        self.seginfo.incr_live(new.slot(), entry.len);
-
-                        bytes_appended += entry.len;
+                    }
+                    self.seginfo.incr_live(new.slot(), entry.len);
+                    bytes_appended += entry.len;
                 }
-
                 n += 1;
             }
-
             // make sure nobjects is consistent with the iterator
             assert_eq!(n, dirt.nobjects());
 
