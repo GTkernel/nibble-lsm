@@ -1,21 +1,22 @@
-// TODO create a block allocator for each CPU socket
 
 use common::*;
 use thelog::*;
 use memory::*;
 use meta::*;
 use meta;
-use numa::{NodeId};
+use numa::{self,NodeId};
 use compaction;
+use mcs::{McsQnode};
 
 use std::cmp;
 use std::mem;
 use std::mem::size_of;
 use std::ptr;
 use std::sync::{Arc};
-use std::sync::atomic::{self, AtomicUsize, Ordering};
+use std::sync::atomic;
+use std::sync::atomic::*;
 use std::thread;
-use std::time::Duration;
+use std::time::{Instant,Duration};
 use std::intrinsics;
 use std::fmt;
 use std::slice;
@@ -152,7 +153,6 @@ impl Block {
         // XXX potential UB
         let myself = &mut *(self as *const Self as *mut Self);
         myself.list = uslice::null();
-        atomic::fence(atomic::Ordering::SeqCst);
     }
 
     // Methods are here to prevent someone from doing an increment.
@@ -193,7 +193,9 @@ pub struct BlockAllocator {
     pool: BlockRefPool,
     mmap: MemMap,
     /// Blocks allowed for general allocation
-    freepool: pl::RwLock<BlockRefPool>,
+    freepool: pl::Mutex<BlockRefPool>,
+    freepool_sz: AtomicUsize,
+    freepool_mcs: AtomicPtr<McsQnode>,
     /// Set of reserve blocks used by compaction
     reserve: pl::RwLock<BlockRefPool>,
     /// Number of blocks that must be in the reserve pool before we
@@ -204,7 +206,7 @@ pub struct BlockAllocator {
 impl fmt::Debug for BlockAllocator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "BlockAllocator {{ #free {} #res {} }}",
-               self.freepool.read().len(),
+               self.freepool.lock().len(),
                self.reserve.read().len())
     }
 }
@@ -242,10 +244,13 @@ impl BlockAllocator {
                 reserve.push(blk.clone());
             }
         }
+        let fpsz = freepool.len();
         BlockAllocator {
             pool: pool,
             mmap: mmap,
-            freepool: pl::RwLock::new(freepool),
+            freepool: pl::Mutex::new(freepool),
+            freepool_sz: AtomicUsize::new(fpsz),
+            freepool_mcs: AtomicPtr::new(0usize as *mut McsQnode),
             reserve:  pl::RwLock::new(reserve),
             reserve_nblks: RESERVE_BLOCKS,
         }
@@ -264,12 +269,37 @@ impl BlockAllocator {
         Self::__new(bytes, mmap)
     }
 
-    pub fn alloc(&self, count: usize) -> Option<BlockRefPool> {
+    /// Normal allocation path. Used by client / application threads
+    /// when the log heads must roll. Each enqueues itself into an MCS
+    /// lock to avoid stampeding when there is high contention.
+    /// After queuing in line, the holder of the MCS lock will spin on
+    /// the externalized size for the freepool, instead of competing
+    /// with compaction threads for the freepool mutex.
+    /// This method is blocking.
+    pub fn alloc(&self, count: usize) -> BlockRefPool {
+        let mut slot = McsQnode::new();
+        unsafe { McsQnode::lock(&self.freepool_mcs, &mut slot); }
+        let mut blks = None;
+        while blks.is_none() {
+            while self.freepool_sz.load(Ordering::Relaxed) < count { ; }
+            blks = self.allocp(count);
+        }
+        unsafe { McsQnode::unlock(&self.freepool_mcs, &mut slot); }
+        blks.unwrap()
+    }
+
+    /// Priority allocation (does not wait in MCS); directly acquire
+    /// the mutex on the freepool.  Used by compaction threads.
+    pub fn allocp(&self, count: usize) -> Option<BlockRefPool> {
         let mut blocks: Option<BlockRefPool> = None;
-        let mut freepool = self.freepool.write();
-        let len = freepool.len();
-        if count <= len {
-            blocks = Some(freepool.split_off(len-count));
+        if self.freepool_sz.load(Ordering::Relaxed) >= count {
+            let mut freepool = self.freepool.lock();
+            let len = freepool.len();
+            if count <= len {
+                let blks = freepool.split_off(len-count);
+                self.freepool_sz.fetch_sub(blks.len(), Ordering::SeqCst);
+                blocks = Some(blks);
+            }
         }
         blocks
     }
@@ -278,34 +308,46 @@ impl BlockAllocator {
         -> Option<BlockRefPool> {
 
         let mut blocks: Option<BlockRefPool> = None;
-        let mut reserve = self.reserve.write();
-        let len = reserve.len();
-        if count <= len {
-            blocks = Some(reserve.split_off(len-count));
+        if let Some(mut reserve) = self.reserve.try_write() {
+            let len = reserve.len();
+            if count <= len {
+                debug!("alloc {} resrv blks (of {})", count, len);
+                blocks = Some(reserve.split_off(len-count));
+            }
         }
         blocks
     }
 
-    // Release a set of blocks back to the allocator.
-    // Check if the reserve pool needs filling. If so, put new blocks
-    // into that first, then the remainder into the general pool.
+    /// Release a set of blocks back to the allocator.
+    /// Check if the reserve pool needs filling. If so, put new blocks
+    /// into that first, then the remainder into the general pool.
+    /// Since this method is used by compaction and allocating blocks
+    /// lies in the critical path of client threads, we directly lock
+    /// the mutex instead of using MCS.
     pub fn free(&self, pool: &mut BlockRefPool) {
-        let mut reserve = self.reserve.write();
-        let mut nr = cmp::min(pool.len(),
-            self.reserve_nblks - reserve.len());
-        if unlikely!(nr > 0) {
-            debug!("releasing {} blks back to reserve", nr);
+        loop {
+            if let Some(mut reserve) = self.reserve.try_write() {
+                let mut nr = cmp::min(pool.len(),
+                self.reserve_nblks - reserve.len());
+                if unlikely!(nr > 0) {
+                    debug!("releasing {} blks back to reserve", nr);
+                    for _ in 0..nr {
+                        reserve.push(pool.pop().unwrap());
+                    }
+                }
+                break;
+            }
         }
-        for _ in 0..nr {
-            reserve.push(pool.pop().unwrap());
-        }
-        drop(reserve); // unlock it
-        if !pool.is_empty() {
-            self.freepool.write().append(pool);
+        let nblks = pool.len();
+        if nblks > 0 {
+            debug!("releasing {} blks back to freepool", nblks);
+            self.freepool.lock().append(pool);
+            self.freepool_sz.fetch_add(nblks, Ordering::SeqCst);
         }
     }
 
     pub fn reserve_free(&self, pool: &mut BlockRefPool) {
+        debug!("releasing {} blks directly back to reserve", pool.len());
         self.reserve.write().append(pool);
     }
 
@@ -314,7 +356,8 @@ impl BlockAllocator {
     }
 
     pub fn freelen(&self) -> usize {
-        self.freepool.read().len()
+        //self.freepool.lock().len()
+        self.freepool_sz.load(Ordering::Relaxed)
     }
 
     pub fn freesz(&self) -> usize {
@@ -1141,15 +1184,21 @@ impl SegmentManager {
         segments[slot].clone()
     }
 
-    /// Allocate a segment with a specific number of blocks. Used by
-    /// compaction code.
-    pub fn alloc_size(&self, nblks: usize) -> Option<SegmentRef> {
+    fn do_alloc_size(&self, nblks: usize, mcs: bool)
+        -> Option<SegmentRef> {
+
         let mut ret: Option<SegmentRef> = None;
 
-        let mut blocks = match self.allocator.alloc(nblks) {
-            None => return None,
-            Some(b) => b,
-        };
+        let mut blocks: BlockRefPool =
+            if mcs {
+                self.allocator.alloc(nblks)
+            } else {
+                match self.allocator.allocp(nblks) {
+                    None => return None,
+                    Some(b) => b,
+                }
+            };
+
         // some extra in case of overflow
         blocks.reserve(8);
 
@@ -1158,7 +1207,23 @@ impl SegmentManager {
         opt
     }
 
+    /// Allocate a segment with a specific number of blocks.
+    /// Uses the MCS path for allocating from the underlying
+    /// BlockAllocator (intended for use by client threads).
+    pub fn alloc_size(&self, nblks: usize) -> Option<SegmentRef> {
+        self.do_alloc_size(nblks, true)
+    }
+
+    /// Allocate a segment with a specific number of blocks.
+    /// Uses the "fast path" for allocating from the underlying
+    /// BlockAllocator; avoids the MCS lock. Intended for use by
+    /// compaction threads.
+    pub fn alloc_sizep(&self, nblks: usize) -> Option<SegmentRef> {
+        self.do_alloc_size(nblks, false)
+    }
+
     /// Allocate a segment with default size.
+    #[cfg(IGNORE)]
     pub fn alloc(&self) -> Option<SegmentRef> {
         let nblks = (SEGMENT_SIZE - 1) / BLOCK_SIZE + 1;
         self.alloc_size(nblks)
@@ -1173,6 +1238,7 @@ impl SegmentManager {
         };
         // some extra in case of overflow
         blocks.reserve(8);
+        debug!("alloc {} resrv blks into seg", blocks.len());
 
         let opt = self.make_segment(blocks);
         assert!(opt.is_some(), "no segment slots available?");
@@ -1227,8 +1293,8 @@ impl SegmentManager {
         if unlikely!(c > 1) {
             {
                 let s = segref.read();
-                warn!("seg {} (reserve {:?}) has {} other refs",
-                    s.slot(), s.is_reserve, c-1);
+                warn!("seg {} has {} other refs",
+                    s.slot(), c-1);
             }
             self.pending.lock().push_back(segref);
             return;
@@ -1238,10 +1304,27 @@ impl SegmentManager {
     }
 
     /// Directly allocate raw blocks without a containing segment.
+    /// Called by compaction only.
     pub fn alloc_blocks(&self, count: usize)
         -> Option<BlockRefPool> {
         debug!("allocating {} blocks out-of-band", count);
-        self.allocator.alloc(count)
+        // If, during compaction, allocation fails, we are probably in
+        // a dire situation; fall back to reserve blocks. When we do
+        // so, it is likely compaction threads have already drawn
+        // blocks from the reserve pool by this point.
+        let mut opt = self.allocator.allocp(count);
+        if let None = opt {
+            opt = self.allocator.reserve_alloc(count);
+            if unlikely!(opt.is_none()) {
+                self.try_release_pending();
+                let ms = unsafe { rdrand() % 500 } as u64 + 100u64;
+                debug!("Reserve pool empty sock {}. Pausing for {} ms",
+                      self.socket.unwrap().0, ms);
+                let dur = Duration::from_millis(ms);
+                thread::sleep(dur);
+            }
+        }
+        opt
     }
 
     #[inline(always)]

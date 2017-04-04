@@ -695,7 +695,7 @@ impl Worker {
             let mut retries = 0;
             let start = Instant::now();
             'alloc: loop {
-                let opt = self.manager.alloc_size(nblks);
+                let opt = self.manager.alloc_sizep(nblks);
                 match opt {
                     Some(s) => { newseg = s; break; },
                     None => {
@@ -974,7 +974,7 @@ mod tests {
         let seg_clean_ref;
         match segmgr.lock() {
             Ok(mut mgr) => {
-                seg_clean_ref = mgr.alloc_size(nblks).unwrap();
+                seg_clean_ref = mgr.alloc_sizep(nblks).unwrap();
             },
             Err(_) => panic!("manager lock poison"),
         }
