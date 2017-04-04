@@ -9,7 +9,7 @@ use clock::rdtsc;
 
 use std::cell::UnsafeCell;
 use std::sync::atomic;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize,AtomicBool,Ordering};
 use std::sync::Arc;
 use std::mem;
 use std::u64;
@@ -196,11 +196,13 @@ impl EpochSlotHold {
         }
     }
 
+    #[inline]
     pub fn quiesce(&self) {
         let mut slot = unsafe { &mut **(self.cell.get()) };
         slot.epoch = EPOCH_QUIESCE;
     }
 
+    #[inline]
     pub fn pin(&self) {
         let mut slot = unsafe { &mut **(self.cell.get()) };
         slot.epoch = read();
@@ -357,7 +359,8 @@ impl EpochSlot {
 pub struct EpochTable {
     table: Vec<EpochSlot>,
     // FIXME release a slot when thread dies
-    freeslots: SegQueue<u16>
+    freeslots: SegQueue<u16>,
+    once: AtomicBool,
 }
 
 impl EpochTable {
@@ -380,6 +383,7 @@ impl EpochTable {
         EpochTable {
             table: table,
             freeslots: freeslots,
+            once: AtomicBool::new(false),
         }
     }
 
@@ -404,18 +408,22 @@ impl EpochTable {
     }
 
     fn dump(&self) {
-        let mut i = 0usize;
-        let every = 8;
-        warn!("--- EPOCH TABLE ---");
-        print!("{:6}: ", 0);
-        for s in &self.table {
-            print!("{:16x} ", s.epoch);
-            i += 1;
-            if 0 == (i % every) {
-                print!("\n{:4}: ", i);
+        let once = self.once.compare_and_swap(false, true,
+                                              Ordering::Relaxed);
+        if !once {
+            let mut i = 0usize;
+            let every = 8;
+            warn!("--- EPOCH TABLE ---");
+            print!("{:6}: ", 0);
+            for s in &self.table {
+                print!("{:16x} ", s.epoch);
+                i += 1;
+                if 0 == (i % every) {
+                    print!("\n{:4}: ", i);
+                }
             }
+            println!("");
         }
-        println!("");
     }
 }
 
