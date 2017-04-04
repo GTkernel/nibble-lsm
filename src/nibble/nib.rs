@@ -127,7 +127,8 @@ impl Nibble {
         //let ntables = numa::NODE_MAP.ncpus();
         //let ntables: usize = 64;
 
-        let ntables: usize = 8 * numa::NODE_MAP.sockets();
+        let nsock = numa::NODE_MAP.sockets();
+        let ntables: usize = 8 * nsock;
         let nitems = ht_nitems; //1usize << 30;
         let n_per  = nitems / ntables;
 
@@ -147,6 +148,14 @@ impl Nibble {
         info!(" block size:     {}", BLOCK_SIZE);
         info!("  block/seg:     {}", BLOCKS_PER_SEG);
         info!("   #blk var:     {}", ALLOC_NBLKS_VAR);
+
+        info!(" resrv segs:     {} x{}", RESERVE_SEGS, nsock);
+        info!(" resrv size:     {:.2} GiB x{}",
+              (RESERVE_SEGS * SEGMENT_SIZE) as f64 /
+                (2f64.powi(30)), nsock);
+        info!(" resrv as %:     {:.2}",
+              (nsock * RESERVE_SEGS * SEGMENT_SIZE) as f64 /
+              (capacity as f64));
 
         let index = Arc::new(Index::new(ntables, n_per));
 
@@ -317,12 +326,6 @@ impl Nibble {
             Some(entry) => entry,
         };
         let (socket,va) = extract(ientry);
-
-        //prefetch(va as *const usize as *const u8);
-        //prefetchw(buf.as_ptr());
-
-        //trace!("GET key 0x{:x} ientry 0x{:x} -> socket 0x{:x} va 0x{:x}",
-               //key, ientry, socket, va);
 
         // 2. ask Log to give us the object
         self.nodes[socket as usize]
