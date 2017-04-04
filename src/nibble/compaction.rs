@@ -186,33 +186,6 @@ impl Drop for Compactor {
 //      Worker thread functions
 //==----------------------------------------------------==//
 
-macro_rules! park {
-    ( $state:expr ) => {
-        if $state.must_park() { thread::park(); }
-    }
-}
-
-macro_rules! park_or_sleep {
-    ( $state:expr, $duration:expr ) => {
-        if $state.must_park() { thread::park(); }
-        else { thread::sleep($duration); }
-    }
-}
-
-fn __reclaim(state: &Arc<pl::RwLock<Worker>>) {
-    let mut s = state.write();
-    //s.do_reclaim();
-    let nr = s.do_reclaim_blocking();
-    if nr > 0 {
-        debug!("released {} segments",nr);
-    }
-    let park = s.reclaim.as_ref().map_or(false, |r| r.len() == 0 );
-    drop(s); // release lock
-    if park {
-        thread::sleep(Duration::new(0, 10_000_000_u32))
-    }
-}
-
 fn __compact(state: &Arc<pl::RwLock<Worker>>) {
     let dur = Duration::from_millis( unsafe { (rdrandq() % 500) + 300 } );
     let mut s = state.write();
@@ -252,10 +225,8 @@ fn __compact(state: &Arc<pl::RwLock<Worker>>) {
 
 fn worker(state: Arc<pl::RwLock<Worker>>) {
     debug!("thread awake");
-    let role;
     {
         let s = state.read();
-        role = s.role;
         let id = s.id;
         let sock = s.manager.socket().unwrap().0;
         debug!("Pinning worker {} to sock {}", id, sock);
@@ -264,22 +235,13 @@ fn worker(state: Arc<pl::RwLock<Worker>>) {
         }
     }
     loop {
-        match role {
-            WorkerRole::Reclaim => __reclaim(&state),
-            WorkerRole::Compact => __compact(&state),
-        }
+        __compact(&state);
     }
 }
 
 //==----------------------------------------------------==//
 //      Worker structure
 //==----------------------------------------------------==//
-
-#[derive(Debug,Copy,Clone)]
-pub enum WorkerRole {
-    Reclaim,
-    Compact,
-}
 
 /// Cache of static info about a segment that we need to recall often
 /// (to avoid locking the segment each time).
@@ -298,8 +260,6 @@ type Candidate = (SegCache, SegmentRef);
 
 #[allow(dead_code)]
 struct Worker {
-    role: WorkerRole,
-
     id: usize,
 
     /// Set of (immutable) candidate segments to clean. We cache the
@@ -312,10 +272,6 @@ struct Worker {
     mgrsize: usize,
     index: IndexRef,
     seginfo: meta::SegmentInfoTableRef,
-    park: AtomicBool,
-    /// This thread's private set of to-be-reclaimed segments
-    /// Used only if thread role is Reclaim
-    reclaim: Option<Vec<EpochSegment>>,
     /// Reference to the global list of to-be-reclaimed segments
     /// Compaction threads push to this, Reclaim threads move SegRefs
     /// from this to their private set to manipulate
@@ -325,13 +281,9 @@ struct Worker {
 impl Worker {
 
     // TODO allocate the candidates vector on a specific socket
-    pub fn new(role: &WorkerRole, id: usize, compactor: &Compactor)
+    pub fn new(id: usize, compactor: &Compactor)
         -> Self {
 
-        let reclaim = match *role {
-            WorkerRole::Reclaim => Some(Vec::new()),
-            _ => None,
-        };
         let size = compactor.manager.len();
         let nseg = compactor.manager.get_nseg();
         let ncand = 1usize << 15;
@@ -346,8 +298,6 @@ impl Worker {
             mgrsize: size,
             index: compactor.index.clone(),
             seginfo: compactor.seginfo.clone(),
-            park: AtomicBool::new(false),
-            reclaim: reclaim,
             reclaim_glob: compactor.reclaim.clone(),
         }
     }
@@ -792,6 +742,7 @@ impl Worker {
     // throttle worker thread
 
     /// Called by WorkerRole::Reclaim
+    #[cfg(IGNORE)]
     pub fn do_reclaim(&mut self) {
         assert!(false, "don't use reclaim threads");
 

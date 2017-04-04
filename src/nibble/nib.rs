@@ -222,7 +222,7 @@ impl Nibble {
     pub fn enable_compaction(&self, node: NodeId) {
         info!("Enabling compaction on node {}", node.0);
         let mut comp = self.nodes[node.0].compactor.lock();
-        comp.spawn(WorkerRole::Compact);
+        comp.spawn();
     }
 
     #[allow(unused_variables)]
