@@ -197,16 +197,14 @@ fn __compact(state: &Arc<pl::RwLock<Worker>>) {
         let remaining = s.manager.freesz() as f64;
         let total: f64 = s.mgrsize as f64;
         let ratio = remaining/total;
-        if s.id == 0 {
-            debug!("node-{:?} rem. {} total {} ratio {:.2} run: {:?}",
-                  s.manager.socket().unwrap(),
-                  remaining, total, ratio, ratio<RATIO);
-        }
+        debug!("node-{:?} rem. {} total {} ratio {:.2} run: {:?}",
+               s.manager.socket().unwrap(),
+               remaining, total, ratio, ratio<RATIO);
         ratio < RATIO
     };
     if run {
         // do a few times before re-checking the BlockAllocator
-        for _ in 0..8 {
+        for _ in 0..4 {
             debug!("node-{} compaction initiated",
                    s.manager.socket().unwrap());
             let now = clock::now();
@@ -447,6 +445,12 @@ impl Worker {
             (a.0 .metric).partial_cmp(&b.0 .metric).unwrap()
         };
 
+        // TODO find if the array ends up mostly sorted, or
+        // becomes randomized each time we examine. That will
+        // determine algorithm to use.
+        // Heap sort may be good for only partially sorting.
+        // We only pull off of 'candidates' enough to satisfy
+        // our 'tally' amount.
         {
             let t = clock::now();
             quicksort::quicksort_by(candidates.as_mut_slice(), predicate);
