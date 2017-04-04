@@ -17,6 +17,7 @@ use common::{Pointer, fnv1a, is_even, is_odd, atomic_add, atomic_cas};
 use common::{prefetch,prefetchw};
 use logger::*;
 use numa::{self,NodeId};
+use meta;
 use clock;
 
 // Methods for locking a bucket
@@ -63,24 +64,28 @@ type find_ops = (Option<usize>, Option<usize>);
 // most methods require 'volatile' operations because this is a
 // concurrent hash table, and we cannot have the compiler optimizing
 // with an assumption that values won't change underneath it
-// TODO Use RAII for the locks
 impl Bucket {
 
     #[inline(always)]
     pub fn try_bump_version(&self, version: u64) -> bool {
+        debug_assert!(is_even(version),
+            "expected version {} isn't even!", version);
         let v = &self.version as *const u64 as *mut u64;
         let (val,ok) = unsafe {
             atomic_cas(v, version, version+1)
         };
+        // returns prior value, which should be even (unlocked)
+        debug_assert!( !ok || is_even(val),
+                "val {} isn't odd after lock!", val+1);
         ok
     }
 
+    // returns prior value
     #[inline(always)]
-    pub fn bump_version(&self) {
+    pub fn bump_version(&self) -> u64 {
         let v = &self.version as *const u64 as *mut u64;
         unsafe {
-            atomic_add(v, 1);
-            //volatile_add(v, 1);
+            atomic_add(v, 1)
         }
     }
 
@@ -149,39 +154,115 @@ impl Bucket {
         }
     }
 
+    //#[cfg(IGNORE)]
     #[inline(always)]
     pub fn wait_version(&self) -> u64 {
+        meta::pin(); // bump the epoch
         let mut v = self.read_version();
         loop {
             if likely!(is_even(v)) { break; }
+            meta::pin(); // bump the epoch
             v = self.read_version();
         }
         v
     }
 
+    /// Alternate version that has stall checking.
+    #[cfg(IGNORE)]
+    #[inline(always)]
+    pub fn wait_version(&self) -> u64 {
+        meta::pin(); // bump the epoch
+        let mut v = self.read_version();
+        let clk = clock::now();
+        let mut prior = self.get_tid();
+        let mut last = 0u64;
+        'outer: loop {
+            for _ in 0..5000 {
+                if likely!(is_even(v)) { break 'outer; }
+                meta::pin(); // bump the epoch
+                v = self.read_version();
+            }
+            let clk2 = clock::now();
+            let nsec = clock::to_nano(clk2-clk);
+            if (nsec > 0) &&
+                (nsec / clock::NANO_PER_SEC) > last {
+                warn!("wait_version: STALL {} msec on bucket {} sock {} last {}",
+                      nsec / clock::NANO_PER_MSEC,
+                      self.id, self.sock, self.get_tid());
+                last = nsec / clock::NANO_PER_SEC;
+            }
+            prior = self.get_tid();
+        }
+        let clk2 = clock::now();
+        let nsec = clock::to_nano(clk2-clk);
+        if nsec > (clock::NANO_PER_SEC / 2u64) {
+            warn!("wait_version: ok {} msec on bucket {} sock {} last {}",
+                  nsec / clock::NANO_PER_MSEC,
+                  self.id, self.sock, prior);
+        }
+        v
+    }
+
+    //#[cfg(IGNORE)]
     #[inline(always)]
     pub fn wait_lock(&self) -> BucketGuard {
         let mut v;
-        let start = clock::now();
         'retry: loop {
             v = self.read_version();
-            if is_even(v) {
+            if likely!(is_even(v)) {
                 if self.try_bump_version(v) {
                     return BucketGuard::new(self);
                 } else {
-                    if clock::to_seconds(clock::now() - start) > 1 {
-                        warn!("waited too long on bucket {:?}", self);
-                    }
                     continue 'retry;
                 }
             }
         }
     }
 
+    /// Alternate version that has stall checking.
+    #[cfg(IGNORE)]
+    #[inline(always)]
+    pub fn wait_lock(&self) -> BucketGuard {
+        let mut v;
+        let guard;
+        let clk = clock::now();
+        let mut prior = self.get_tid();
+        let mut last = 0u64;
+        'outer: loop {
+            for _ in 0..5000 {
+                v = self.read_version();
+                if likely!(is_even(v)) && self.try_bump_version(v) {
+                    self.set_tid(get_tid() as u32);
+                    guard = BucketGuard::new(self);
+                    break 'outer;
+                }
+            }
+            let clk2 = clock::now();
+            let nsec = clock::to_nano(clk2-clk);
+            if (nsec > 0) &&
+                (nsec / clock::NANO_PER_SEC) > last {
+                warn!("wait_lock: STALL {} msec on bucket {} sock {} last {}",
+                      nsec / clock::NANO_PER_MSEC,
+                      self.id, self.sock, self.get_tid());
+                last = nsec / clock::NANO_PER_SEC;
+            }
+            prior = self.get_tid();
+        }
+        let clk2 = clock::now();
+        let nsec = clock::to_nano(clk2-clk);
+        if nsec > (clock::NANO_PER_SEC / 2u64) {
+            warn!("wait_lock: ok {} msec on bucket {} sock {} last {}",
+                  nsec / clock::NANO_PER_MSEC,
+                  self.id, self.sock, prior);
+        }
+        guard
+    }
+
     #[inline(always)]
     pub fn unlock(&self) {
-        debug_assert!(self.version.is_odd());
-        self.bump_version();
+        let prior = self.bump_version();
+        debug_assert!(is_odd(prior),
+            "version {} is not even after unlock!", prior);
     }
 
     pub fn reset_version(&self) {
