@@ -58,8 +58,8 @@ fn prefetch(cacheline: *const u8) {
 }
 
 #[inline] pub unsafe
-fn atomic_add<T: num::Integer>(loc: *mut T, amt: T) {
-    intrinsics::atomic_xadd(loc, amt);
+fn atomic_add<T: num::Integer>(loc: *mut T, amt: T) -> T {
+    intrinsics::atomic_xadd(loc, amt)
 }
 
 #[inline] pub unsafe
