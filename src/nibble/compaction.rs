@@ -590,39 +590,44 @@ impl Worker {
             for entry in dirt.into_iter() {
                 let key: u64 = unsafe { entry.get_key() };
 
-                let va = new.headref() as u64;
-                let ientry_new = merge(socket as u16, va as u64);
-
-                // Lock the object while we relocate.  If object
-                // doesn't exist or it points to another location
-                // (i.e. it is stale), we skip it.
                 let old = entry.get_loc() as u64;
                 let ientry_old = merge(socket as u16, old as u64);
 
-                if let Some(lock) = self.index
-                    .update_lock_ifeq(key,ientry_new,ientry_old) {
+                let va = new.headref() as usize;
+                let ientry_new = merge(socket as u16, va as u64);
+
+                // extend segment to fit entry. keep allocation
+                // out of critical path while holding the bucket lock
+                if !new.can_hold_amt(entry.len) {
+                    let amt = entry.len - new.remaining();
+                    let blks = (amt - 1) / BLOCK_SIZE + 1;
                     loop {
-                        let r = new.append_entry(&entry);
-                        if likely!(r.is_some()) {
+                        let op = self.manager.alloc_blocks(blks);
+                        if let Some(mut blocks) = op {
+                            new.extend(&mut blocks);
+                            debug!("seg {} extended by {}",
+                                  new.slot(), blks);
                             break;
-                        } else {
-                            // extend segment to fit entry
-                            let amt = entry.len - new.rem;
-                            let blks = (amt - 1) / BLOCK_SIZE + 1;
-                            loop {
-                                let op = self.manager.alloc_blocks(blks);
-                                if let Some(mut blocks) = op {
-                                    new.extend(&mut blocks);
-                                    break;
-                                }
-                            }
                         }
                     }
+                }
+
+                // append while holding lock; no allocation should occur
+                if let Some(lock) = self.index
+                    .update_lock_ifeq(key,ientry_new,ientry_old) {
+                    let newva = new.append_entry(&entry);
                     self.seginfo.incr_live(new.slot(), entry.len);
                     bytes_appended += entry.len;
+                    debug_assert!(newva.is_some());
+                    debug_assert_eq!(newva.unwrap(), va);
                 }
+
                 n += 1;
             }
+            // TODO use this one line instead of adding each time
+            //self.seginfo.incr_live(new.slot(), bytes_appended);
+
+            meta::quiesce();
             // make sure nobjects is consistent with the iterator
             assert_eq!(n, dirt.nobjects());
 
@@ -704,8 +709,16 @@ impl Worker {
 
                         // or use a reserve segment to compact
                         debug!("using reserve segment, nblks {}", nblks);
-                        let mut s = self.manager.reserve_alloc(nblks);
-                        assert!(s.is_some(), "reserve segments depleted");
+                        let mut s: Option<SegmentRef> = None;
+                        let mut c = 0usize;
+                        while s.is_none() {
+                            s = self.manager.reserve_alloc(nblks);
+                            sched::sleep_short();
+                            c += 1;
+                            if 0 == (c % 5) {
+                                warn!("waited to resrv extend >1 sec");
+                            }
+                        }
                         newseg = s.unwrap();
                         break;
                     },
