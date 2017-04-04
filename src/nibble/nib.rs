@@ -236,9 +236,10 @@ impl Nibble {
 
     #[inline(always)]
     fn __put(&self, obj: &ObjDesc, hint: PutPolicy) -> Status {
-        let ep = PinnedEpoch::new();
-        let va: usize;
+        // NOTE DO NOT pin the epoch during a PUT. It will stall
+        // the compaction logic.
 
+        let va: usize;
         let socket: usize = match hint {
             PutPolicy::Specific(id) => id,
             PutPolicy::Interleave =>
