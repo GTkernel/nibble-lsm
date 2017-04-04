@@ -24,6 +24,7 @@ use std::collections::VecDeque;
 use crossbeam::sync::SegQueue;
 use parking_lot as pl;
 
+// If block or segment size > huge page, it must be a multiple of huge page.
 pub const BLOCK_SHIFT:      usize = 16;
 pub const BLOCK_SIZE:       usize = 1 << BLOCK_SHIFT;
 pub const BLOCK_OFF_MASK:   usize = BLOCK_SIZE - 1;
@@ -250,7 +251,8 @@ impl BlockAllocator {
     }
 
     pub fn numa(bytes: usize, node: NodeId) -> Self {
-        let mmap = MemMap::numa(bytes, node, BLOCK_SIZE, true);
+        let align = cmp::max(numa::PAGE_SIZE_HUGE, BLOCK_SIZE);
+        let mmap = MemMap::numa(bytes, node, align, true);
         mmap.exclude_corefile();
         Self::__new(bytes, mmap)
     }

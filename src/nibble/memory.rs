@@ -138,12 +138,16 @@ impl MemMap {
     // map and allocate anon memory, bound to a socket
     // shm segments + hugepg + numa on Linux asinine to get working
     // alignment must be power of two
-    pub fn numa(len: usize, node: NodeId,
+    pub fn numa(len_: usize, node: NodeId,
                 align: usize, alloc: bool) -> Self {
 
-        assert!(align.is_power_of_two());
-        assert!(align >= 4096);
-        assert!(align < len);
+        // round len up to nearest multiple of alignment.  NOTE: this
+        // must be done b/c mbind stupidly returns EINVAL otherwise
+        let len = (len_ + align - 1) & !(align - 1);
+        assert!(len >= len_);
+
+        assert!((align & (numa::PAGE_SIZE_HUGE-1)) == 0,
+            "alignment {} must be multiple of huge page", align);
 
         debug!("len {} node {} align {}", len, node.0, align);
         let prot: libc::c_int = libc::PROT_READ | libc::PROT_WRITE;
@@ -152,7 +156,7 @@ impl MemMap {
             libc::MAP_HUGETLB;
         let mut addr: usize = unsafe {
             let p = 0 as *mut libc::c_void;
-            libc::mmap(p, len + align, prot, flags, -1, 0) as usize
+            libc::mmap(p, len, prot, flags, -1, 0) as usize
         };
         if addr == libc::MAP_FAILED as usize {
             panic!("mmap: {}", unsafe{errno()});
@@ -161,12 +165,9 @@ impl MemMap {
               addr, (addr+len), len>>20);
 
         // fix the alignment
-        // TODO release unused memory
-        if addr & (align - 1)  > 0 {
-            addr = (addr + align) & !(align-1);
-        }
-        debug!("aligned 0x{:x}-0x{:x} to {}",
-              addr, (addr+len), align);
+        addr = (addr + align - 1) & !(align - 1);
+        debug!("aligned to 0x{:x}-0x{:x}",
+              addr, (addr+len));
 
         // bind the memory to a socket
         // mbind has no wrapper, currently
@@ -174,10 +175,13 @@ impl MemMap {
         let mask = 1usize << node.0;
         unsafe {
             let maskaddr = &mask as *const usize as usize;
+            debug!("mbind 0x{:x} {} {} 0x{:x} (0x{:x}) {} {}",
+                addr, len, numa::MPOL_BIND,
+                maskaddr, mask, 64usize, numa::MPOL_MF_MOVE);
             // syscall returns usize, but it's really an i32
             let ret: i32 = syscall::syscall6(syscall::nr::MBIND,
                 addr, len, numa::MPOL_BIND,
-                maskaddr, nnodes+1, numa::MPOL_MF_STRICT) as i32;
+                maskaddr, 64usize, numa::MPOL_MF_MOVE) as i32;
             assert_eq!(ret, 0, "mbind: {}", ret);
         }
 

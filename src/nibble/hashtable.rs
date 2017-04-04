@@ -296,7 +296,7 @@ impl HashTable {
         let nbuckets =
             (entries / ENTRIES_PER_BUCKET).next_power_of_two();
         let len = nbuckets * mem::size_of::<Bucket>();
-        let align: usize = 1usize<<21;
+        let align: usize = numa::PAGE_SIZE_HUGE;
         let mmap = MemMap::numa(TABLE_VLEN,
                                 NodeId(sock), align, false);
         let p = Pointer(mmap.addr() as *const Bucket);
