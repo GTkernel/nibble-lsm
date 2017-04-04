@@ -6,10 +6,17 @@ use std::fmt;
 use std::error::Error;
 
 // Linux definitions for mbind system call.
+// From /usr/include/linux/mempolicy.h
 // FIXME put somewhere portable
 pub const MPOL_BIND: usize       = 2;
 pub const MPOL_INTERLEAVE: usize = 3;
-pub const MPOL_MF_STRICT: usize  = (1usize<<0);
+pub const MPOL_MF_STRICT: usize  = 1 << 0;
+pub const MPOL_MF_MOVE: usize    = 1 << 1;
+
+pub const PAGE_SIZE: usize              = 1usize << 12;
+pub const PAGE_SIZE_MASK: usize         = PAGE_SIZE - 1;
+pub const PAGE_SIZE_HUGE: usize         = 1usize << 21;
+pub const PAGE_SIZE_HUGE_MASK: usize    = PAGE_SIZE_HUGE - 1;
 
 /// Special type to represent a NUMA socket.
 #[derive(Copy,Clone)]
