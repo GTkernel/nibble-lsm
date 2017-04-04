@@ -274,7 +274,7 @@ impl Log {
         let mut opt;
         loop {
             opt = self.heads[i].try_lock();
-            if opt.is_some() {
+            if likely!(opt.is_some()) {
                 break;
             }
         }
