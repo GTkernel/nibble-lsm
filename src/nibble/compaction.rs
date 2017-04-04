@@ -153,18 +153,18 @@ impl Compactor {
     // release unused blocks back to the block allocator, and the
     // segment then added back to the log.
 
-    pub fn spawn(&mut self, role: WorkerRole) {
+    pub fn spawn(&mut self) {
         info!("Spawning {} compaction threads", WTHREADS);
         info!("Compaction delay ratio {}", RATIO);
         for i in 0..WTHREADS {
-            let w = Worker::new(&role, i, self);
+            let w = Worker::new(i, self);
             let state = Arc::new(pl::RwLock::new(w));
             let give = state.clone();
-            let name = format!("compaction::worker::{:?}", role);
+            let name = format!("compaction::worker");
             let handle = match thread::Builder::new()
                 .name(name).spawn( move || worker(give) ) {
                     Ok(handle) => handle,
-                    Err(e) => panic!("spawning thread: {:?}: {:?}",role,e),
+                    Err(e) => panic!("spawning thread: {:?}",e),
                 };
             self.workers.push( (state, handle) );
         }
@@ -289,7 +289,6 @@ impl Worker {
               mem::size_of::<pl::Mutex<Vec<Candidate>>>() *
               mem::size_of::<Candidate>() * ncand);
         Worker {
-            role: *role,
             id: id,
             candidates: pl::Mutex::new(Vec::with_capacity(ncand)),
             manager: compactor.manager.clone(),
