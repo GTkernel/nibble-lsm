@@ -96,6 +96,7 @@ pub struct Block {
     /// Base address of this memory region. Immutable after creation.
     addr: usize,
     /// Length of this block in bytes. Immutable after creation.
+    /// TODO get rid of this... all blocks are / should be BLOCK_SIZE
     len: usize,
     /// Index within BlockAllocator::pool. Immutable after creation.
     slot: usize,
@@ -553,17 +554,18 @@ impl Segment {
     /// compaction code, after allocating an empty segment.
     /// TODO need unit test
     pub fn extend(&mut self, blocks: &mut BlockRefPool) {
-        assert!(self.blocks.len() > 0);
+        assert!(blocks.len() > 0);
+
+        let addlen = blocks.len() * BLOCK_SIZE;
+        self.len += addlen;
+        self.rem += addlen;
+        debug_assert!(addlen > 0, "addlen is zero");
 
         // NOTE always push blocks first. All existing blocks must
         // next have their backpointer to the block list updated,
         // because the slice as originally set to N blocks; now
         // we have >N blocks in the segment.
         self.blocks.append(blocks);
-
-        let addlen = blocks.iter().fold(0, |acc, ref b| acc + b.len);
-        self.len += addlen;
-        self.rem += addlen;
 
         let list = uslice::make(&self.blocks);
         for t in self.blocks.iter().zip(0..) { unsafe {
