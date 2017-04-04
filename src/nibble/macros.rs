@@ -5,14 +5,12 @@
 //==----------------------------------------------------==//
 
 /// Wrapper for intrinsics::likely
-#[inline(always)]
 #[macro_export]
 macro_rules! likely {
     ( $b:expr ) => { unsafe { intrinsics::likely($b) } }
 }
 
 /// Wrapper for intrinsics::unlikely
-#[inline(always)]
 #[macro_export]
 macro_rules! unlikely {
     ( $b:expr ) => { unsafe { intrinsics::unlikely($b) } }
