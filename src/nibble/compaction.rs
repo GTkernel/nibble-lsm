@@ -84,6 +84,10 @@ pub const RATIO: f64 = 0.2_f64;
 /// Number of worker threads per instance.
 pub const WTHREADS: usize = 4_usize;
 
+/// How long reclamation should take in the blocking method before
+/// throwing up.
+pub const WAIT_TO_RECLAIM: usize = 10_usize;
+
 //==----------------------------------------------------==//
 //      Compactor types, macros
 //==----------------------------------------------------==//
@@ -843,8 +847,9 @@ impl Worker {
             while let Some(current) = meta::min() {
                 if current > ep { break; }
                 let el = now.elapsed();
-                if el.as_secs() > 5 {
-                    warn!("waiting >5 sec to reclaim segments");
+                if el.as_secs() > WAIT_TO_RECLAIM as u64 {
+                    warn!("waiting >{} sec to reclaim",
+                         WAIT_TO_RECLAIM);
                     warn!("meta::min = {:?}", meta::min());
                     meta::dump_epochs();
                     now = Instant::now();
