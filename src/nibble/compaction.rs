@@ -79,10 +79,10 @@ use parking_lot as pl;
 
 /// Ratio of available memory to total capacity, below which
 /// compaction threads will aggressively try to compress memory.
-pub const RATIO: f64 = 0.2_f64;
+pub const RATIO: f64 = 0.5_f64;
 
 /// Number of worker threads per instance.
-pub const WTHREADS: usize = 4_usize;
+pub const WTHREADS: usize = 8_usize;
 
 /// How long reclamation should take in the blocking method before
 /// throwing up.

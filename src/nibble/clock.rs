@@ -93,6 +93,7 @@ macro_rules! do_init {
 
 pub const NANO_PER_SEC: u64  = 1_000_000_000_u64;
 pub const NANO_PER_MSEC: u64 = 1_000_000_u64;
+pub const NANO_PER_USEC: u64 = 1_000_u64;
 
 /// Return the above global but hide the unsafe block. We only write
 /// it during init() so shouldn't matter.
