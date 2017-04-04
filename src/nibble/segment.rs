@@ -7,6 +7,7 @@ use meta;
 use numa::{self,NodeId};
 use compaction;
 use mcs::{McsQnode};
+use sched;
 
 use std::cmp;
 use std::mem;
@@ -281,7 +282,15 @@ impl BlockAllocator {
         unsafe { McsQnode::lock(&self.freepool_mcs, &mut slot); }
         let mut blks = None;
         while blks.is_none() {
-            while self.freepool_sz.load(Ordering::Relaxed) < count { ; }
+            // spin on the size variable with backoff
+            let mut tries = 0usize;
+            while self.freepool_sz.load(Ordering::Relaxed) < count {
+                tries += 1;
+                if tries > 10_000usize {
+                    sched::sleep_short();
+                    tries = 0usize;
+                }
+            }
             blks = self.allocp(count);
         }
         unsafe { McsQnode::unlock(&self.freepool_mcs, &mut slot); }
