@@ -17,5 +17,6 @@ pub mod hashtable;
 pub mod chase_lev;
 pub mod distributions;
 pub mod trace;
+pub mod mcs;
 
 pub mod logger;
