@@ -615,7 +615,7 @@ impl Worker {
                 if let Some(lock) = self.index
                     .update_lock_ifeq(key,ientry_new,ientry_old) {
                     let newva = new.append_entry(&entry);
-                    self.seginfo.incr_live(new.slot(), entry.len);
+                    //self.seginfo.incr_live(new.slot(), entry.len);
                     bytes_appended += entry.len;
                     debug_assert!(newva.is_some());
                     debug_assert_eq!(newva.unwrap(), va);
@@ -624,7 +624,7 @@ impl Worker {
                 n += 1;
             }
             // TODO use this one line instead of adding each time
-            //self.seginfo.incr_live(new.slot(), bytes_appended);
+            self.seginfo.incr_live(new.slot(), bytes_appended);
 
             meta::quiesce();
             // make sure nobjects is consistent with the iterator
