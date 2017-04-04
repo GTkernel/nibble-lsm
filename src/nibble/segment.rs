@@ -1016,6 +1016,8 @@ pub struct SegmentManager {
     /// Used to distribute newly closed segments among the closed
     /// queues.
     next:     AtomicUsize,
+    /// Blocks to free but refs not yet released... broken epochs?
+    pending: pl::Mutex<VecDeque<SegmentRef>>,
 }
 
 // TODO reclaim segments function and thread
@@ -1079,6 +1081,7 @@ impl SegmentManager {
             segments: pl::RwLock::new(segments),
             closed: pl::RwLock::new(closed),
             next: AtomicUsize::new(0),
+            pending: pl::Mutex::new(VecDeque::new()),
         }
     }
 
@@ -1176,28 +1179,16 @@ impl SegmentManager {
         opt
     }
 
-    // Consume the reference and release its blocks
-    pub fn free(&self, segref: SegmentRef) {
-
-        // drop only other known ref to segment
-        // and extract slot#
-        let slot = {
-            let seg = segref.read(); // FIXME don't lock
-            self.segments.write()[seg.slot] = None;
-            seg.slot
-        };
-
-        // extract the segment (should only be one ref remaining)
+    fn do_free(&self, segref: SegmentRef) {
         let mut seg = match Arc::try_unwrap(segref) {
             Err(_) => panic!("another ref to seg exists"),
             Ok(seglock) => seglock.into_inner(),
         };
-
-        // TODO memset the segment? or the header?
-
         for b in &seg.blocks {
             unsafe { b.clear_segment(); }
         }
+        atomic::fence(atomic::Ordering::SeqCst);
+        let slot = seg.slot;
 
         // release the blocks
         self.allocator.free(&mut seg.blocks);
@@ -1205,6 +1196,45 @@ impl SegmentManager {
         // this seg should have zero references at this point
         // do this last because it opens the slot above for use
         self.free_slots.push(slot as u32);
+    }
+
+    fn try_release_pending(&self) {
+        if let Some(mut pending) = self.pending.try_lock() {
+            let many = pending.len();
+            for _ in 0..many {
+                let s = pending.pop_front().unwrap();
+                let c = Arc::strong_count(&s);
+                if c == 1 {
+                    info!("dropping pending seg: freeing");
+                    self.do_free(s);
+                } else {
+                    info!("dropping pending seg: try later");
+                    pending.push_back(s);
+                }
+            }
+        }
+    }
+
+    // Consume the reference and release its blocks
+    pub fn free(&self, segref: SegmentRef) {
+        self.try_release_pending();
+
+        // drop only other known ref to segment
+        self.segments.write()[segref.read().slot] = None;
+
+        // extract the segment (should only be one ref remaining)
+        let c = Arc::strong_count(&segref);
+        if unlikely!(c > 1) {
+            {
+                let s = segref.read();
+                warn!("seg {} (reserve {:?}) has {} other refs",
+                    s.slot(), s.is_reserve, c-1);
+            }
+            self.pending.lock().push_back(segref);
+            return;
+        }
+
+        self.do_free(segref);
     }
 
     /// Directly allocate raw blocks without a containing segment.
