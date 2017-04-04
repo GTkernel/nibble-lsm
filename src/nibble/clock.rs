@@ -1,4 +1,5 @@
 use std::time::Instant;
+use std::intrinsics;
 
 //==----------------------------------------------------==//
 //      Cycles information / state
@@ -83,12 +84,15 @@ fn init() {
 }
 
 macro_rules! do_init {
-    () => { unsafe {
-        if CYCLES_PER_SECOND == 0u64 {
+    () => {
+        if unlikely!(CYCLES_PER_SECOND == 0u64) {
             init();
         }
-    }}
+    }
 }
+
+pub const NANO_PER_SEC: u64  = 1_000_000_000_u64;
+pub const NANO_PER_MSEC: u64 = 1_000_000_u64;
 
 /// Return the above global but hide the unsafe block. We only write
 /// it during init() so shouldn't matter.
