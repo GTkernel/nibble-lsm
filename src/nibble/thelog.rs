@@ -147,7 +147,7 @@ impl LogHead {
         let roll: bool;
 
         // check if head exists
-        if let None = self.segment {
+        if unlikely!(self.segment.is_none()) {
             roll = true;
         }
         // check if the object can fit in remaining space
@@ -156,7 +156,7 @@ impl LogHead {
                 !seg.read().can_hold(buf)
             ).unwrap();
         }
-        if roll {
+        if unlikely!(roll) {
             trace!("rolling head, socket {:?}",
                    self.manager.socket());
             if let Err(code) = self.roll() {
