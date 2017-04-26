@@ -2,7 +2,7 @@
 set -u
 
 # in bytes
-# Only used by MICA and RAMCloud. To affect Nibble,
+# Only used by MICA and RAMCloud. To affect LSM,
 # you must modify the executable (either command argument, or a global
 # within the code itself).
 #MEMSIZE=$((2*(1<<40)))
@@ -18,7 +18,7 @@ export RAMCLOUD_ARGV="-t $RCMEM -h 10%"
 # number of args + 1 (like 'int argc' in C main)
 export RAMCLOUD_NARG=5
 
-# Choose the system (MICA, Nibble, etc.) via FEATURES at bottom.
+# Choose the system (MICA, LSM, etc.) via FEATURES at bottom.
 
 # script to gather system information
 SYSINFO="../sysinfo"
@@ -83,13 +83,13 @@ run() {
 ##  (run 2>&1) | tee -a log-redis.out
 ##  redis_stop
 
-##  # MICA and Nibble need 2MiB pages
+##  # MICA and LSM need 2MiB pages
 ##  echo 'Creating 2 MiB page reservations...'
 ##  sudo su -c 'echo 4700000 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
 ##  sudo su -c 'echo 2700000 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
 
 ##  export FEATURES="rdrand"
-##  (run 2>&1) | tee -a log-nibble.out
+##  (run 2>&1) | tee -a log-kvs.out
 
 ##  # Used for creating the hash table.. make large enough
 ##  export MICA_ITEMS=$((NKEYS*2))

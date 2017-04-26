@@ -1,6 +1,6 @@
 // this file converts a file that has a trace collected
 // from the TableFS source code we added into
-// a binary one that Nibble can read in
+// a binary one that LSM can read in
 // TableFS uses 16-byte keys, so the first thing is to map these
 // to 8-byte keys
 

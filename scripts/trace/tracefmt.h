@@ -1,7 +1,7 @@
 #ifndef TRACEFMT_H_INCLUDED
 #define TRACEFMT_H_INCLUDED
 
-// keep consistent with src/nibble/trace.rs
+// keep consistent with src/kvs/trace.rs
 using OpType = uint8_t;
 enum class Op: OpType {
     GET = 0, SET, DEL
