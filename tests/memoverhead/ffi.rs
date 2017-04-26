@@ -4,17 +4,17 @@
 #![allow(dead_code)]
 #![feature(const_fn)]
 
-extern crate nibble;
+extern crate kvs;
 
-// use nibble::clock;
-use nibble::common::{Pointer,ErrorCode,rdrand,rdrandq};
-// use nibble::epoch;
-use nibble::logger;
-// use nibble::memory;
-use nibble::nib::{self,Nibble};
-use nibble::numa::{self,NodeId};
-// use nibble::sched::*;
-use nibble::segment::{ObjDesc,SEGMENT_SIZE};
+// use kvs::clock;
+use kvs::common::{Pointer,ErrorCode,rdrand,rdrandq};
+// use kvs::epoch;
+use kvs::logger;
+// use kvs::memory;
+use kvs::lsm::{self,LSM};
+use kvs::numa::{self,NodeId};
+// use kvs::sched::*;
+use kvs::segment::{ObjDesc,SEGMENT_SIZE};
 // use rand::Rng;
 // use std::collections::VecDeque;
 // use std::mem;
@@ -24,30 +24,30 @@ use std::thread::{self,JoinHandle};
 use std::time::{Instant,Duration};
 use std::ptr::null;
 
-static mut NIBBLE: Pointer<Nibble> = Pointer(null::<Nibble>());
+static mut KVS: Pointer<LSM> = Pointer(null::<LSM>());
 
 #[no_mangle] pub extern
-fn nibble_init(cap: usize, nitems: usize) {
+fn kvs_init(cap: usize, nitems: usize) {
 	logger::enable();
-	println!("# Nibble allocating...");
-	//let nib: Box<Nibble> = Box::new(Nibble::default());
-	let nib: Box<Nibble> = Box::new(Nibble::new2(cap,nitems));
-	println!("# Nibble enabling compaction on Node 0");
-    nib.enable_compaction(NodeId(0));
-	let p = Box::into_raw(nib);
-	println!("# Nibble @ {:?}", p);
+	println!("# LSM allocating...");
+	//let kvs: Box<LSM> = Box::new(LSM::default());
+	let kvs: Box<LSM> = Box::new(LSM::new2(cap,nitems));
+	println!("# LSM enabling compaction on Node 0");
+    kvs.enable_compaction(NodeId(0));
+	let p = Box::into_raw(kvs);
+	println!("# LSM @ {:?}", p);
 	unsafe {
-		NIBBLE.0 = p;
+		KVS.0 = p;
 	}
 }
 
 // return 0 if ok else 1
 #[no_mangle] pub extern
-fn nibble_put(key: u64, len: u64) -> i32 {
-	let nib: &Nibble = unsafe { &*NIBBLE.0 };
+fn kvs_put(key: u64, len: u64) -> i32 {
+	let kvs: &LSM = unsafe { &*KVS.0 };
 	// println!("put {:x}", key);
     let obj = ObjDesc::null(key, len as usize);
-    match nib.put_where(&obj, nib::PutPolicy::Specific(0)) {
+    match kvs.put_where(&obj, lsm::PutPolicy::Specific(0)) {
         Ok(_) => 0i32,
         Err(e) => match e {
             ErrorCode::OutOfMemory => 1i32,
@@ -58,13 +58,13 @@ fn nibble_put(key: u64, len: u64) -> i32 {
 
 // return 0 if ok else 1
 #[no_mangle] pub extern
-fn nibble_del(key: u64) -> i32 {
-	let nib: &Nibble = unsafe { &*NIBBLE.0 };
+fn kvs_del(key: u64) -> i32 {
+	let kvs: &LSM = unsafe { &*KVS.0 };
 	// println!("del {:x}", key);
-	match nib.del_object(key) {
+	match kvs.del_object(key) {
         Ok(_) => 0i32,
         Err(e) => {
-            println!("ERROR: nibble_del: {:?}", e);
+            println!("ERROR: kvs_del: {:?}", e);
             1i32
         },
     }

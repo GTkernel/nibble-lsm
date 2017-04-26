@@ -1,6 +1,6 @@
 /*
  * This code is verbatim from malloc-tests/src/shuffle/shuffle.c
- * but with some glue to call into Rust (to use Nibble).
+ * but with some glue to call into Rust (to use LSM).
  */
 
 #define _GNU_SOURCE
@@ -19,7 +19,7 @@
 #define PRINT_PROGRESS
 
 #if defined(RELEASE_SELF)
-#error shuffle benchmark not supported with Nibble
+#error shuffle benchmark not supported with LSM
 #endif
 
 //////////////////////////////
@@ -77,11 +77,11 @@ enum status {
 typedef uint64_t u64;
 typedef uint32_t u32;
 
-// Exposed Rust functions for use to use a Nibble object.
-extern void  nibble_init(size_t cap, size_t nitem);
-extern void* nibble_alloc(u64 key, u64 bytes, u32 sock);
+// Exposed Rust functions for use to use a LSM object.
+extern void  kvs_init(size_t cap, size_t nitem);
+extern void* kvs_alloc(u64 key, u64 bytes, u32 sock);
 // must_exist = 1 -> fail if key not found
-extern void  nibble_free(u64 key, int must_exist);
+extern void  kvs_free(u64 key, int must_exist);
 
 pid_t gettid() {
     return syscall(SYS_gettid);
@@ -103,7 +103,7 @@ void setup_sizes(ul n, ul *sizes1, ul *sizes2,
 
 struct batch {
     volatile enum status status;
-    // Nibble uses keys, not addresses
+    // LSM uses keys, not addresses
     u64 *keys;
 };
 
@@ -136,7 +136,7 @@ void* worker(void *args_) {
     ul many = 0;
     const ul npairs = nthreads / 2;
 
-    // As Nibble requires keys, we must choose a starting key that,
+    // As LSM requires keys, we must choose a starting key that,
     // when incremented, does not practically lead to overlap amongst
     // the other threads. Keys are u64, so if we assume
     // 1mil. threads, each gets 2**(64-20) keys. Thread IDs on Linux are
@@ -230,7 +230,7 @@ found:;
 
 #define ALLOC(ii) \
     do { \
-        nibble_alloc(key, \
+        kvs_alloc(key, \
             sizesp[(ii) & sizes_mask], socket); \
         b->keys[ii] = key++; \
     } while (0)
@@ -352,7 +352,7 @@ void* consumer(void *args_) {
     while (atomic_load(&warmup_barrier) > 0)
         ;
 
-#define FREE(ii)    nibble_free(b->keys[ii], 1)
+#define FREE(ii)    kvs_free(b->keys[ii], 1)
 
     ul start = rdtsc();
     struct batch *b;
@@ -474,7 +474,7 @@ int main(int narg, char *args[]) {
     ul nitems = 1ul<<27;
     nitems *= (log2f(nthreads) + 1);
     printf("nthreads %lu nitems %lu\n", nthreads, nitems);
-    nibble_init(1ul<<38, nitems);
+    kvs_init(1ul<<38, nitems);
 
     atomic_sub_fetch(&warmup_barrier, 1);
     while (atomic_load(&warmup_barrier) > 0)

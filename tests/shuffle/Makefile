@@ -21,15 +21,15 @@ shuffle:	libffi.a shuffle.o util.o
 	cargo build --lib --release
 	$(CC) shuffle.o util.o -o $@ -L./ -lffi $(LDFLAGS) $(LIBS)
 
-../../target/release/libnibble.rlib: Makefile
+../../target/release/libkvs.rlib: Makefile
 	cargo build --lib --release
 
 # this was non-trivial to figure out :(
 .PHONY: libffi.a
-libffi.a:	ffi.rs ../../target/release/libnibble.rlib
+libffi.a:	ffi.rs ../../target/release/libkvs.rlib
 	cargo build --lib --release
 	rustc -O --crate-type=staticlib \
-		--extern nibble=../../target/release/libnibble.rlib \
+		--extern kvs=../../target/release/libkvs.rlib \
 		-L dependency=../../target/release/deps \
 		--extern log=../../target/release/deps/liblog-bf16bb9a4912b11d.rlib \
 		ffi.rs

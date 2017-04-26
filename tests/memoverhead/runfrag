@@ -7,7 +7,7 @@ BIN = './frag'
 first  = [ 60, 1000, 1000, 1024, 10240, 500*1024 ]
 second = [ 70, 1024, 1030, 10240, 102400, 600*1024 ]
 
-# capacity of Nibble's logs
+# capacity of LSM's logs
 CAP = 2**37
 # how much the frag test should assume is available (making MICA's
 # heaps the bottleneck)

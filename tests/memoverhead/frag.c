@@ -63,10 +63,10 @@ typedef int32_t  i32;
 // measure performance.
 //
 
-// Exposed Rust functions for use to use a Nibble object.
-extern void nibble_init(size_t cap, size_t nitem);
-extern i32 nibble_put(u64 key, u64 bytes);
-extern i32 nibble_del(u64 key);
+// Exposed Rust functions for use to use a LSM object.
+extern void kvs_init(size_t cap, size_t nitem);
+extern i32 kvs_put(u64 key, u64 bytes);
+extern i32 kvs_del(u64 key);
 
 #if defined(USE_RANGE)
 // return random value between low,high inclusive
@@ -164,7 +164,7 @@ again:;
             //assert( (entries[at].addr = malloc((size_t)bytes)) );
             //memset(entries[at].addr, 0xad, (size_t)bytes);
             while (cur >= max ||
-                    (0 != nibble_put((u64)key,(u64)bytes))) {
+                    (0 != kvs_put((u64)key,(u64)bytes))) {
                 if (at <= 0) {
                     if (!paused_once) {
                         sleep(5);
@@ -177,7 +177,7 @@ again:;
                 }
 
                 long idx = lrand48() % at;
-                if ( 0 != nibble_del(entries[idx].key) ) {
+                if ( 0 != kvs_del(entries[idx].key) ) {
                     printf("oops: del failed idx %lu key %lu\n",
                             idx, entries[idx].key);
                     fflush(stdout);
@@ -225,7 +225,7 @@ again:;
         shuffle(entries, at, &drand_buf);
         while ((float)cur > ((float)max*(1.-(FREE_PCT)))) {
             at--;
-            if ( 0 != nibble_del(entries[at].key) ) {
+            if ( 0 != kvs_del(entries[at].key) ) {
                 printf("oops: del failed\n");
                 exit(EXIT_FAILURE);
             }
@@ -246,7 +246,7 @@ again:;
     // pause, insert, pause insert, etc.
     for (int i = 0; i < 8; i++) {
         key = rdrand();
-        while (0 == nibble_put((u64)key,(u64)bytes)) {
+        while (0 == kvs_put((u64)key,(u64)bytes)) {
             if (at <= 0) {
                 printf("oops: at=0\n");
                 fflush(stdout);
@@ -294,7 +294,7 @@ int main(int narg, char *args[]) {
     long O2 = strtol(args[2], NULL, 10);
     long M  = strtol(args[3], NULL, 10);
     long cap = strtol(args[4], NULL, 10);
-    nibble_init(cap, 1ul<<30);
+    kvs_init(cap, 1ul<<30);
     test(O1,O2,M);
     exit(EXIT_SUCCESS);
 }
