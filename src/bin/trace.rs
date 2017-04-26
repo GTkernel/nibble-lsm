@@ -4,7 +4,7 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 
-extern crate rand; // import before nibble
+extern crate rand; // import before kvs
 #[macro_use]
 extern crate log;
 extern crate time;
@@ -14,23 +14,23 @@ extern crate crossbeam;
 extern crate parking_lot as pl;
 
 #[macro_use]
-extern crate nibble;
+extern crate kvs;
 
-use nibble::distributions::*;
+use kvs::distributions::*;
 
 use clap::{Arg, App, SubCommand};
 use log::LogLevel;
 
-use nibble::clock;
-use nibble::common::{self,Pointer,ErrorCode,rdrand,rdrandq};
-use nibble::meta;
-use nibble::logger;
-use nibble::memory;
-use nibble::nib::{self,Nibble};
-use nibble::numa::{self,NodeId};
-use nibble::sched::*;
-use nibble::segment::{ObjDesc,SEGMENT_SIZE};
-use nibble::trace::*;
+use kvs::clock;
+use kvs::common::{self,Pointer,ErrorCode,rdrand,rdrandq};
+use kvs::meta;
+use kvs::logger;
+use kvs::memory;
+use kvs::lsm::{self,LSM};
+use kvs::numa::{self,NodeId};
+use kvs::sched::*;
+use kvs::segment::{ObjDesc,SEGMENT_SIZE};
+use kvs::trace::*;
 
 use rand::Rng;
 use std::mem;
@@ -62,7 +62,7 @@ pub const MAX_KEYSIZE: usize = 1usize << 25;
 /// How long to run the experiment before halting.
 pub const RUNTIME: usize = 30;
 
-/// Total memory to pre-allocate for MICA, Nibble, RAMCloud, etc.
+/// Total memory to pre-allocate for MICA, LSM, RAMCloud, etc.
 /// Should match what is in the scripts/trace/run-trace script.
 //pub const MAX_MEMSIZE: usize = 6_usize << 40;
 //pub const MAX_MEMSIZE: usize = 2_usize << 40;
@@ -100,7 +100,7 @@ pub const CYCLE_TRACE: bool = false;
 //////////////////////////////////////////////////////////////////////
 
 #[cfg(not(feature = "extern_ycsb"))]
-static mut NIBBLE: Pointer<Nibble> = Pointer(0 as *const Nibble);
+static mut KVS: Pointer<LSM> = Pointer(0 as *const LSM);
 
 #[derive(Debug)]
 struct Config {
@@ -155,7 +155,7 @@ impl WorkloadGenerator {
         for tup in (1u64..).zip(nums) {
             let key: u64 = tup.0;
             let len: u64 = *tup.1 as u64;
-            // disregard zero-byte objects (Nibble chokes on them still)
+            // disregard zero-byte objects (LSM chokes on them still)
             if len > 0 {
                 items.push( (key,len) );
                 total_size += len as usize;
@@ -494,27 +494,27 @@ fn main() {
 
 #[cfg(not(feature = "extern_ycsb"))]
 fn kvs_init(config: &Config) {
-    let nibble =
-        Box::new(Nibble::new2(config.total, config.records*2));
-        //Box::new(Nibble::new2(config.total, 1usize<<30));
+    let kvs =
+        Box::new(LSM::new2(config.total, config.records*2));
+        //Box::new(LSM::new2(config.total, 1usize<<30));
     info!("Enabling compaction");
     for node in 0..numa::NODE_MAP.sockets() {
-        nibble.enable_compaction(NodeId(node));
+        kvs.enable_compaction(NodeId(node));
     }
     unsafe {
-        let p = Box::into_raw(nibble);
-        NIBBLE = Pointer(p);
+        let p = Box::into_raw(kvs);
+        KVS = Pointer(p);
     }
 }
 
 #[inline(always)]
 #[cfg(not(feature = "extern_ycsb"))]
 fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
-    let nibble: &Nibble = unsafe { &*NIBBLE.0 };
+    let kvs: &LSM = unsafe { &*KVS.0 };
     let obj = ObjDesc::new(key, value, len);
-    let nibnode = nib::PutPolicy::Specific(sock);
+    let nibnode = lsm::PutPolicy::Specific(sock);
     loop {
-        let err = nibble.put_where(&obj, nibnode);
+        let err = kvs.put_where(&obj, nibnode);
         if err.is_err() {
             match err {
                 Err(ErrorCode::OutOfMemory) => continue,
@@ -538,20 +538,20 @@ thread_local!(
 #[cfg(not(feature = "extern_ycsb"))]
 fn get_object(key: u64) {
     BUFFER.with( |p| {
-        let nibble: &Nibble = unsafe { &*NIBBLE.0 };
+        let kvs: &LSM = unsafe { &*KVS.0 };
         // let mut buf: [u8;MAX_KEYSIZE] = unsafe { mem::uninitialized() };
         let mut buf: &mut [u8] = unsafe {
             slice::from_raw_parts_mut::<u8>(*p, MAX_KEYSIZE)
         };
-        let _ = nibble.get_object(key, buf);
+        let _ = kvs.get_object(key, buf);
     });
 }
 
 #[inline(always)]
 #[cfg(not(feature = "extern_ycsb"))]
 fn del_object(key: u64) {
-    let nibble: &Nibble = unsafe { &*NIBBLE.0 };
-    let _ = nibble.del_object(key);
+    let kvs: &LSM = unsafe { &*KVS.0 };
+    let _ = kvs.del_object(key);
 }
 
 #[link(name = "micaext")]

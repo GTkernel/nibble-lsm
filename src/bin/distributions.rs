@@ -1,5 +1,5 @@
-extern crate nibble;
-use nibble::distributions::*;
+extern crate kvs;
+use kvs::distributions::*;
 use std::time::Instant;
 
 fn main() {

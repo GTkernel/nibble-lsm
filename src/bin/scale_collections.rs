@@ -4,26 +4,26 @@
 #![allow(unused_variables)]
 #![allow(unused_mut)]
 
-extern crate rand; // import before nibble
+extern crate rand; // import before kvs
 #[macro_use]
 extern crate log;
 extern crate test;
 extern crate time;
 extern crate clap;
 
-extern crate nibble;
+extern crate kvs;
 
 use std::collections::*;
 use clap::{Arg, App, SubCommand};
 use log::LogLevel;
-use nibble::common::ErrorCode;
-use nibble::epoch;
-use nibble::logger;
-use nibble::memory;
-use nibble::nib::{PutPolicy,Nibble};
-use nibble::numa::{self,NodeId};
-use nibble::sched::*;
-use nibble::segment::{ObjDesc,SEGMENT_SIZE};
+use kvs::common::ErrorCode;
+use kvs::epoch;
+use kvs::logger;
+use kvs::memory;
+use kvs::lsm::{PutPolicy,LSM};
+use kvs::numa::{self,NodeId};
+use kvs::sched::*;
+use kvs::segment::{ObjDesc,SEGMENT_SIZE};
 use rand::Rng;
 use std::mem;
 use std::sync::Arc;

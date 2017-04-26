@@ -3,25 +3,25 @@
 #![allow(unused_variables)]
 #![allow(unused_mut)]
 
-extern crate rand; // import before nibble
+extern crate rand; // import before kvs
 #[macro_use]
 extern crate log;
 extern crate test;
 extern crate time;
 extern crate clap;
 
-extern crate nibble;
+extern crate kvs;
 
 use clap::{Arg, App, SubCommand};
 use log::LogLevel;
-use nibble::common::{Pointer,ErrorCode,rdrand};
-use nibble::epoch;
-use nibble::logger;
-use nibble::memory;
-use nibble::nib::{PutPolicy,Nibble};
-use nibble::numa::{self,NodeId};
-use nibble::sched::*;
-use nibble::segment::{ObjDesc,SEGMENT_SIZE};
+use kvs::common::{Pointer,ErrorCode,rdrand};
+use kvs::epoch;
+use kvs::logger;
+use kvs::memory;
+use kvs::lsm::{PutPolicy,LSM};
+use kvs::numa::{self,NodeId};
+use kvs::sched::*;
+use kvs::segment::{ObjDesc,SEGMENT_SIZE};
 use rand::Rng;
 use std::mem;
 use std::sync::Arc;
@@ -67,19 +67,19 @@ fn run(config: &Config) {
         fill = config.nobject * (config.size+8+8);
         config.nobject
     };
-    info!("creating Nibble...");
-    let mut nib = match config.capacity {
+    info!("creating LSM...");
+    let mut kvs = match config.capacity {
         0 => {
-            if fill > Nibble::default_capacity() {
+            if fill > LSM::default_capacity() {
                 panic!("nobjects too many for capacity");
             }
-            Nibble::default()
+            LSM::default()
         },
         _ => {
             if fill > config.capacity {
                 panic!("nobjects too many for capacity");
             }
-            Nibble::new(config.capacity)
+            LSM::new(config.capacity)
         },
     };
 
@@ -106,26 +106,26 @@ fn run(config: &Config) {
         5999129, 5933869, 1091047, 4149023, 11117611, 11976901,
         5706919, 15093643, 9159289, 10301803, 11645737, 9598019]);
 
-    let pernode: usize = nobj/nib.nnodes();
+    let pernode: usize = nobj/kvs.nnodes();
     info!("cap {:.3}gb fill {:.3}gb nobj {} nobj.pernode {}",
-          (nib.capacity() as f64)/((1usize<<30) as f64),
+          (kvs.capacity() as f64)/((1usize<<30) as f64),
           (fill as f64)/((1usize<<30) as f64),
           nobj, pernode);
     let mut node = 0;
 
     // downgrade to immutable shareable alias
-    let nib = Arc::new(nib);
+    let kvs = Arc::new(kvs);
 
     info!("inserting all keys -----------------");
     {
         let now = Instant::now();
-        let nsock = nib.nnodes();
+        let nsock = kvs.nnodes();
         let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(nsock);
         let size = config.size;
         for sock in 0..nsock {
             let start_key: u64 = (sock*pernode) as u64;
             let end_key: u64   = start_key + (pernode as u64);
-            let arc = nib.clone();
+            let arc = kvs.clone();
             handles.push( thread::spawn( move || {
                 let value = memory::allocate::<u8>(size);
                 let v = Pointer(value as *const u8);
@@ -211,8 +211,8 @@ fn run(config: &Config) {
         // Spawn each of the threads in this set
         for t in 0..nthreads {
             let accum = accum.clone();
-            let nib = nib.clone();
-            let cap = nib.capacity();
+            let kvs = kvs.clone();
+            let cap = kvs.capacity();
             let size = config.size;
             let cpu = cpus.pop_front().unwrap();
             let memint = config.mem;
@@ -248,7 +248,7 @@ fn run(config: &Config) {
                             s @ MemPolicy::Local => {
                                 for _ in 0..1000usize {
                                     let key = sock.0*pernode + (n % pernode);
-                                    let _ = nib.get_object(key as u64);
+                                    let _ = kvs.get_object(key as u64);
                                     n = n.wrapping_mul(offset); // skip some
                                     ops += 1;
                                 }
@@ -257,7 +257,7 @@ fn run(config: &Config) {
                                 for _ in 0..1000usize {
                                     let key = n % nobj;
                                     //let key = ((n % nsockets)*pernode)+(n % pernode);
-                                    let _ = nib.get_object(key as u64);
+                                    let _ = kvs.get_object(key as u64);
                                     n = n.wrapping_mul(offset); // skip some
                                     ops += 1;
                                 }

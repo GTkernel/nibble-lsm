@@ -1,5 +1,5 @@
 /*
- * Measure the performance of Nibble when threads allocate and hand
+ * Measure the performance of LSM when threads allocate and hand
  * off objects amongst each other, e.g.,
  *
  *  Thread 1    Thread 2    Thread 3    Thread 4
@@ -25,7 +25,7 @@
 #![allow(unused_variables)]
 #![allow(unused_mut)]
 
-extern crate rand; // import before nibble
+extern crate rand; // import before kvs
 #[macro_use]
 extern crate log;
 extern crate test;
@@ -34,18 +34,18 @@ extern crate clap;
 extern crate crossbeam;
 extern crate num;
 
-extern crate nibble;
+extern crate kvs;
 
 use clap::{Arg, App, SubCommand};
 use log::LogLevel;
-use nibble::common::{Pointer,ErrorCode,rdrand};
-use nibble::epoch;
-use nibble::logger;
-use nibble::memory;
-use nibble::nib::{PutPolicy,Nibble};
-use nibble::numa::{self,NodeId};
-use nibble::sched::*;
-use nibble::segment::{ObjDesc,SEGMENT_SIZE};
+use kvs::common::{Pointer,ErrorCode,rdrand};
+use kvs::epoch;
+use kvs::logger;
+use kvs::memory;
+use kvs::lsm::{PutPolicy,LSM};
+use kvs::numa::{self,NodeId};
+use kvs::sched::*;
+use kvs::segment::{ObjDesc,SEGMENT_SIZE};
 use rand::Rng;
 use std::collections::VecDeque;
 use std::mem;
@@ -60,9 +60,9 @@ use std::time::{Duration,Instant};
 // keys between threads. we import Aaron Turon's chase_lev, making two
 // changes: increase default buffer size, and abort if the internal
 // deque wants to resize (to avoid invoking malloc in critical path)
-use nibble::chase_lev;
+use kvs::chase_lev;
 
-fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
+fn pairs(kvs: &LSM, npairs: usize, objsize: usize) {
     let mut guards = vec![];
     let mut tids: u64 = 0;
     let iters = 5000;
@@ -91,12 +91,12 @@ fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
             let (mut worker, stealer) = chase_lev::deque();
 
             let tid = tids; tids += 1;
-            let nib_ref = &nib;
+            let kvs_ref = &kvs;
             let b = barrier.clone();
 
             // Spawn sender/allocator
             let guard = scope.spawn(move || {
-                let nib = &*nib_ref;
+                let kvs = &*kvs_ref;
                 let start = tid*(per as u64) + 1; // zero not a valid key
 
                 let cpu = tid as usize;
@@ -119,21 +119,21 @@ fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
                     while key <= (start+ per as u64) {
 
                         // wait for other thread to catch up
-                        if nib.exists(key) {
+                        if kvs.exists(key) {
                             let now_ = Instant::now();
                             loop {
                                 if now_.elapsed().as_secs() > 2 {
                                     assert!(false,
                                             "sender waited too long");
                                 }
-                                if !nib.exists(key) {
+                                if !kvs.exists(key) {
                                     break;
                                 }
                             }
                         }
 
                         obj.key = key;
-                        assert!(nib.put_where(&obj,
+                        assert!(kvs.put_where(&obj,
                                    PutPolicy::Specific(sock)).is_ok());
                         key += 1;
 
@@ -156,12 +156,12 @@ fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
             guards.push(guard);
 
             let tid = tids; tids += 1;
-            let nib_ref = &nib;
+            let kvs_ref = &kvs;
             let b = barrier.clone();
 
             // Spawn receiver/releaser
             let guard = scope.spawn(move || {
-                let nib = &*nib_ref;
+                let kvs = &*kvs_ref;
                 let mut many: usize = 0;
 
                 let cpu: usize = tid as usize;
@@ -188,7 +188,7 @@ fn pairs(nib: &Nibble, npairs: usize, objsize: usize) {
                             if key == 0u64 {
                                 break;
                             }
-                            assert!(nib.del_object(key).is_ok());
+                            assert!(kvs.del_object(key).is_ok());
                             many += 1;
                             fails = 0usize;
                         },
@@ -236,7 +236,7 @@ fn arg_as_num<T: num::Integer>(args: &clap::ArgMatches,
 }
 
 fn main() {
-    let matches = App::new("Nibble pipeline allocation benchmark.")
+    let matches = App::new("LSM pipeline allocation benchmark.")
         .arg(Arg::with_name("min")
              .long("min")
              .help("min thread pairs")
@@ -267,17 +267,17 @@ fn main() {
     cap *= 1usize<<30;
 
     logger::enable();
-    let nib = Nibble::new(cap);
+    let kvs = LSM::new(cap);
 
     // turn on compaction for all sockets
     for sock in 0..numa::NODE_MAP.sockets() {
-        nib.enable_compaction(NodeId(sock));
+        kvs.enable_compaction(NodeId(sock));
     }
 
     let mut n: usize = from;
     while n <= to {
         println!("pairs {} obj.size {}", n, s);
-        pairs(&nib,n,s);
+        pairs(&kvs,n,s);
         n += incr;
     }
 }

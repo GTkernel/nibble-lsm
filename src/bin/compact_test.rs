@@ -2,24 +2,24 @@
 #![allow(unused_variables)]
 #![allow(unused_mut)]
 
-extern crate rand; // import before nibble
+extern crate rand; // import before kvs
 #[macro_use]
 extern crate log;
 extern crate time;
 extern crate clap;
 
-extern crate nibble;
+extern crate kvs;
 
 use clap::{Arg, App, SubCommand};
 use log::LogLevel;
-use nibble::common::{Pointer,ErrorCode,rdrand};
-use nibble::epoch;
-use nibble::logger;
-use nibble::memory;
-use nibble::nib::{PutPolicy,Nibble};
-use nibble::numa::{self,NodeId};
-use nibble::sched::*;
-use nibble::segment::{ObjDesc,SEGMENT_SIZE};
+use kvs::common::{Pointer,ErrorCode,rdrand};
+use kvs::epoch;
+use kvs::logger;
+use kvs::memory;
+use kvs::lsm::{PutPolicy,LSM};
+use kvs::numa::{self,NodeId};
+use kvs::sched::*;
+use kvs::segment::{ObjDesc,SEGMENT_SIZE};
 use rand::Rng;
 use std::mem;
 use std::sync::Arc;
@@ -42,9 +42,9 @@ fn run() { }
 fn run() {
     logger::enable();
 
-    let mut nib = Nibble::new( 1usize<<33 );
-    nib.enable_compaction(NodeId(0));
-    let capacity = nib.capacity();
+    let mut kvs = LSM::new( 1usize<<33 );
+    kvs.enable_compaction(NodeId(0));
+    let capacity = kvs.capacity();
 
     let size: usize = 1000;
     let value = memory::allocate::<u8>(size);
@@ -56,7 +56,7 @@ fn run() {
     info!("filling socket 0 80%: {}", fill80);
     loop {
         let obj = ObjDesc::new(counter as u64, v, size as u32);
-        if let Err(e) = nib.put_where(&obj, PutPolicy::Specific(0)) {
+        if let Err(e) = kvs.put_where(&obj, PutPolicy::Specific(0)) {
             if let ErrorCode::OutOfMemory = e {
                 info!("log filled, no more inserting");
                 break;
@@ -84,7 +84,7 @@ fn run() {
 
     let mut counter = 0;
     for x in &k {
-        if let Err(e) = nib.del_object(*x as u64) {
+        if let Err(e) = kvs.del_object(*x as u64) {
             println!("x {}", x);
             panic!("error: {:?}", e);
         }

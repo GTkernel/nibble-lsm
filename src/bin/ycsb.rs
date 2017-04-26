@@ -10,7 +10,7 @@
 // double check this happens infrequently; if it is infrequent, we can
 // ignore them.
 
-extern crate rand; // import before nibble
+extern crate rand; // import before kvs
 #[macro_use]
 extern crate log;
 extern crate time;
@@ -19,21 +19,21 @@ extern crate num;
 extern crate crossbeam;
 extern crate parking_lot as pl;
 
-extern crate nibble;
+extern crate kvs;
 
-use nibble::distributions::*;
+use kvs::distributions::*;
 
 use clap::{Arg, App, SubCommand};
 use log::LogLevel;
-use nibble::clock;
-use nibble::common::{self,Pointer,ErrorCode,rdrand,rdrandq};
-use nibble::meta;
-use nibble::logger;
-use nibble::memory;
-use nibble::nib::{self,Nibble};
-use nibble::numa::{self,NodeId};
-use nibble::sched::*;
-use nibble::segment::{ObjDesc,SEGMENT_SIZE};
+use kvs::clock;
+use kvs::common::{self,Pointer,ErrorCode,rdrand,rdrandq};
+use kvs::meta;
+use kvs::logger;
+use kvs::memory;
+use kvs::lsm::{self,LSM};
+use kvs::numa::{self,NodeId};
+use kvs::sched::*;
+use kvs::segment::{ObjDesc,SEGMENT_SIZE};
 use rand::Rng;
 use std::collections::VecDeque;
 use std::mem;
@@ -47,46 +47,46 @@ use std::cmp;
 
 //==----------------------------------------------------------------==
 //  Build-based functions
-//  Compile against Nibble, or exported functions.
+//  Compile against LSM, or exported functions.
 //==----------------------------------------------------------------==
 
 /// Used to create the stack-based buffers for holding GET output.
 pub const MAX_KEYSIZE: usize = 1usize << 10;
 
 //
-// Nibble redirection
+// LSM redirection
 //
 
 #[cfg(not(feature = "extern_ycsb"))]
-static mut NIBBLE: Pointer<Nibble> = Pointer(0 as *const Nibble);
+static mut KVS: Pointer<LSM> = Pointer(0 as *const LSM);
 
 #[cfg(not(feature = "extern_ycsb"))]
 fn kvs_init(config: &Config) {
-    let mut nibble =
-        Box::new(Nibble::new2(config.total, config.records*2));
-        //Box::new(Nibble::new2(config.total, 1usize<<30));
+    let mut kvs =
+        Box::new(LSM::new2(config.total, config.records*2));
+        //Box::new(LSM::new2(config.total, 1usize<<30));
     if config.comp {
         info!("Enabling compaction");
         for node in 0..numa::NODE_MAP.sockets() {
-            nibble.enable_compaction(NodeId(node));
+            kvs.enable_compaction(NodeId(node));
         }
     } else {
         warn!("Compaction NOT enabled");
     }
     unsafe {
-        let p = Box::into_raw(nibble);
-        NIBBLE = Pointer(p);
+        let p = Box::into_raw(kvs);
+        KVS = Pointer(p);
     }
 }
 
 #[inline(always)]
 #[cfg(not(feature = "extern_ycsb"))]
 fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
-    let nibble: &Nibble = unsafe { &*NIBBLE.0 };
+    let kvs: &LSM = unsafe { &*KVS.0 };
     let obj = ObjDesc::new(key, value, len);
-    let nibnode = nib::PutPolicy::Specific(sock);
+    let nibnode = lsm::PutPolicy::Specific(sock);
     loop {
-        let err = nibble.put_where(&obj, nibnode);
+        let err = kvs.put_where(&obj, nibnode);
         if err.is_err() {
             match err {
                 Err(ErrorCode::OutOfMemory) => continue,
@@ -104,11 +104,11 @@ fn put_object(key: u64, value: Pointer<u8>, len: usize, sock: usize) {
 #[inline(always)]
 #[cfg(not(feature = "extern_ycsb"))]
 fn get_object(key: u64) {
-    let nibble: &Nibble = unsafe { &*NIBBLE.0 };
+    let kvs: &LSM = unsafe { &*KVS.0 };
     let mut buf: [u8;MAX_KEYSIZE] =
         unsafe { mem::uninitialized() };
-    let _ = nibble.get_object(key, &mut buf);
-    //if let Err(e) = nibble.get_object(key, &mut buf) {
+    let _ = kvs.get_object(key, &mut buf);
+    //if let Err(e) = kvs.get_object(key, &mut buf) {
         //warn!("{:?} {:x}", e, key);
         //unsafe { intrinsics::abort(); }
     //}
@@ -353,7 +353,7 @@ impl WorkloadGenerator {
         self.__setup(false);
     }
 
-    // parallel insertion (nibble, mica, others..)
+    // parallel insertion (kvs, mica, others..)
     #[cfg(any(feature = "mica", feature="redis", feature = "masstree", not(feature = "extern_ycsb")))]
     pub fn setup(&mut self) {
         self.__setup(true);
@@ -700,7 +700,7 @@ fn extract_puts(args: &clap::ArgMatches) -> PutPolicy {
 // TODO: setup configuration, how to allocate objects across sockets
 #[derive(Debug,Clone,Copy)]
 struct Config {
-    /// Amount of memory to use for nibble
+    /// Amount of memory to use for kvs
     total: usize,
     /// if None, custom workload
     ycsb: Option<YCSB>,
