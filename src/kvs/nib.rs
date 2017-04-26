@@ -28,7 +28,7 @@ macro_rules! min_log_size {
 }
 
 //==----------------------------------------------------==//
-//      Nibble interface
+//      LSM interface
 //==----------------------------------------------------==//
 
 /// Threads use this to automatically pin their epoch values,
@@ -48,7 +48,7 @@ impl Drop for PinnedEpoch {
     }
 }
 
-pub struct NibblePerNode {
+pub struct LSMPerNode {
     socket: usize,
     manager: SegmentManagerRef,
     log: Log,
@@ -56,9 +56,9 @@ pub struct NibblePerNode {
     compactor: CompactorRef, // TODO move to segmgr instead?
 }
 
-pub struct Nibble {
+pub struct LSM {
     /// Indexed per socket
-    nodes: Vec<NibblePerNode>,
+    nodes: Vec<LSMPerNode>,
     nnodes: u32,
     index: IndexRef,
     capacity: usize,
@@ -70,15 +70,15 @@ pub enum PutPolicy {
     Interleave,
 }
 
-impl Nibble {
+impl LSM {
 
     #[cfg(IGNORE)]
     pub fn dump_segments(&self, node: usize) {
-        println!("NIBBLE: DUMPING SEGMENT INFO NODE {}", node);
+        println!("LSM: DUMPING SEGMENT INFO NODE {}", node);
         self.nodes[node].manager.dump_segments();
     }
 
-    /// Create new instance of Nibble. It partitions itself across the
+    /// Create new instance of LSM. It partitions itself across the
     /// sockets. You must create an instance with at least enough
     /// memory per-socket to hold some minimum of segments.
     pub fn new(capacity: usize) -> Self {
@@ -89,19 +89,19 @@ impl Nibble {
         Self::__new(capacity, ht_nitems)
     }
 
-    /// Allocate Nibble with a default (small) amount of memory.
+    /// Allocate LSM with a default (small) amount of memory.
     pub fn default() -> Self {
         Self::new2(
             Self::default_capacity(),
             Self::default_ht_nitems() )
     }
 
-    /// Verify Nibble's current compilation either supports rdrand, or
+    /// Verify LSM's current compilation either supports rdrand, or
     /// was compiled with appropriate fallback implementation.
     fn __check_rdrand() -> bool {
-        if !nibble_rdrand_compile_flags() {
+        if !kvs_rdrand_compile_flags() {
             println!(">> Oops: your CPU probably doesn't support 'rdrand'.");
-            println!(">> Please recompile Nibble with --nordrand");
+            println!(">> Please recompile LSM with --nordrand");
             println!("");
             false
         } else {
@@ -110,8 +110,8 @@ impl Nibble {
     }
 
     fn __new(capacity: usize, ht_nitems: usize) -> Self {
-        if !Nibble::__check_rdrand() {
-            println!("Cannot initialize Nibble.");
+        if !LSM::__check_rdrand() {
+            println!("Cannot initialize LSM.");
             println!("Please verify above messages.");
             process::exit(1);
         }
@@ -121,7 +121,7 @@ impl Nibble {
         let persock = capacity/nnodes;
 
         assert!(capacity >= mincap,
-                "nibble requires more memory: {} GiB",
+                "LSM requires more memory: {} GiB",
                 mincap / (1usize<<30));
 
         //let ntables = numa::NODE_MAP.ncpus();
@@ -160,7 +160,7 @@ impl Nibble {
         let index = Arc::new(Index::new(ntables, n_per));
 
         // Create all per-socket elements with threads.
-        let nodes: Arc<pl::Mutex<Vec<NibblePerNode>>>;
+        let nodes: Arc<pl::Mutex<Vec<LSMPerNode>>>;
         nodes = Arc::new(pl::Mutex::new(Vec::with_capacity(nnodes)));
         {
             let mut handles: Vec<JoinHandle<()>> = Vec::new();
@@ -173,7 +173,7 @@ impl Nibble {
                     let manager = SegmentManager::numa(s,persock,n);
                     let seginfo = manager.seginfo();
                     let mref = Arc::new(manager);
-                    let per = NibblePerNode {
+                    let per = LSMPerNode {
                         socket: node,
                         manager: mref.clone(),
                         log: Log::new(mref.clone()),
@@ -195,7 +195,7 @@ impl Nibble {
         nodes.sort_by( | a, b | {
             a.socket.cmp(&b.socket)
         });
-        Nibble {
+        LSM {
             nodes: nodes,
             nnodes: nnodes as u32,
             index: index,
@@ -488,16 +488,16 @@ mod tests {
     #[test]
     fn simple() {
         logger::enable();
-        let mut nib = Nibble::default();
+        let mut kvs = LSM::default();
 
         let key: u64 = 1;
         let value: Vec<u64> = vec![1u64,2,3,4,5];
         let vptr = common::Pointer(value.as_ptr() as *const u8);
 
         let obj = ObjDesc::new(key, vptr, value.len()*8);
-        assert!(nib.put_object(&obj).is_ok());
+        assert!(kvs.put_object(&obj).is_ok());
 
-        let (st,opt) = nib.get_object(key);
+        let (st,opt) = kvs.get_object(key);
         assert!(st.is_ok());
         assert!(opt.is_some());
 
@@ -509,8 +509,8 @@ mod tests {
         assert_eq!(sl.iter().sum::<u64>(),
                     value.iter().sum::<u64>());
 
-        assert!(nib.del_object(key).is_ok());
-        let ret = nib.del_object(key);
+        assert!(kvs.del_object(key).is_ok());
+        let ret = kvs.del_object(key);
         assert!(ret.is_err());
     }
 
@@ -518,7 +518,7 @@ mod tests {
     #[test]
     fn many_objects() {
         logger::enable();
-        let mut nib = Nibble::default();
+        let mut kvs = LSM::default();
         let mut rng = rand::thread_rng();
 
         let mut value: Vec<u64> = Vec::with_capacity(200);
@@ -536,12 +536,12 @@ mod tests {
         for i in 0..nobj {
             let key = (i+1) as u64;
             let obj = ObjDesc::new(key, vptr, vlen);
-            assert!(nib.put_object(&obj).is_ok());
+            assert!(kvs.put_object(&obj).is_ok());
         }
 
         for i in 0..nobj {
             let key = (i+1) as u64;
-            let (st,opt) = nib.get_object(key);
+            let (st,opt) = kvs.get_object(key);
             assert!(st.is_ok());
             assert!(opt.is_some());
             let buf = opt.unwrap();
@@ -554,32 +554,32 @@ mod tests {
 
         for i in 0..nobj {
             let key = (i+1) as u64;
-            assert!(nib.del_object(key).is_ok());
-            let ret = nib.del_object(key);
+            assert!(kvs.del_object(key).is_ok());
+            let ret = kvs.del_object(key);
             assert!(ret.is_err());
         }
 
         for i in 0..nobj {
             let key = (i+1) as u64;
-            let (st,opt) = nib.get_object(key);
+            let (st,opt) = kvs.get_object(key);
             assert!(st.is_err());
             assert!(opt.is_none());
         }
     }
 
     /// Give the segment index of the specified key (as String)
-    fn segment_of(nib: &Nibble, key: u64) -> usize {
+    fn segment_of(kvs: &LSM, key: u64) -> usize {
         logger::enable();
 
         // look up virtual address
-        let opt = nib.index.get(key);
+        let opt = kvs.index.get(key);
         assert!(opt.is_some(), "key {:x} not in index", key);
         let ientry: index::IndexEntry = opt.unwrap();
         let (socket,va) = index::extract(ientry);
         let socket = socket as usize;
 
         // associate with segment and return
-        let mgr: &SegmentManager = &nib.nodes[socket].manager;
+        let mgr: &SegmentManager = &kvs.nodes[socket].manager;
         mgr.segment_of(va as usize)
     }
 
@@ -587,11 +587,11 @@ mod tests {
     #[test]
     fn epoch_0() {
         logger::enable();
-        let nib = Nibble::default();
+        let kvs = LSM::default();
 
-        for idx in 0..nib.nodes[0].seginfo.len() {
-            assert_eq!(nib.nodes[0].seginfo.get_live(idx), 0usize);
-            assert_eq!(nib.nodes[0].seginfo.get_epoch(idx), 0usize);
+        for idx in 0..kvs.nodes[0].seginfo.len() {
+            assert_eq!(kvs.nodes[0].seginfo.get_live(idx), 0usize);
+            assert_eq!(kvs.nodes[0].seginfo.get_epoch(idx), 0usize);
         }
     }
 
@@ -601,7 +601,7 @@ mod tests {
     #[test]
     fn epoch_1() {
         logger::enable();
-        let mut nib = Nibble::default();
+        let mut kvs = LSM::default();
 
         let key: u64 = 1;
         let value: Vec<u64> = vec![1,2,3,4,5];
@@ -613,20 +613,20 @@ mod tests {
         unsafe { sched::pin_cpu(0); }
 
         // do first insertion, grab head idx used
-        assert!(nib.put_where(&obj, PutPolicy::Specific(0)).is_ok());
-        let head = segment_of(&nib, key);
-        assert_eq!(nib.nodes[0].seginfo.get_live(head), size);
+        assert!(kvs.put_where(&obj, PutPolicy::Specific(0)).is_ok());
+        let head = segment_of(&kvs, key);
+        assert_eq!(kvs.nodes[0].seginfo.get_live(head), size);
 
         // insert until the head rolls
         loop {
-            assert!(nib.put_where(&obj, PutPolicy::Specific(0)).is_ok());
+            assert!(kvs.put_where(&obj, PutPolicy::Specific(0)).is_ok());
             // FIXME assumes the segment index we compare to doesn't
             // change sockets
-            let segidx = segment_of(&nib, key);
-            assert_eq!(nib.nodes[0].seginfo.get_live(segidx), size);
+            let segidx = segment_of(&kvs, key);
+            assert_eq!(kvs.nodes[0].seginfo.get_live(segidx), size);
             if head != segidx {
                 // head rolled. let's check prior segment live size
-                assert_eq!(nib.nodes[0].seginfo.get_live(head), 0usize);
+                assert_eq!(kvs.nodes[0].seginfo.get_live(head), 0usize);
                 break;
             }
         }
@@ -636,7 +636,7 @@ mod tests {
     #[test]
     fn epoch_2() {
         logger::enable();
-        let mut nib = Nibble::default();
+        let mut kvs = LSM::default();
         let mut rng = rand::thread_rng();
 
         // do first insertion, grab head idx used
@@ -649,11 +649,11 @@ mod tests {
         let vlen = value.len() * 8;
         let obj = ObjDesc::new(key, vptr, vlen);
         let mut len = obj.len_with_header();
-        assert!(nib.put_object(&obj).is_ok());
+        assert!(kvs.put_object(&obj).is_ok());
 
-        let head = segment_of(&nib, key);
+        let head = segment_of(&kvs, key);
         // XXX the socket may be different
-        assert_eq!(nib.nodes[0].seginfo.get_live(head), len);
+        assert_eq!(kvs.nodes[0].seginfo.get_live(head), len);
         key += 1;
 
         let mut total = len; // accumulator excluding current obj
@@ -662,16 +662,16 @@ mod tests {
         loop {
             let obj = ObjDesc::new(key, vptr, vlen);
             len = obj.len_with_header();
-            assert!(nib.put_object(&obj).is_ok());
+            assert!(kvs.put_object(&obj).is_ok());
             // FIXME assumes the segment index we compare to doesn't
             // change sockets
-            let segidx = segment_of(&nib, key);
+            let segidx = segment_of(&kvs, key);
             if head == segidx {
-                assert_eq!(nib.nodes[0].seginfo.get_live(segidx), total+len);
+                assert_eq!(kvs.nodes[0].seginfo.get_live(segidx), total+len);
             } else {
                 // head rolled. check old and new live sizes
-                assert_eq!(nib.nodes[0].seginfo.get_live(head), total);
-                assert_eq!(nib.nodes[0].seginfo.get_live(segidx), len);
+                assert_eq!(kvs.nodes[0].seginfo.get_live(head), total);
+                assert_eq!(kvs.nodes[0].seginfo.get_live(segidx), len);
                 break;
             }
             key += 1;
@@ -683,7 +683,7 @@ mod tests {
     #[test]
     fn epoch_3() {
         logger::enable();
-        let mut nib = Nibble::default();
+        let mut kvs = LSM::default();
 
         let key: u64 = 1;
         let value: Vec<u64> = vec![1,2,3,4,5];
@@ -692,21 +692,21 @@ mod tests {
         let obj = ObjDesc::new(key, vptr, vlen);
         let size = obj.len_with_header();
 
-        assert!(nib.put_object(&obj).is_ok());
+        assert!(kvs.put_object(&obj).is_ok());
 
-        let idx = segment_of(&nib, key);
+        let idx = segment_of(&kvs, key);
         let len = obj.len_with_header();
-        assert_eq!(nib.nodes[0].seginfo.get_live(idx), len);
+        assert_eq!(kvs.nodes[0].seginfo.get_live(idx), len);
 
-        assert!(nib.del_object(key).is_ok());
-        assert_eq!(nib.nodes[0].seginfo.get_live(idx), 0usize);
+        assert!(kvs.del_object(key).is_ok());
+        assert_eq!(kvs.nodes[0].seginfo.get_live(idx), 0usize);
     }
 
     #[test]
     #[should_panic(expected = "larger than segment")]
     fn obj_too_large() {
         logger::enable();
-        let mut nib = Nibble::default();
+        let mut kvs = LSM::default();
 
         let key: u64 = 1;
         let len = 2 * segment::SEGMENT_SIZE;
@@ -714,7 +714,7 @@ mod tests {
 
         let v = common::Pointer(value as *const u8);
         let obj = ObjDesc::new(key, v, len);
-        if let Err(code) = nib.put_object(&obj) {
+        if let Err(code) = kvs.put_object(&obj) {
             panic!("{:?}", code); // <--
         }
     }
@@ -722,7 +722,7 @@ mod tests {
     #[test]
     fn large_objs() {
         logger::enable();
-        let mut nib = Nibble::default();
+        let mut kvs = LSM::default();
 
         let key: u64 = 1;
         let len = segment::SEGMENT_SIZE - segment::BLOCK_SIZE;
@@ -731,7 +731,7 @@ mod tests {
         let v = common::Pointer(value as *const u8);
         let obj = ObjDesc::new(key, v, len);
         for _ in 0..4 {
-            assert!(nib.put_object(&obj).is_ok());
+            assert!(kvs.put_object(&obj).is_ok());
         }
         unsafe { memory::deallocate(value, len); }
     }

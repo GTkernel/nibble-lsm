@@ -43,7 +43,7 @@
 // DONE segment manager adds cleaned segments to reclamation list
 // TODO segment manager checks epoch to release segments - give blocks
 // back to block allocator and destruct segment
-// TODO add statistics to segments, segment manager, nibble, etc.
+// TODO add statistics to segments, segment manager, LSM, etc.
 // TODO segment usage table to assist compactor
 // TODO implement reclamation pathway (register new ops, use epoch)
 
@@ -866,7 +866,7 @@ mod tests {
     use thelog::*;
     use index::*;
     use common::*;
-    use nib::{Nibble};
+    use kvs::{LSM};
     use sched;
     use numa::{NodeId};
     use memory;
@@ -1094,7 +1094,7 @@ mod tests {
 
     } // do_compact
 
-    // This test runs with 95% utilization and attempts to get Nibble
+    // This test runs with 95% utilization and attempts to get LSM
     // to choke. If it keeps printing non-zero throughput, we're ok :D
     #[test]
     fn try_make_die() {
@@ -1113,9 +1113,9 @@ mod tests {
         // let mut compactor = comp_ref!(&mref, &index);
 
         let logsize = 1usize<<34;
-        let mut nib = Nibble::new2(logsize, 1<<22);
-        nib.enable_compaction(NodeId(0));
-        //nib.enable_compaction(NodeId(1));
+        let mut kvs = LSM::new2(logsize, 1<<22);
+        kvs.enable_compaction(NodeId(0));
+        //kvs.enable_compaction(NodeId(1));
 
         println!("TEST STARTING");
 
@@ -1156,10 +1156,10 @@ mod tests {
                         n = 0;
                         now = clock::now();
                         if perf < 1f64 {
-                            nib.dump_segments(0);
+                            kvs.dump_segments(0);
                         }
                     }
-                    match nib.put_object(&obj) {
+                    match kvs.put_object(&obj) {
                         Err(ErrorCode::OutOfMemory) => continue,
                         Err(e) => panic!("Error: {:?}", e),
                         Ok(_) => break,

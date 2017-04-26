@@ -10,7 +10,7 @@ use std::intrinsics;
 //      General types
 //==----------------------------------------------------==//
 
-/// Keys in Nibble are fixed 8-byte unsigned values.
+/// Keys are fixed 8-byte unsigned values.
 /// TODO use this everywhere we have size_of::<u64>() hard-coded
 pub type KeyType = u64;
 
@@ -217,7 +217,7 @@ pub unsafe fn cpuid(id: u32, subid: u32) -> CPUIDRegs {
 /// Determine whether the CPU has the 'rdrand' instruction.
 /// From the manual: CPUID.01H:ECX.RDRAND[bit 30] = 1
 #[cfg(feature="rdrand")]
-pub fn nibble_rdrand_compile_flags() -> bool {
+pub fn kvs_rdrand_compile_flags() -> bool {
     info!("rand: using rdrand instruction");
     let id = 1_u32;
     let regs = unsafe { cpuid(id, 0u32) };
@@ -228,7 +228,7 @@ pub fn nibble_rdrand_compile_flags() -> bool {
 /// The above rdrand methods will fall back to
 /// an implementation without the instruction.
 #[cfg(not(feature="rdrand"))]
-pub fn nibble_rdrand_compile_flags() -> bool {
+pub fn kvs_rdrand_compile_flags() -> bool {
     info!("rand: using urandom");
     true
 }

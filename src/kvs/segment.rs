@@ -659,7 +659,7 @@ impl Segment {
 
     /// Bump the head offset for this segment as if we appended
     /// the given bytes (but we do not do any copying). Used to
-    /// implement Nibble::alloc. append_safe performs the same work,
+    /// implement LSM::alloc. append_safe performs the same work,
     /// but incrementally as it copies each piece.
     #[inline]
     fn bump_head(&mut self, len: usize) {

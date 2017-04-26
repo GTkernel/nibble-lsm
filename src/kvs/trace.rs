@@ -4,7 +4,7 @@ use std::io::prelude::*;
 use std::collections::VecDeque;
 use std::intrinsics;
 use std::str::FromStr;
-use nibble::memory;
+use kvs::memory;
 
 #[derive(Debug)]
 pub enum Op {
@@ -74,9 +74,9 @@ impl Trace {
         let mut mapped = memory::MemMapFile::new(path);
         let entries = unsafe { mapped.as_slice::<TraceFileEntry>() };
         for entry in entries {
-            // Nibble does not allow key 0
+            // LSM does not allow key 0
             if entry.key == 0 { continue; }
-            // FIXME Nibble still cannot handle zero-sized objects
+            // FIXME LSM still cannot handle zero-sized objects
             let size = if entry.size == 0 { 1 } else { entry.size };
             // convert TraceFileEntry to Entry
             let op = match entry.op {

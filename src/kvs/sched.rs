@@ -2,8 +2,8 @@ use libc;
 use std::mem;
 use std::thread;
 use std::time::{Duration};
-use nibble::numa;
-use nibble::common;
+use kvs::numa;
+use kvs::common;
 
 // TODO make afunction that runs a closure while pinned. that way we
 // can set and then unset the cpu mask within the function itself...
