@@ -3,7 +3,7 @@
 #![feature(asm)]
 #![feature(repr_simd)]
 
-// used for nibble/tlock.rs
+// used for kvs/tlock.rs
 #![feature(core_intrinsics)]
 
 // Clippy tool
@@ -43,5 +43,5 @@ extern crate syscall;
 extern crate parking_lot;
 extern crate num;
 
-pub mod nibble;
-pub use nibble::*;
+pub mod kvs;
+pub use kvs::*;
