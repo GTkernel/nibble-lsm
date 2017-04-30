@@ -6,25 +6,25 @@
 #![allow(unused_variables)]
 #![allow(unused_mut)]
 
-extern crate rand; // import before nibble
+extern crate rand; // import before kvs
 #[macro_use]
 extern crate log;
 extern crate test;
 extern crate time;
 
-extern crate nibble;
+extern crate kvs;
 
 use std::time::Duration;
 use std::thread;
 use rand::Rng;
 use log::LogLevel;
 
-use nibble::nib::Nibble;
-use nibble::segment::{ObjDesc,SEGMENT_SIZE};
-use nibble::logger;
-use nibble::common::ErrorCode;
-use nibble::epoch;
-use nibble::numa::NodeId;
+use kvs::lsm::LSM;
+use kvs::segment::{ObjDesc,SEGMENT_SIZE};
+use kvs::logger;
+use kvs::common::ErrorCode;
+use kvs::epoch;
+use kvs::numa::NodeId;
 
 // TODO test objects larger than block, and segment
 // TODO put_object which must traverse chunks
@@ -41,9 +41,9 @@ fn alloc_free(pct_to_free: f32) {
 
     logger::enable();
 
-    let mut nib = Nibble::default();
+    let mut kvs = LSM::default();
 
-    nib.enable_compaction(NodeId(0));
+    kvs.enable_compaction(NodeId(0));
     thread::yield_now();
 
     let mut allkeys: Vec<String> = Vec::new();
@@ -59,7 +59,7 @@ fn alloc_free(pct_to_free: f32) {
         {
             let obj = ObjDesc::new2(&key, &value);
             size += obj.len_with_header();
-            if let Err(code) = nib.put_object(&obj) {
+            if let Err(code) = kvs.put_object(&obj) {
                 match code {
                     ErrorCode::OutOfMemory => break,
                     _ => panic!("put failed"),
@@ -74,7 +74,7 @@ fn alloc_free(pct_to_free: f32) {
     // free some (TODO random picking)
     let many: usize = ((counter as f32) * pct_to_free) as usize;
     for key in allkeys.iter().take(many) {
-        assert!(nib.del_object(key).is_ok());
+        assert!(kvs.del_object(key).is_ok());
     }
 
     let dur = Duration::from_secs(10);
