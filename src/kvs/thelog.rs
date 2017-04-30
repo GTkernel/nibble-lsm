@@ -304,7 +304,7 @@ impl Log {
         let remain: usize = BLOCK_SIZE - (va - block_addr);
 
         // If object lands squarely within a single block, just memcpy
-        // that shit out. else, figure out the segment and thus the
+        // that out. else, figure out the segment and thus the
         // block list, and do a slowpath extraction
         if likely!(remain > (head_len + key_len)) {
             let entry: &EntryHeader = unsafe {
