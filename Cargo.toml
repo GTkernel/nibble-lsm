@@ -1,6 +1,6 @@
 # http://doc.crates.io/manifest.html
 [package]
-name = "kvs-lsm"
+name = "kvs"
 version = "0.1.0"
 authors = ["Alexander Merritt <merritt.alex@gatech.edu>"]
 
