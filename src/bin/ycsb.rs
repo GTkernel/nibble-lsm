@@ -582,7 +582,7 @@ impl WorkloadGenerator {
                                     < duration {
                                 for _ in 0..iters {
                                     let isread = rwgen.next()
-                                        < read_threshold as u32;
+                                        <= read_threshold as u32;
                                     let key = keygen.next() as u64 + 1;
                                     if isread {
                                         get_object(key);
