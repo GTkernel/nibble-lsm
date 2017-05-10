@@ -515,6 +515,7 @@ impl WorkloadGenerator {
                 },
             }
             let cpus = pl::Mutex::new(cpus);
+            idx.store(0usize, Ordering::Relaxed);
 
             // Spawn each of the threads in this set
             let mut guards = vec![];
@@ -529,8 +530,6 @@ impl WorkloadGenerator {
                         };
                         let config = self.config.clone();
 
-                        let laccum = accum.clone();
-                        laccum.fetch_sub(1, Ordering::Relaxed);
                         unsafe { pin_cpu(cpu); }
 
                         let value = memory::allocate::<u8>(size);
@@ -539,10 +538,13 @@ impl WorkloadGenerator {
                         let sock = numa::NODE_MAP.sock_of(cpu);
                         debug!("thread on cpu {} sock {:?} INIT",
                                cpu, sock);
+                        let slot = idx.fetch_add(1usize,
+                                                 Ordering::Relaxed);
 
                         // use your own generator for key accesses
+                        // if cpu is chosen via RR.. this breaks
                         let keygen: &mut Box<DistGenerator> = unsafe {
-                            &mut *(gens_ptr.0 .offset(cpu as isize)
+                            &mut *(gens_ptr.0 .offset(slot as isize)
                                 as *mut Box<DistGenerator>)
                         };
 
@@ -553,7 +555,11 @@ impl WorkloadGenerator {
 
                         // wait for all other threads to spawn
                         // after this, accum is zero
-                        while accum.load(Ordering::Relaxed) > 0 { ; }
+                        let mut _l = accum.fetch_sub(1, Ordering::SeqCst);
+                        while _l > 0 {
+                            _l = accum.load(Ordering::SeqCst);
+                            sleep_short();
+                        }
                         debug!("thread on cpu {} sock {:?} START",
                                cpu, sock);
 
