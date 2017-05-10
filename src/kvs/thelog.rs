@@ -294,6 +294,19 @@ impl Log {
         Ok(va)
     }
 
+    #[cold]
+    fn get_entry_slow(&self, va: usize, buf: &mut [u8]) {
+        let block: Block = self.manager.block_of(va);
+        debug_assert_eq!(block.list().ptr().is_null(), false);
+        let usl = block.list();
+        debug_assert!(block.blk_idx() < usl.len(),
+            "block idx {} out of bounds for uslice {}",
+            block.blk_idx(), usl.len());
+        let list: &[BlockRef] = unsafe { usl.slice() };
+        let entry = get_ref(list, block.blk_idx(), va);
+        unsafe { entry.get_buf(buf); }
+    }
+
     /// Pull out the value for an entry within the log (not the entire
     /// object). DO NOT do any buffer allocations on this fast path.
     #[inline(always)]
@@ -306,18 +319,15 @@ impl Log {
         // If object lands squarely within a single block, just memcpy
         // that out. else, figure out the segment and thus the
         // block list, and do a slowpath extraction
-        if likely!(remain > (head_len + key_len)) {
-            let entry: &EntryHeader = unsafe {
-                &* (va as *const usize as *const EntryHeader)
-            };
-            let size: usize = entry.len_with_header();
-            if likely!(size <= remain) {
-                let mut value_len = entry.datalen as usize;
-                // if unlikely!(buf.len() < value_len) {
-                //     warn!("Buffer len {} GET is smaller than object {}",
-                //          buf.len(), value_len);
-                //     value_len = buf.len();
-                // }
+        if unlikely!(remain < head_len) {
+            self.get_entry_slow(va,buf);
+        } else {
+            let remain = remain - head_len;
+            let p = va as *const u32;
+            let value_len = unsafe { ptr::read_volatile(p) } as usize;
+            if unlikely!(remain < (key_len+value_len)) {
+                self.get_entry_slow(va,buf);
+            } else {
                 let valuep = (va + head_len + key_len)
                     as *const usize as *const u8;
                 unsafe {
@@ -326,21 +336,6 @@ impl Log {
                         //buf.as_mut_ptr(), value_len);
                 }
             }
-        }
-
-        // gotta assemble the object (even if it lies fully in a
-        // block, but just not the one the entry header is in, we
-        // still don't know which block that is without the segment
-        else {
-            let block: Block = self.manager.block_of(va);
-            debug_assert_eq!(block.list().ptr().is_null(), false);
-            let usl = block.list();
-            debug_assert!(block.blk_idx() < usl.len(),
-                "block idx {} out of bounds for uslice {}",
-                block.blk_idx(), usl.len());
-            let list: &[BlockRef] = unsafe { usl.slice() };
-            let entry = get_ref(list, block.blk_idx(), va);
-            unsafe { entry.get_buf(buf); }
         }
     }
 
