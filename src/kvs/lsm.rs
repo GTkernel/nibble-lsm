@@ -154,7 +154,7 @@ impl LSM {
               (RESERVE_SEGS * SEGMENT_SIZE) as f64 /
                 (2f64.powi(30)), nsock);
         info!(" resrv as %:     {:.2}",
-              (nsock * RESERVE_SEGS * SEGMENT_SIZE) as f64 /
+              100f64 * (nsock * RESERVE_SEGS * SEGMENT_SIZE) as f64 /
               (capacity as f64));
 
         let index = Arc::new(Index::new(ntables, n_per));
