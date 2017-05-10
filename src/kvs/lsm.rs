@@ -327,6 +327,7 @@ impl LSM {
             Some(entry) => entry,
         };
         let (socket,va) = extract(ientry);
+        prefetch(va as *const usize as *const u8);
 
         // 2. ask Log to give us the object
         self.nodes[socket as usize]
