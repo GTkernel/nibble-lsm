@@ -9,7 +9,7 @@ use clock::rdtsc;
 
 use std::cell::UnsafeCell;
 use std::sync::atomic;
-use std::sync::atomic::{AtomicUsize,AtomicBool,Ordering};
+use std::sync::atomic::{AtomicUsize,AtomicU64,AtomicBool,Ordering};
 use std::sync::Arc;
 use std::mem;
 use std::u64;
@@ -161,8 +161,8 @@ fn read() -> EpochRaw {
 }
 
 /// This represents option 1. above
-#[cfg(IGNORE)]
-static EPOCH: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature="epochcl")]
+static mut EPOCH: AtomicU64 = AtomicU64::new(0);
 
 //==----------------------------------------------------==//
 //      Per-thread epoch tracker
@@ -196,16 +196,39 @@ impl EpochSlotHold {
         }
     }
 
-    #[inline]
+    #[inline(always)]
+    #[cfg(not(feature="epochcl"))]
     pub fn quiesce(&self) {
         let mut slot = unsafe { &mut **(self.cell.get()) };
         slot.epoch = EPOCH_QUIESCE;
     }
 
-    #[inline]
+    #[inline(always)]
+    #[cfg(not(feature="epochcl"))]
     pub fn pin(&self) {
         let mut slot = unsafe { &mut **(self.cell.get()) };
         slot.epoch = read();
+    }
+
+    #[inline(always)]
+    #[cfg(feature="epochcl")]
+    fn incr(&self) {
+        let order = Ordering::Relaxed;
+        unsafe {
+            EPOCH.fetch_add(1u64, order);
+        }
+    }
+
+    #[inline(always)]
+    #[cfg(feature="epochcl")]
+    pub fn quiesce(&self) {
+        self.incr();
+    }
+
+    #[inline(always)]
+    #[cfg(feature="epochcl")]
+    pub fn pin(&self) {
+        self.incr();
     }
 }
 
@@ -245,6 +268,7 @@ pub fn dump_epochs() {
     EPOCH_TABLE.dump();
 }
 
+#[cfg(not(feature="epochcl"))]
 #[inline(always)]
 pub fn next() -> EpochRaw {
     read()
@@ -252,6 +276,7 @@ pub fn next() -> EpochRaw {
 
 /// Signal that a thread is entering a quiescent phase, either by
 /// terminating, parking, or sleeping.
+#[cfg(not(feature="epochcl"))]
 #[inline(always)]
 pub fn quiesce() {
     EPOCH_SLOT.with( |hold| {
@@ -260,12 +285,45 @@ pub fn quiesce() {
 }
 
 /// Store the current epoch to the thread slot.
+#[cfg(not(feature="epochcl"))]
 #[inline(always)]
 pub fn pin() {
     EPOCH_SLOT.with( |hold| {
         hold.pin();
     });
 }
+
+//----------------------------------------------------------
+// Methods for using a single atomic u64 as the epoch. Meant as
+// comparison only for the paper.
+
+#[cfg(feature="epochcl")]
+#[inline(always)]
+pub fn next() -> EpochRaw {
+    incr()
+}
+
+#[cfg(feature="epochcl")]
+#[inline(always)]
+fn incr() -> EpochRaw {
+    let order = Ordering::Relaxed;
+    unsafe {
+        EPOCH.fetch_add(1u64, order)
+    }
+}
+
+#[cfg(feature="epochcl")]
+#[inline(always)]
+pub fn quiesce() {
+    incr();
+}
+
+#[cfg(feature="epochcl")]
+#[inline(always)]
+pub fn pin() {
+    incr();
+}
+//----------------------------------------------------------
 
 #[cfg(IGNORE)]
 #[inline(always)]
@@ -287,6 +345,7 @@ pub fn current() -> Option<EpochRaw> {
     })
 }
 
+#[cfg(feature="epochcl")]
 pub fn min() -> Option<EpochRaw> {
     let mut m: EpochRaw = u64::MAX;
     for slot in &EPOCH_TABLE.table {
@@ -304,6 +363,14 @@ pub fn min() -> Option<EpochRaw> {
     match m {
         u64::MAX => None,
         _ => Some(m),
+    }
+}
+
+#[cfg(not(feature="epochcl"))]
+pub fn min() -> Option<EpochRaw> {
+    unsafe {
+        let order = Ordering::Relaxed;
+        Some(EPOCH.load(order))
     }
 }
 

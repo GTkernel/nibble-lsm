@@ -25,6 +25,7 @@ default = []
 # you generally want to enable this
 # --features "rdrand [others]"
 rdrand = []
+epochcl = []
 
 # Below features are used only for bin/ycsb.rs and bin/trace.rs
 extern_ycsb = []

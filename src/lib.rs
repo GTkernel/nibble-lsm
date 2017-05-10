@@ -2,6 +2,7 @@
 #![feature(const_fn)]
 #![feature(asm)]
 #![feature(repr_simd)]
+#![feature(integer_atomics)]
 
 // used for kvs/tlock.rs
 #![feature(core_intrinsics)]
