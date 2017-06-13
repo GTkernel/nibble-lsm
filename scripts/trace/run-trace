@@ -12,8 +12,11 @@ NKEYS=5000000000
 
 export NIBDEBUG=3
 
+source ../redis/funcs
+export NREDIS_SERVERS=64
+
 # RAMCloud accepts this value in MiB
-export RCMEM=$((MEMSIZE/1024/1024))
+export RCMEM=$((1.1*MEMSIZE/1024/1024))
 export RAMCLOUD_ARGV="-t $RCMEM -h 10%"
 # number of args + 1 (like 'int argc' in C main)
 export RAMCLOUD_NARG=5
@@ -45,8 +48,27 @@ run() {
         #cargo run --features "$FEATURES" --release --bin trace
     #done
 
-    # Regular trace evaluation
-    cargo run --features "$FEATURES" --release --bin trace
+    # 17% capacity utilization
+    util=0.17
+    # 5.7GB per thread in the postmark trace
+    perthread=5.7
+    for ((t=15;t<=240;t+=15)); do
+        echo ''; echo '';
+        echo threads=$t
+        export MEMSIZE=$(((2**30)*(t*perthread)/util))
+        echo MEMSIZE=$MEMSIZE
+        # RAMCloud accepts this value in MiB
+        # add 10% b/c RC takes this from total memory for the index
+        export RCMEM=$((1.1*MEMSIZE/1024/1024))
+        export RAMCLOUD_ARGV="-t $RCMEM -h 10%"
+        echo RCMEM=$RCMEM
+        echo RAMCLOUD_ARGV=$RAMCLOUD_ARGV
+        # number of args + 1 (like 'int argc' in C main)
+        export RAMCLOUD_NARG=5
+        export THREADCOUNT=$t
+        # Regular trace evaluation
+        cargo run --features "$FEATURES" --release --bin trace
+    done
 
     echo ''; echo ''
 }
@@ -55,8 +77,8 @@ run() {
 ##  echo 'Clearing all 2 MiB page reservations...'
 ##  sudo su -c 'echo 0 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
 
-##  FEATURES="rdrand extern_ycsb masstree"
-##  (run 2>&1) | tee -a log-masstree.out
+## FEATURES="rdrand extern_ycsb masstree"
+## (run 2>&1) | tee -a log-masstree.out
 
 ##  export FEATURES="rdrand extern_ycsb rc"
 ##  export RAMCLOUD_NCONTEXTS=1
@@ -76,6 +98,7 @@ run() {
 ##  (redis_spawn $NREDIS_SERVERS 2>&1) | tee -a log-redis.out
 ##  sleep 1
 ##  conf=$(tail log-redis.out | grep HIREDISCONF | tail -n 1 | awk '{print $NF}')
+##  echo conf = $conf
 ##  [ -e hiredis.conf ] && rm -fv hiredis.conf
 ##  [ ! -e $conf ] && echo "Error: hiredis.conf not found: $conf" && exit 1
 ##  # link the new conf file for hiredis
