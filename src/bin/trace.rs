@@ -60,7 +60,7 @@ use std::str::FromStr;
 pub const MAX_KEYSIZE: usize = 1usize << 25;
 
 /// How long to run the experiment before halting.
-pub const RUNTIME: usize = 30;
+pub const RUNTIME: usize = 3000000;
 
 /// Total memory to pre-allocate for MICA, LSM, RAMCloud, etc.
 /// Should match what is in the scripts/trace/run-trace script.
@@ -69,8 +69,8 @@ pub const RUNTIME: usize = 30;
 pub const MAX_MEMSIZE: usize = (1_usize << 40)
                                 + 340_usize * (1_usize << 30);
 
-pub const LOAD_FILE:  &'static str = "fb-etc-objects.dat";
-pub const TRACE_FILE: &'static str = "fb-etc-trace.dat";
+pub const LOAD_FILE:  &'static str = "/notexist";
+pub const TRACE_FILE: &'static str = "/dev/shm/merrital/tablefs-trace-a.bin";
 
 /// How many threads to use for the insertion/setup phase, per socket.
 /// If not defined, it uses a default.
@@ -98,6 +98,19 @@ pub const CYCLE_TRACE: bool = false;
 //
 // END of user-configurable options
 //////////////////////////////////////////////////////////////////////
+
+fn get_env(env: &'static str) -> usize {
+    assert_eq!(env::var_os(env).is_some(), true,
+        "{} env var not defined", env);
+    let osstr = env::var_os(env).unwrap();
+    match osstr.to_str() {
+        None => panic!("{} not valid", env),
+        Some(s) => match usize::from_str_radix(s,10u32) {
+            Err(_) => panic!("{} not a number", s),
+            Ok(n) => n,
+        },
+    }
+}
 
 #[cfg(not(feature = "extern_ycsb"))]
 static mut KVS: Pointer<LSM> = Pointer(0 as *const LSM);
@@ -336,12 +349,17 @@ impl WorkloadGenerator {
             runtime_ = 2 * 60;
         } else {
             info!("Entering test phase...");
-            let mut t: Vec<usize> = (1usize..(sockets+1))
-                .map(|e|cpus_pernode*e).collect();
-            //let mut t: Vec<usize> = (1usize..8)
-                //.map(|e|cpus_pernode*e).collect();
-            t.reverse();
-            threadcount = t;
+
+            // let mut t: Vec<usize> = (1usize..(sockets+1))
+            //     .map(|e|cpus_pernode*e).collect();
+            // //let mut t: Vec<usize> = (1usize..8)
+            //     //.map(|e|cpus_pernode*e).collect();
+            // t.reverse();
+            // threadcount = t;
+
+            let t = get_env("THREADCOUNT");
+            threadcount = vec![t];
+
             runtime_ = RUNTIME;
         };
         info!("Measurement length {} seconds", runtime_);
@@ -351,7 +369,8 @@ impl WorkloadGenerator {
             info!("Running with {} threads...", threads);
 
             let per_thread = trace.rec.len() / threads;
-            info!("trace slice has {} entries", per_thread);
+            info!("trace slice has {} entries {} per thread",
+                  trace.rec.len(), per_thread);
 
             // pin threads incrementally across sockets
             let ncpus = numa::NODE_MAP.ncpus();
@@ -360,9 +379,10 @@ impl WorkloadGenerator {
             debug!("pinned cpus: {:?}", cpus);
             let cpus = pl::Mutex::new(cpus);
 
+            let koff_per = usize::max_value() / threads;
             let offsets: Vec<usize> = 
-                (0usize..threads).map(|e|per_thread*e).collect();
-            debug!("offsets: {:?}", offsets);
+                (0usize..threads).map(|e|e*koff_per).collect();
+            info!("koffs: {:?}", offsets);
             let offsets = pl::Mutex::new(offsets);
 
             let throughput = AtomicUsize::new(0);
@@ -385,16 +405,17 @@ impl WorkloadGenerator {
                         let value = memory::allocate::<u8>(MAX_KEYSIZE);
                         let v = Pointer(value as *const u8);
 
-                        let offset = match offsets.lock().pop() {
+                        let koff = match offsets.lock().pop() {
                             None => panic!("No offset for this thread?"),
                             Some(o) => o,
                         };
+                        info!("koff {}", koff);
 
                         let mut now = Instant::now();
                         let mut nops = 0_usize;
                         let mut first = false; // iteration
 
-                        let mut idx: usize = offset;
+                        let mut idx: usize = 0usize;
                         let s = &trace.rec[..];
 
                         let mut exit_now: bool = false;
@@ -411,6 +432,9 @@ impl WorkloadGenerator {
                                 let entry = unsafe { s.get_unchecked(idx) };
                                 idx += 1;
 
+                                // each thread has private version of trace
+                                let k: u64 = entry.key + koff as u64;
+
                                 let too_big = entry.size as usize > MAX_KEYSIZE;
                                 if unlikely!(too_big) {
                                     panic!("key size {} > max keysize {}",
@@ -425,10 +449,10 @@ impl WorkloadGenerator {
                                 { continue; }
                                 // assert!(entry.key > 0, "zero key found");
                                 match entry.op {
-                                    Op::Get => get_object(entry.key as u64),
-                                    Op::Del => del_object(entry.key as u64),
+                                    Op::Get => get_object(k),
+                                    Op::Del => del_object(k),
                                     Op::Set =>
-                                        put_object(entry.key as u64, v,
+                                        put_object(k, v,
                                                    entry.size as usize, sock.0),
                                 }
                                 nops += 1;
