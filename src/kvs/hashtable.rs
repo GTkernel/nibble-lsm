@@ -738,8 +738,7 @@ impl HashTable {
 
 
     /// Grab the lock on the bucket which would hold the key, and
-    /// execute the given lambda.  Does not modify the bucket. We do
-    /// not need to search for the key; only lock the bucket.
+    /// execute the given lambda.  Does not modify the bucket.
     /// Return Ok if we were able to perform the update; Err likely
     /// means we are doing an insert but there is no space left.
     /// If we are updating a value, we pass Some(old_value) to f, else
