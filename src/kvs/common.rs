@@ -57,6 +57,11 @@ fn prefetch(cacheline: *const u8) {
     unsafe { asm!("prefetch $0" : : "m" (cacheline) : ) }
 }
 
+#[inline(always)] pub
+fn prefetch2(addr: *const u8, off: usize) {
+    prefetch(unsafe { addr.offset(off as isize) });
+}
+
 #[inline] pub unsafe
 fn atomic_add<T: num::Integer>(loc: *mut T, amt: T) -> T {
     intrinsics::atomic_xadd(loc, amt)
