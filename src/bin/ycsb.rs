@@ -44,6 +44,7 @@ use std::thread::{self,JoinHandle};
 use std::time::{Instant,Duration};
 use std::ptr;
 use std::cmp;
+use std::str::FromStr;
 
 //==----------------------------------------------------------------==
 //  Build-based functions
@@ -296,7 +297,7 @@ impl WorkloadGenerator {
 
         let now = Instant::now();
         if parallel {
-            let threads_per = 8;
+            let threads_per = 15;
             info!("Inserting {} objects of size {} with {} threads",
                   self.config.records, self.config.size,
                   threads_per * self.sockets);
@@ -398,7 +399,7 @@ impl WorkloadGenerator {
 
         //threadcount = vec![self.config.threads];
         // specific number of threads only
-        //threadcount = vec![240];
+        threadcount = vec![240];
         // max number of threads
         //threadcount = vec![cpus_pernode*sockets];
         // power of 2   1, 2, 4, 8, 16, 32, 64, 128, 256
@@ -410,8 +411,8 @@ impl WorkloadGenerator {
         // incr of 1    1, 2, 3, 4, 5, ...
         //threadcount = (1usize..261).collect();
         // incr of x    where x= cpus/socket
-        threadcount = (1_usize..(sockets+1))
-            .map(|e|cpus_pernode*e).collect();
+        //threadcount = (1_usize..(sockets+1))
+            //.map(|e|cpus_pernode*e).collect();
         info!("thread counts to use: {:?}", threadcount);
         let max_threads: usize = *threadcount.last().unwrap() as usize;
 
@@ -589,8 +590,12 @@ impl WorkloadGenerator {
                                     } else {
                                         let sock = match config.puts {
                                             PutPolicy::GlobalRR => {
-                                                sockn = (sockn + 1)
-                                                    % sockets; sockn
+                                                unsafe {
+                                                    rdrand() as usize
+                                                        % sockets
+                                                }
+                                                //sockn = (sockn + 1)
+                                                    //% sockets; sockn
                                             },
                                             PutPolicy::Local => sock.0,
                                         };
@@ -799,7 +804,18 @@ fn arg_as_num<T: num::Integer>(args: &clap::ArgMatches,
     match args.value_of(name) {
         None => panic!("Specify {}", name),
         Some(s) => match T::from_str_radix(s,10) {
-            Err(_) => panic!("size NaN"),
+            Err(_) => panic!("{} NaN", name),
+            Ok(s) => s,
+        },
+    }
+}
+
+fn arg_as_float(args: &clap::ArgMatches,
+                               name: &str) -> f32 {
+    match args.value_of(name) {
+        None => panic!("Specify {}", name),
+        Some(s) => match f32::from_str(s) {
+            Err(_) => panic!("{} not a float", name),
             Ok(s) => s,
         },
     }
@@ -840,7 +856,7 @@ fn main() {
         // Custom Configuration
         None => {
             let size     = arg_as_num::<usize>(&matches, "size");
-            let capacity = arg_as_num::<usize>(&matches, "capacity");
+            let capacity = arg_as_float(&matches, "capacity") as usize;
             let ops      = arg_as_num::<u64>(&matches, "ops");
             let records  = arg_as_num::<usize>(&matches, "records");
             let readpct  = arg_as_num::<usize>(&matches, "readpct");
@@ -868,7 +884,7 @@ fn main() {
                 _ => panic!("unknown YCSB configuration"),
             };
 
-            let capacity = arg_as_num::<usize>(&matches, "capacity");
+            let capacity = arg_as_float(&matches, "capacity") as usize;
             let ops      = arg_as_num::<u64>(&matches, "ops");
             let threads  = arg_as_num::<usize>(&matches, "threads");
             let time     = arg_as_num::<usize>(&matches, "time");

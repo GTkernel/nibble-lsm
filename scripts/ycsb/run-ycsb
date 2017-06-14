@@ -16,11 +16,15 @@ set -u
 # extern_kvs_init
 
 # in bytes
-MEMSIZE=$((8*(1<<40)))
+#MEMSIZE=$((1*(1<<40)))
+#MEMSIZE=$((256*(1<<30)))
 # MICA doesn't use log-structured allocators for its "store mode" so
 # we needn't allocate so much space for the given keyspace
 # 64mil keys * 1000b = 64GiB
 #MEMSIZE=$((128*(1<<30)))
+
+# total size of all objects allocated [bytes]
+FILLSIZE=$((1<<40))
 
 NREDIS_SERVERS=64
 
@@ -59,8 +63,6 @@ SYSINFO="../sysinfo"
 source ../redis/funcs
 redis_stop
 
-capacity=$MEMSIZE
-
 # these will be modified below
 readpct=0
 size=0
@@ -80,22 +82,20 @@ run() {
     for T in C; do
 
     # 12% of 8 TiB is 983 GiB
-    for fill in 12; do
+    for fill in 10 20 30 40 50 60 70 80 90; do
 
     for size in 1000; do
 
         echo ''; echo ''
-        echo "Compile features $FEATURES"
-        echo "Memsize $MEMSIZE bytes; Fill capacity $fill %"
 
         # header + key + value
         objsize=$(( 4 + 8 + $size ))
-        maxkeys=$(( $capacity / $objsize ))
+        nkeys=$(( $FILLSIZE / $objsize ))
+        MEMSIZE=$(($FILLSIZE / ($fill / 100.)))
 
-        nkeys=$(( ($maxkeys * $fill) / 100 ))
-        #nkeys=$((1<<26))
-
-        echo "objsize $objsize maxkeys $maxkeys nkeys $nkeys"
+        echo "Compile features $FEATURES"
+        echo "Memsize $MEMSIZE bytes; Fill size $FILLSIZE capacity $fill %"
+        echo "objsize $objsize nkeys $nkeys"
 
         [[ $T == "C" ]] && readpct=100
         [[ $T == "B" ]] && readpct=95
@@ -109,20 +109,20 @@ run() {
         export MICA_VAL_LEN=$size
         # Used for creating the hash table.. make large enough
         export MICA_ITEMS=$((nkeys*2))
-        export MICA_CAPACITY=$capacity
+        export MICA_CAPACITY=$MEMSIZE
 
         cargo run --features "$FEATURES" --release --bin ycsb -- \
             --dist $dist \
             --readpct $readpct \
             --records $nkeys \
-            --capacity $capacity \
+            --capacity $MEMSIZE \
             --ops 0 \
             --threads 1 \
             --time $SEC \
-            --cpu incr \
+            --cpu rr \
             --size $size \
-            --put local \
-            --compaction
+            --compaction \
+            --put local
         echo ''; echo ''
 
     done
@@ -164,12 +164,20 @@ run() {
 ##  redis_stop
 
 ##  # MICA and LSM need 2MiB pages
-##  echo 'Creating 2 MiB page reservations...'
-##  sudo su -c 'echo 4700000 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
-##  
+echo 'Creating 2 MiB page reservations...'
+sudo su -c 'echo 5600000 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
+##
 ##  FEATURES="rdrand extern_ycsb mica"
 ##  (run 2>&1) | tee -a log-mica.out
-##   
+##
 ##  FEATURES="rdrand"
 ##  (run 2>&1) | tee -a log-kvs.out
+##  FEATURES="rdrand epochcl"
+##  (run 2>&1) | tee -a log-kvs.out
 
+
+for ((i=0;i<3;i++)); do
+    #FEATURES="rdrand epochcl"
+    FEATURES="rdrand"
+    (run 2>&1) | tee -a log-kvs.out
+done
