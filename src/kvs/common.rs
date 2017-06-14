@@ -267,6 +267,7 @@ pub enum ErrorCode {
     InvalidSocket,
 
     EmptyObject,
+    ObjectGrew,
 
     ObjectTooBig,
 }
@@ -280,6 +281,7 @@ pub fn err2str(code: ErrorCode) -> &'static str {
         ErrorCode::KeyNotExist   => { "Key does not exist" },
         ErrorCode::InvalidSocket => { "Invalid socket ID" },
         ErrorCode::EmptyObject   => { "Object is empty" },
+        ErrorCode::ObjectGrew    => { "Object grew beyond prior size" },
         ErrorCode::ObjectTooBig  => { "Object too big" },
     }
 }
