@@ -345,7 +345,7 @@ pub fn current() -> Option<EpochRaw> {
     })
 }
 
-#[cfg(feature="epochcl")]
+#[cfg(not(feature="epochcl"))]
 pub fn min() -> Option<EpochRaw> {
     let mut m: EpochRaw = u64::MAX;
     for slot in &EPOCH_TABLE.table {
@@ -366,7 +366,7 @@ pub fn min() -> Option<EpochRaw> {
     }
 }
 
-#[cfg(not(feature="epochcl"))]
+#[cfg(feature="epochcl")]
 pub fn min() -> Option<EpochRaw> {
     unsafe {
         let order = Ordering::Relaxed;
