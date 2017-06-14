@@ -319,7 +319,8 @@ impl LSM {
     /// FIXME why don't we return the length... ?
     #[inline(always)]
     pub fn get_object(&self, key: u64, buf: &mut [u8]) -> Status {
-        let ep = PinnedEpoch::new();
+        meta::pin();
+        //let ep = PinnedEpoch::new();
 
         // 1. lookup the key and get the entry
         let ientry: IndexEntry = match self.index.get(key) {
@@ -333,6 +334,7 @@ impl LSM {
         self.nodes[socket as usize]
             .log.get_entry(va as usize, buf);
 
+        meta::quiesce();
         Ok(1)
     }
 
