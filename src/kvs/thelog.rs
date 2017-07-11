@@ -267,6 +267,7 @@ impl Log {
         // compared to random assignment and hoping for luck
         let (sockID,coreID) = clock::rdtscp_id();
         let i = coreID as usize % self.nheads;
+        //let i = unsafe { rdrand() as usize % self.nheads };
 
         // TODO keep track of #times we had to iterate for avail head
 
@@ -333,7 +334,7 @@ impl Log {
                 unsafe {
                     copy(buf.as_mut_ptr(), valuep, value_len);
                     //ptr::copy_nonoverlapping(valuep,
-                        //buf.as_mut_ptr(), value_len);
+                            //buf.as_mut_ptr(), value_len);
                 }
             }
         }
