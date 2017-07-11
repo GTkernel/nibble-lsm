@@ -234,6 +234,7 @@ impl LSM {
     // Get/Put/Del API
     //
 
+    #[cfg(not(feature="putow"))]
     #[inline(always)]
     fn __put(&self, obj: &ObjDesc, hint: PutPolicy) -> Status {
         // NOTE DO NOT pin the epoch during a PUT. It will stall
@@ -287,6 +288,115 @@ impl LSM {
             // entries are stale until we update the index
             warn!("index update returned false");
             return Err(ErrorCode::TableFull);
+        }
+
+        Ok(1)
+    }
+
+    // va points to the entry in the log. modified from append_safe
+    // FIXME we assume that overwriting objects cannot grow in size
+    // and if it did, maybe we should allocate a new spot for it; if it
+    // shrinks, then also allocate, or overwrite?
+    #[cfg(feature="putow")]
+    #[inline(always)]
+    fn write_object(&self, obj: &ObjDesc, ientry: u64) {
+        let (socket,va) = extract(ientry);
+        let node = &self.nodes[socket as usize];
+        let va = va as usize;
+        let block = node.manager.block_of(va);
+
+        // skipping the entry header, recalculate va
+        let mut blk_idx = block.blk_idx();
+        let mut seg_offset = blk_idx * BLOCK_SIZE + (va % BLOCK_SIZE);
+        seg_offset += mem::size_of::<EntryHeader>();
+        blk_idx = seg_offset / BLOCK_SIZE;
+        let blk_offset = seg_offset % BLOCK_SIZE;
+
+        unsafe {
+            let list = block.list();
+            let blocks = list.slice();
+            copy_in(blocks, blk_idx, blk_offset,
+                    obj.getvalue().0, obj.valuelen());
+        }
+    }
+
+    // this version of __put will overwrite existing objects,
+    // and only append when we are inserting a new object
+    #[cfg(feature="putow")]
+    #[inline(always)]
+    fn __put(&self, obj: &ObjDesc, hint: PutPolicy) -> Status {
+        // only hold epoch on PUT overwriting an object,
+        // not during an allocation
+
+        let va: usize;
+        let socket: usize = match hint {
+            PutPolicy::Specific(id) => id,
+            PutPolicy::Interleave =>
+                (unsafe { rdrand() } % self.nnodes) as usize,
+        };
+        trace!("PUT key {} socket {:?}", obj.getkey(),socket);
+
+        if socket >= self.nodes.len() {
+            return Err(ErrorCode::InvalidSocket);
+        }
+
+        let key = obj.getkey();
+
+        // if object exists, grab epoch, overwrite object
+        let mut do_append = false;
+        let nodes = &self.nodes;
+        meta::pin();
+        if self.index.lock_map_ifex(key, |ientry: u64| {
+                let (s,va) = extract(ientry);
+                let head = nodes[s as usize].log.copy_header(va as usize);
+                if head.getdatalen() as usize >= obj.valuelen() {
+                    self.write_object(obj,ientry);
+                } else {
+                    do_append = true;
+                }
+                meta::quiesce();
+            }) {
+        } else {
+            do_append = true;
+        }
+        if do_append {
+            meta::quiesce();
+        // add object to log
+        // FIXME if full for this socket, should we attempt to append
+        // elsewhere?
+        match self.nodes[socket].log.append(obj) {
+            Err(code) => {
+                return Err(code);
+            },
+            Ok(v) => va = v,
+        }
+        let ientry = merge(socket as u16, va as u64);
+        trace!("key {} va 0x{:x} ientry 0x{:x}",
+               obj.getkey(), va, ientry);
+
+        // 2. add to index; if we are updating it, remove live state from
+        // prior segment. running a lambda while we hold the item's
+        // lock avoids race conditions with the cleaner
+
+        let ok: bool = self.index.update_map(key, ientry as u64, |old| {
+            // decrement live size of segment if we overwrite object
+            // old=None if this was an insertion
+            if let Some(ientry) = old {
+                let (socket,va) = extract(ientry);
+                let node = &self.nodes[socket as usize];
+                let idx: usize = node.manager.segment_of(va as usize);
+                let head = node.log.copy_header(va as usize);
+                // decrement live bytes
+                self.nodes[socket as usize].seginfo
+                    .decr_live(idx, head.len_with_header());
+            }
+        });
+        if !ok {
+            // no need to undo the log append;
+            // entries are stale until we update the index
+            warn!("index update returned false");
+            return Err(ErrorCode::TableFull);
+        }
         }
 
         Ok(1)

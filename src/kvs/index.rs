@@ -185,6 +185,18 @@ impl Index {
         }
     }
 
+    #[inline(always)]
+    pub fn lock_map_ifex<F>(&self, key: u64, f: F) -> bool
+        where F: Fn(u64) {
+
+        let tidx = self.table_idx(key);
+        let ref p = self.tables[tidx];
+        unsafe {
+            let ht: &HashTable = &* p.0;
+            ht.lock_map_ifex(key, f)
+        }
+    }
+
     pub fn len(&self) -> usize {
         unimplemented!();
     }

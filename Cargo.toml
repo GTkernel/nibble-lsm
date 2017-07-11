@@ -25,7 +25,11 @@ default = []
 # you generally want to enable this
 # --features "rdrand [others]"
 rdrand = []
+# use a single cache line for the epoch (slow)
 epochcl = []
+# change the behavior of PUT: overwrite objects that exist,
+# append on insertion
+putow = []
 
 # Below features are used only for bin/ycsb.rs and bin/trace.rs
 extern_ycsb = []

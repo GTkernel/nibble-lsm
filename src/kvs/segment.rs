@@ -85,7 +85,36 @@ pub unsafe fn copy_out(blocks: &[BlockRef], offset: usize,
     }
 }
 
-// TODO copy_in function?
+pub unsafe fn copy_in(blocks: &[BlockRef], blk_idx: usize,
+                      blk_offset: usize,
+                      source: *const u8, len: usize) {
+    let mut remaining = len as isize;
+    let mut idx = blk_idx;
+    let blk_offset = blk_offset as isize;
+
+    // Logical offset into buffer
+    let mut poffset: isize = 0;
+
+    // Copy first chunk into current block
+    let mut base = blocks[idx].addr as *const u8;
+    let mut amt = cmp::min(BLOCK_SIZE as isize - blk_offset, remaining);
+    let to   = base.offset(blk_offset);
+    let from = source.offset(poffset);
+    copy(to, from, amt as usize);
+
+    remaining -= amt;
+    poffset += amt;
+    idx += 1;
+
+    while remaining > 0 {
+        base = blocks[idx].addr as *const u8;
+        amt = cmp::min(BLOCK_SIZE as isize, remaining);
+        copy(base, source.offset(poffset), amt as usize);
+        remaining -= amt;
+        poffset += amt;
+        idx += 1;
+    }
+}
 
 //==----------------------------------------------------==//
 //      Block structures
@@ -386,6 +415,8 @@ impl BlockAllocator {
         debug_assert!(addr < (b.addr + BLOCK_SIZE));
         (**b).clone()
     }
+
+    // XXX see if we can write block_of without cloning
 
     #[inline(always)]
     pub fn segment_of(&self, addr: usize) -> usize {
@@ -1280,10 +1311,10 @@ impl SegmentManager {
                 let s = pending.pop_front().unwrap();
                 let c = Arc::strong_count(&s);
                 if c == 1 {
-                    info!("dropping pending seg: freeing");
+                    debug!("dropping pending seg: freeing");
                     self.do_free(s);
                 } else {
-                    info!("dropping pending seg: try later");
+                    debug!("dropping pending seg: try later");
                     pending.push_back(s);
                 }
             }

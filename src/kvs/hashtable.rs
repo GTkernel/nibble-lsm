@@ -827,6 +827,67 @@ impl HashTable {
         assert!(false, "Unreachable path");
     }
 
+    /// If the key exists, lock the bucket and execute the lambda.
+    #[inline(always)]
+    pub fn lock_map_ifex<F>(&self, key: u64, f: F) -> bool
+        where F: Fn(u64) {
+
+        let hash = Self::make_hash(key);
+
+        let mut bidx: usize;
+        let mut buckets: &[Bucket];
+        let mut bucket: &Bucket;
+        let mut bver: u64;
+        let mut opts: find_ops;
+
+        let mut tver = self.version();
+
+        bidx = self.index(hash);
+        buckets = self.as_slice();
+        bucket = &buckets[bidx];
+
+        'retry: loop {
+
+            // if table version changes, recompute bucket index
+            let v = self.version();
+            if unlikely!(v != tver) {
+                bidx = self.index(hash);
+                buckets = self.as_slice();
+                bucket = &buckets[bidx];
+                tver = v;
+            }
+
+            bver = bucket.read_version();
+
+            opts = bucket.find_key(key);
+            let (e,inv) = opts;
+            // if key does not exist, we're done
+            if e.is_none() {
+                return false;
+            }
+
+            let mut guard = bucket.wait_lock();
+
+            if unlikely!(tver != self.version()) {
+                continue 'retry;
+            }
+
+            // table has not changed, check if bucket has
+            if bucket.read_version() != bver {
+                opts = bucket.find_key(key);
+            }
+
+            let (e,inv) = opts;
+
+            // if exists, execute lambda
+            if let Some(i) = e {
+                f(bucket.read_value(i));
+            }
+            break;
+        }
+        true
+    }
+
     /// Grab the lock on the bucket holding the key only if the
     /// existing value matches one specified. Before returning,
     /// replace existing value with new.
