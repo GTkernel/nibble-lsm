@@ -23,20 +23,6 @@ fn __assert_Check_nblks_Not_Zero() {
     1/ALLOC_NBLKS_VAR;
 }
 
-/// Acquire read lock on SegmentRef
-macro_rules! rlock {
-    ( $segref:expr ) => {
-        $segref.unwrap().read().unwrap()
-    }
-}
-
-/// Acquire write lock on SegmentRef
-macro_rules! wlock {
-    ( $segref:expr ) => {
-        $segref.unwrap().write().unwrap()
-    }
-}
-
 //==----------------------------------------------------==//
 //      Entry header
 //==----------------------------------------------------==//
