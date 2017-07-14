@@ -352,7 +352,8 @@ impl LSM {
                 if head.getdatalen() as usize >= obj.valuelen() {
                     self.write_object(obj,ientry);
                 } else {
-                    do_append = true;
+                    //do_append = true;
+                    panic!("asdfasd");
                 }
                 meta::quiesce();
             }) {
