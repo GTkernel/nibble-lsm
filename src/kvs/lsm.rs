@@ -585,6 +585,7 @@ impl LSM {
 //      Unit tests
 //==----------------------------------------------------==//
 
+#[cfg(IGNORE)]
 mod tests {
     use super::*;
     use common::{self,ErrorCode};
