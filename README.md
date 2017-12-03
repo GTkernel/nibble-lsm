@@ -1,10 +1,10 @@
-# Shoveller: Scalable Parallel Log-structured Memory for Key-Value Stores
+# Nibble: Scalable Parallel Log-structured Memory for Key-Value Stores
 
 **Authors**:  Alexander Merritt (merritt.alex@gatech.edu), Yuan Chen (yuan.chen@hpe.com)
 
 ## Description
 
-**Shoveller** is a scalable, memory-capacity efficient key-value store for very large scale machines (e.g., tens of terabytes or more memory and hundreds of CPU cores). Shoveller promotes the use of a concurrent multi-head log-structured memory to attain high performance and resistance to memory fragmentation, together with scalable low-latency synchronization and optimistically concurrent indexing that allow application threads to scale to hundreds of cores. A prototype for single node system has been implemented, and its effectiveness has been evaluated on a HPE SuperDomeX machine with 240 cores and 12 TiB of DRAM across a wide range of workload patterns. 
+**Nibble** is a scalable, memory-capacity efficient key-value store for very large scale machines (e.g., tens of terabytes or more memory and hundreds of CPU cores). Nibble promotes the use of a concurrent multi-head log-structured memory to attain high performance and resistance to memory fragmentation, together with scalable low-latency synchronization and optimistically concurrent indexing that allow application threads to scale to hundreds of cores. A prototype for single node system has been implemented, and its effectiveness has been evaluated on a HPE SuperDomeX machine with 240 cores and 12 TiB of DRAM across a wide range of workload patterns. 
 
 ## Source
 
@@ -17,12 +17,12 @@ Research prototype.
 
 ## Dependencies
 
-Shoveller is implemented entirely in the [Rust language](https://www.rust-lang.org/en-US/) and requires the ``nightly'' branch of the compiler.  Installation can be done _without root administration_ from [rustup.rs](https://rustup.rs).
+Nibble is implemented entirely in the [Rust language](https://www.rust-lang.org/en-US/) and requires the ``nightly'' branch of the compiler.  Installation can be done _without root administration_ from [rustup.rs](https://rustup.rs).
 
 
 ## Usage
 
-### Build and Test Shoveller
+### Build and Test Nibble
 
 #### Install Rust 'nightly'
 https://www.rust-lang.org/en-US/install.html
@@ -46,20 +46,20 @@ You should see something like
 rustc 1.17.0-nightly (e1cec5d4b 2017-03-29)
 ```
 
-#### Build Shoveller
+#### Build Nibble
 
 The first time build will take a while to update the registry. Just be patient. 
 
 ```
-cd shoveller
+cd nibble
 cargo update
 cargo build --lib --release
 ```
 
 
-#### Test Shoveller
+#### Test Nibble
 
-You will need a machine with at least 32GB memory to test Shoveller. 
+You will need a machine with at least 32GB memory to test Nibble. 
 
 You must reserve sufficient amount of 2MB pages:
 
@@ -83,15 +83,15 @@ Environment variable NIBDEBUG configures debug messages. You can set NIBDEBUG=(1
 
 ### Basic API Overview
 
-Shoveller's main API acts like a key-value store (KVS).  It currently
+Nibble's main API acts like a key-value store (KVS).  It currently
 runs as a library within a single process address space, and supports
-concurrent access from many threads.  Shoveller requires objects to be
+concurrent access from many threads.  Nibble requires objects to be
 associated with ``keys'' which are fixed at 8 bytes (2^64 values).
-Objects can be any size up to the size of Shoveller's internal segment
+Objects can be any size up to the size of Nibble's internal segment
 length (default is 32 MiB).  Keys exist within a single namespace.
 
 
-One creates an instance of Shoveller and invokes methods directly on
+One creates an instance of Nibble and invokes methods directly on
 that object instance:
 
 ```
@@ -158,11 +158,11 @@ for node in 0..numa::NODE_MAP.sockets() {
 }
 ```
 
-##### Shoveller currently does not support the following:
+##### Nibble currently does not support the following:
 - Networked environments.
 - Persistent data (e.g., NVM, or disk).  Topic of future work.
 
-##### Shoveller requires systems with a minimum of 32 GiB of memory, reserved as 2MiB mappings with Linux, which it reserves on startup:
+##### Nibble requires systems with a minimum of 32 GiB of memory, reserved as 2MiB mappings with Linux, which it reserves on startup:
 ```
 echo 16384 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
 ```

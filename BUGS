@@ -1,3 +1,0 @@
-- if one socket runs out of memory (even when overall capacity is not
-  near 100%) that socket compactor may deadlock
-- have compaction turn on immediately when data is low
