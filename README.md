@@ -1,12 +1,14 @@
 # Nibble: Scalable Parallel Log-structured Memory for Key-Value Stores
 
-**Authors**:  Alexander Merritt (merritt.alex@gatech.edu), Yuan Chen (yuan.chen@hpe.com)
+**Authors**:  Alexander Merritt, Ada Gavrilovska, Dejan Milojicic, Yuan Chen
 
 ## Description
 
 **Nibble** is a scalable, memory-capacity efficient key-value store for very large scale machines (e.g., tens of terabytes or more memory and hundreds of CPU cores). Nibble promotes the use of a concurrent multi-head log-structured memory to attain high performance and resistance to memory fragmentation, together with scalable low-latency synchronization and optimistically concurrent indexing that allow application threads to scale to hundreds of cores. A prototype for single node system has been implemented, and its effectiveness has been evaluated on a HPE SuperDomeX machine with 240 cores and 12 TiB of DRAM across a wide range of workload patterns. 
 
 ## Source
+
+This project was additionally supported by Hewlett Packard Enterprise, with alternative locations of the source code found at the below URLs. Due to legal reaons, the project was given an alternative codename.
 
 - HPE Internal: https://github.hpe.com/labs/shoveller
 - External: https://github.com/HewlettPackard/shoveller
