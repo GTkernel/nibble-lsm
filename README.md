@@ -6,6 +6,8 @@
 
 **Nibble** is a scalable, memory-capacity efficient key-value store for very large scale machines (e.g., tens of terabytes or more memory and hundreds of CPU cores). Nibble promotes the use of a concurrent multi-head log-structured memory to attain high performance and resistance to memory fragmentation, together with scalable low-latency synchronization and optimistically concurrent indexing that allow application threads to scale to hundreds of cores. A prototype for single node system has been implemented, and its effectiveness has been evaluated on a HPE SuperDomeX machine with 240 cores and 12 TiB of DRAM across a wide range of workload patterns. 
 
+This work will appear in the Proceedings of the VLDB Endowment, Vol. 11, No. 4. https://doi.org/10.1145/3164135.3164142
+
 ## Source
 
 This project was additionally supported by Hewlett Packard Enterprise, with alternative locations of the source code found at the below URLs. Due to legal reaons, the project was given an alternative codename.
