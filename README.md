@@ -1,4 +1,4 @@
-# Nibble: Scalable Parallel Log-structured Memory for Key-Value Stores
+# Concurrent Log-Structured Memory for Many-Core Key-Value Stores
 
 **Authors**:  Alexander Merritt, Ada Gavrilovska (Georgia Tech); Yuan Chen, and Dejan Milojicic (Hewlett Packard Labs)
 
